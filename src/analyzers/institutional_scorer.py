@@ -291,17 +291,15 @@ def _fetch_lhb_institutional(code: str) -> Dict[str, Any]:
 
 # ---------------------------------------------------------------------------
 # 数据源 3: 主力资金流（连续 3 日净流入）
+# 数据源已切换至问财 OpenAPI，不再使用东财 push2his HTTP 爬虫
 # ---------------------------------------------------------------------------
 
 def _fetch_main_force_flow(code: str) -> Dict[str, Any]:
     """
     查询个股主力资金流，判断连续 3 日净流入。
 
-    数据源：直接 HTTP 请求东财 push2his（绕过 akshare 封装）
-    URL: https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get
-
-    push2his 偶发反爬（RemoteDisconnected），带 8 次重试，每次间隔 2s。
-    返回 K 线格式：日期,主力净流入,小单净流入,中单净流入,大单净流入,超大单净流入,...
+    数据源：问财 OpenAPI（Bearer Token 认证，稳定无反爬）
+    查询 "连续3日主力净流入" 返回每日主力资金流向明细。
 
     Returns:
         {"vote": 1/-1/0, "detail": str, "raw": dict}
@@ -311,68 +309,46 @@ def _fetch_main_force_flow(code: str) -> Dict[str, Any]:
         return {"vote": 0, "detail": "主力资金接口已短路", "raw": {}}
 
     try:
-        import requests
-        import time as _time
+        from ..data_layer.iwencai_api import _call_api
 
-        # 判断市场前缀（secid 格式：1.代码=沪，0.代码=深/北）
-        if code.startswith("6"):
-            secid = f"1.{code}"
-        else:
-            secid = f"0.{code}"
+        # 问财查询：返回最近 3 日每日主力资金流
+        result = _call_api(
+            query=f"{code} 连续3日主力净流入",
+            page="1", limit="1", timeout=10, call_type="normal",
+        )
+        if not result:
+            # 重试
+            result = _call_api(
+                query=f"{code} 连续3日主力净流入",
+                page="1", limit="1", timeout=10, call_type="retry",
+            )
 
-        url = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
-        params = {
-            "lmt": "0",
-            "klt": "101",  # 日 K
-            "secid": secid,
-            "fields1": "f1,f2,f3,f7",
-            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
-            "ut": "b2884a393a59ad64002292a3e90d46a5",
-        }
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0",
-            "Referer": "https://data.eastmoney.com/",
-        }
-
-        data = None
-        for attempt in range(8):  # 8 次重试
-            try:
-                r = requests.get(url, params=params, timeout=12, headers=headers)
-                if r.status_code == 200:
-                    data = r.json()
-                    if data.get("data") and data["data"].get("klines"):
-                        break
-                _time.sleep(2)
-            except Exception:
-                _time.sleep(2)
-
-        if not data or not data.get("data") or not data["data"].get("klines"):
-            _mark_api_failure("main_force", "无数据或重试耗尽")
+        if not result or not result.get("datas"):
+            _mark_api_failure("main_force", "问财API返回空")
             return {"vote": 0, "detail": "主力资金接口异常(重试耗尽)", "raw": {}}
 
-        # 解析 K 线：日期,主力净流入,小单,中单,大单,超大单,...
-        klines = data["data"]["klines"]
-        if len(klines) < 3:
-            _mark_api_success("main_force")
-            return {"vote": 0, "detail": "主力资金数据不足 3 日", "raw": {}}
+        item = result["datas"][0]
 
-        # 取最近 3 日的主力净流入（第 2 列，索引 1）
+        # 提取最近 3 日的主力资金流（字段名含日期后缀）
         net_flows = []
-        for kline in klines[-3:]:
-            parts = kline.split(",")
-            if len(parts) >= 2:
+        for key in sorted(item.keys()):
+            if "主力资金流向[" in str(key) and "净" not in str(key):
+                # 如 "主力资金流向[20260720]"
                 try:
-                    net_flows.append(float(parts[1]))  # 主力净流入-净额
-                except (ValueError, IndexError):
-                    net_flows.append(0.0)
+                    val = float(item[key])
+                    net_flows.append(val)
+                except (ValueError, TypeError):
+                    continue
+
+        # 取最近 3 个值
+        net_flows = net_flows[-3:]
 
         if len(net_flows) < 3:
             _mark_api_success("main_force")
-            return {"vote": 0, "detail": "主力资金解析不足 3 日", "raw": {}}
+            return {"vote": 0, "detail": "主力资金数据不足 3 日", "raw": {}}
 
         _mark_api_success("main_force")
 
-        # 连续 3 日净流入
         if all(f > 0 for f in net_flows):
             total = sum(net_flows)
             return {
@@ -380,7 +356,6 @@ def _fetch_main_force_flow(code: str) -> Dict[str, Any]:
                 "detail": f"主力连续 3 日净流入（合计 {total/1e8:.2f} 亿）",
                 "raw": {"net_flows": net_flows, "total": total},
             }
-        # 连续 3 日净流出
         elif all(f < 0 for f in net_flows):
             total = sum(net_flows)
             return {

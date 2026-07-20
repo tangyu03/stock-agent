@@ -9,14 +9,14 @@
 功能：
   1. 拉取东财行业板块涨跌幅排名（push2 带重试，496 个板块）
   2. 拉取所有 A 股的东财三级行业归属（datacenter，不反爬，24746 只）
-  3. 拉取申万一级行业指数 K 线（index_hist_sw，31 个，算涨跌幅）
+  3. 拉取同花顺一级行业指数 K 线（index_hist_sw，31 个，算涨跌幅）
   4. 保存到 SQLite data_cache 表，30 天有效期
   5. 盘中 sector_ranker 直接查表，不再实时调 API
 
 数据源稳定性：
   - 东财 datacenter RPT_F10_BASIC_ORGINFO: ✅ 不反爬（0.2s/页，全量 70s）
   - 东财 push2 行业板块涨跌幅: ⚠️ 带重试可用（偶发 RemoteDisconnected）
-  - 申万 index_hist_sw: ✅ 稳定但慢（55s/个，共 31 个约 28 分钟，可降级跳过）
+  - 同花顺 index_hist_sw: ✅ 稳定但慢（55s/个，共 31 个约 28 分钟，可降级跳过）
 
 输出：
   data_cache 表写入两条记录：

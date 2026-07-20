@@ -350,7 +350,7 @@ class SkillWrapper:
 
     def query_industry_rotation(self) -> Optional[Dict]:
         """行业轮动分析"""
-        return self.query("industry_rotation", "申万行业景气度和动量排名")
+        return self.query("industry_rotation", "同花顺行业景气度和动量排名")
 
     # ============ 批量查询方法 ============
 

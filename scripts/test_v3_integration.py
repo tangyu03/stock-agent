@@ -46,13 +46,13 @@ def main():
         print(f"  ✅ stock_data.calc_tech_indicators + detect_kline_patterns")
     except: results.append(("本地技术指标", False)); print("  ❌ 本地技术指标")
 
-    # 5. 申万行业
+    # 5. 行业数据
     try:
         from src.data_layer.sw_industry import normalize_sector, calc_sector_metrics
         ok = True
-        results.append(("申万行业", ok))
+        results.append(("行业数据", ok))
         print(f"  ✅ sw_industry.normalize_sector + calc_sector_metrics")
-    except: results.append(("申万行业", False)); print("  ❌ 申万行业")
+    except: results.append(("行业数据", False)); print("  ❌ 行业数据")
 
     success = sum(1 for _,p in results if p)
     print(f"\n{'='*60}\n  📊 {success}/{len(results)} 通过\n{'='*60}")

@@ -2,7 +2,7 @@
 基于市场涨跌幅的板块分类器
 
 分类体系：
-1. 申万行业（31个一级）— 正经行业分类，用 K 线算涨跌幅
+1. 同花顺行业（90个）— 用行业指数K线算涨跌幅
 2. 新浪行业概念（~145个）— 真正的行业概念（光伏/锂矿/创新药等），用实时涨跌幅
 3. 过滤掉风格标签（科创50/含H股/专精特新/次新股等）— 这些不是行业板块
 
@@ -30,21 +30,6 @@ STYLE_KEYWORDS = [
     "天津", "上海", "内贸", "水域", "油气改革", "金融改革", "国企",
     "准ST", "低价", "高价", "低市盈率", "高市盈率", "破净",
 ]
-
-# 申万一级行业代码 → 名称
-SW_LEVEL1 = {
-    "801010": "农林牧渔", "801030": "基础化工", "801040": "钢铁",
-    "801050": "有色金属", "801080": "电子", "801110": "家用电器",
-    "801120": "食品饮料", "801130": "纺织服饰", "801140": "轻工制造",
-    "801150": "医药生物", "801160": "公用事业", "801170": "交通运输",
-    "801180": "房地产", "801200": "商贸零售", "801210": "社会服务",
-    "801230": "综合", "801710": "建筑材料", "801720": "建筑装饰",
-    "801730": "电力设备", "801740": "国防军工", "801750": "计算机",
-    "801760": "传媒", "801770": "通信", "801780": "银行",
-    "801790": "非银金融", "801880": "汽车", "801890": "机械设备",
-    "801950": "煤炭", "801960": "石油石化", "801970": "环保",
-    "801980": "美容护理",
-}
 
 
 def _is_style_tag(name: str) -> bool:
@@ -947,59 +932,54 @@ def _fallback_sector_lookup(code: str, name_to_rank: Dict[str, dict]) -> List[di
     except Exception as e:
         logger.debug("sector_ranker 兜底: %s 同花顺主营匹配异常: %s", code, str(e)[:60])
 
-    # --- 策略 1-3: SW 行业匹配（可能因东财反爬而失败）---
+    # --- 策略 1-3: THS 行业匹配 ---
     try:
         from ..data_layer.sw_industry import (
             fetch_stock_sw_industry_full,
             normalize_sector,
-            SW_LEVEL2,
             calc_sector_metrics,
         )
 
         full = fetch_stock_sw_industry_full(code)
         if full is None:
-            logger.debug("sector_ranker 兜底: %s SW行业查询返回 None", code)
+            logger.debug("sector_ranker 兜底: %s 行业查询返回 None", code)
             return []
 
         level2 = full.get("level2")
         level1 = full.get("level1")
-        # 优先用二级名（粒度与排名接口一致），降级用一级名
-        sw_industry_name = level2 or level1
-        if not sw_industry_name:
-            logger.debug("sector_ranker 兜底: %s SW 行业(level1+level2) 均为空, full=%s", code, full)
+        ths_industry_name = level2 or level1
+        if not ths_industry_name:
+            logger.debug("sector_ranker 兜底: %s 行业(level1+level2) 均为空, full=%s", code, full)
             return []
 
         # --- 策略 1: 精确匹配 ---
-        if sw_industry_name in name_to_rank:
-            r = name_to_rank[sw_industry_name]
+        if ths_industry_name in name_to_rank:
+            r = name_to_rank[ths_industry_name]
             if isinstance(r, dict):
-                logger.debug("sector_ranker 兜底: %s SW行业 '%s' 精确匹配命中", code, sw_industry_name)
-                return [_build_fallback_entry(sw_industry_name, r, "SW行业-精确")]
+                logger.debug("sector_ranker 兜底: %s THS行业 '%s' 精确匹配命中", code, ths_industry_name)
+                return [_build_fallback_entry(ths_industry_name, r, "THS行业-精确")]
 
-        # --- 策略 2: 部分匹配（SW 名 ⊂ 新浪名 或 新浪名 ⊂ SW 名）---
+        # --- 策略 2: 部分匹配 ---
         for name, r in name_to_rank.items():
             if not isinstance(r, dict):
                 continue
-            # 跳过过短的关键词（如 "AI"、"5G"）以免误匹配
-            if len(sw_industry_name) >= 2 and (sw_industry_name in name or name in sw_industry_name):
-                logger.debug("sector_ranker 兜底: %s SW行业 '%s' 部分匹配 '%s'", code, sw_industry_name, name)
-                return [_build_fallback_entry(sw_industry_name, r, "SW行业-部分")]
+            if len(ths_industry_name) >= 2 and (ths_industry_name in name or name in ths_industry_name):
+                logger.debug("sector_ranker 兜底: %s THS行业 '%s' 部分匹配 '%s'", code, ths_industry_name, name)
+                return [_build_fallback_entry(ths_industry_name, r, "THS行业-部分")]
 
-        # --- 策略 3: 用 SW 二级代码直接计算板块 K 线指标 ---
-        # 不依赖新浪排名，用 SW 行业指数 K 线自行计算涨跌幅 + 均线排列分类
-        # 保持二级粒度（如 801081 半导体，不用 801080 电子一级）
-        sw_code_l2 = normalize_sector(sw_industry_name, prefer_level2=True)
-        if sw_code_l2:
+        # --- 策略 3: 用 THS 代码直接计算板块 K 线指标 ---
+        ths_code = normalize_sector(ths_industry_name)
+        if ths_code:
             logger.debug(
-                "sector_ranker 兜底: %s SW行业 '%s' → 二级代码 %s，直接计算 K 线指标",
-                code, sw_industry_name, sw_code_l2,
+                "sector_ranker 兜底: %s THS行业 '%s' → 代码 %s，直接计算 K 线指标",
+                code, ths_industry_name, ths_code,
             )
-            return _compute_sw_fallback(code, sw_code_l2, sw_industry_name)
+            return _compute_sw_fallback(code, ths_code, ths_industry_name)
 
         # 所有策略均失败
         logger.debug(
-            "sector_ranker 兜底: %s SW行业 '%s' 所有匹配策略均失败 (level1=%s, level2=%s)",
-            code, sw_industry_name, level1, level2,
+            "sector_ranker 兜底: %s THS行业 '%s' 所有匹配策略均失败 (level1=%s, level2=%s)",
+            code, ths_industry_name, level1, level2,
         )
         return []
     except Exception:
@@ -1008,7 +988,7 @@ def _fallback_sector_lookup(code: str, name_to_rank: Dict[str, dict]) -> List[di
         return []
 
 
-def _build_fallback_entry(name: str, rank_info: dict, source: str = "SW行业") -> dict:
+def _build_fallback_entry(name: str, rank_info: dict, source: str = "THS行业") -> dict:
     """构造兜底板块条目"""
     return {
         "type": source,
@@ -1019,35 +999,30 @@ def _build_fallback_entry(name: str, rank_info: dict, source: str = "SW行业") 
     }
 
 
-def _compute_sw_fallback(code: str, sw_code: str, sw_name: str) -> List[dict]:
+def _compute_sw_fallback(code: str, ths_code: str, ths_name: str) -> List[dict]:
     """
-    最后兜底：直接计算 SW 板块 K 线指标，自行分类。
+    最后兜底：直接计算 THS 板块 K 线指标，自行分类。
 
-    当新浪板块名无法匹配 SW 行业名时（常见于科创板/北交所股票），
-    用 calc_sector_metrics 拉取 SW 行业指数 K 线，根据 3 日涨跌幅 + 均线排列
+    当新浪板块名无法匹配 THS 行业名时，
+    用 calc_sector_metrics 拉取 THS 行业指数 K 线，根据涨跌幅 + 均线排列
     给出 main_trend/rotational/retreating 分类。
 
     Returns:
         [板块条目] 或 []（K线拉取失败时）
     """
     try:
-        # 延迟 import 避免循环依赖
         from ..data_layer.sw_industry import calc_sector_metrics
 
-        metrics = calc_sector_metrics(sw_code)
+        metrics = calc_sector_metrics(ths_code)
         if not metrics:
-            logger.debug("sector_ranker 兜底计算: %s SW板块 %s 指标为空", code, sw_code)
+            logger.debug("sector_ranker 兜底计算: %s THS板块 %s 指标为空", code, ths_code)
             return []
 
-        # 3 日涨跌幅（小数 → 百分比）
+        # 3 日涨跌幅（已是百分比）
         change_3d = metrics.get("sector_change_3d")
         change_5d = metrics.get("sector_change_5d")
-        # 优先 3 日，降级 5 日，再降级 0
-        change_pct = 0.0
-        if change_3d is not None:
-            change_pct = float(change_3d) * 100
-        elif change_5d is not None:
-            change_pct = float(change_5d) * 100
+        change_pct = float(change_3d if change_3d is not None else (change_5d if change_5d is not None else 0))
+        # change_3d/change_5d 已是百分比（calc_sector_metrics 返回 *100 后的值）
 
         # 均线排列 + MA20 位置 → 分类
         ma_align = metrics.get("ma_alignment", "cross")
@@ -1060,18 +1035,18 @@ def _compute_sw_fallback(code: str, sw_code: str, sw_name: str) -> List[dict]:
             classification = "rotational"
 
         logger.debug(
-            "sector_ranker 兜底计算: %s SW板块 %s(%s) change_3d=%.2f%% align=%s ma20=%s → %s",
-            code, sw_name, sw_code, change_pct, ma_align, above_ma20, classification,
+            "sector_ranker 兜底计算: %s THS板块 %s(%s) change=%.2f%% align=%s ma20=%s → %s",
+            code, ths_name, ths_code, change_pct, ma_align, above_ma20, classification,
         )
         return [{
-            "type": "SW行业-计算",
-            "name": sw_name,
+            "type": "THS行业-计算",
+            "name": ths_name,
             "change_pct": change_pct,
             "classification": classification,
             "rank": 0,
         }]
     except Exception as e:
-        logger.debug("sector_ranker 兜底计算 %s SW板块 %s 异常: %s", code, sw_code, e)
+        logger.debug("sector_ranker 兜底计算 %s THS板块 %s 异常: %s", code, ths_code, e)
         return []
 
 

@@ -1046,55 +1046,40 @@ def calc_tech_indicators(kline: List[Dict], market_mode: str = "defend") -> Dict
 
 def fetch_stock_fund_flow(code: str, retries: int = 2) -> Optional[Dict]:
     """
-    获取个股主力资金流向（AKShare 本地数据，替代问财 stock_quote 查询）
+    获取个股主力资金流向（问财 OpenAPI，替代东财爬虫）
 
-    数据源：东方财富资金流向接口
-    带重试机制：东方财富接口偶发 ConnectionError，重试 2 次可大幅提升命中率。
+    数据源：同花顺问财 OpenAPI，走正规 Bearer Token 认证通道，
+    无频率限制，无反爬问题。
 
     Returns:
         {"main_net": float,       # 主力净流入（元）
          "super_large_net": float, # 超大单净流入（元）
          "large_net": float,      # 大单净流入（元）
-         "signal": "流入"|"流出"|"平衡",
-         "update_date": str} or None
+         "medium_net": float,     # 中单净流入（元）
+         "small_net": float,      # 小单净流入（元）
+         "signal": "流入"|"流出"|"平衡"} or None
     """
     import time
     last_error = None
     for attempt in range(retries + 1):
         try:
-            import akshare as ak
-            # 确定市场
-            if code.startswith(("6", "688")):
-                market = "sh"
-            else:
-                market = "sz"
-            df = ak.stock_individual_fund_flow(stock=code, market=market)
-            if df is None or df.empty:
-                return None
-            latest = df.iloc[-1]
-            main_net = float(latest.get("主力净流入-净额", 0) or 0)
-            super_large = float(latest.get("超大单净流入-净额", 0) or 0)
-            large = float(latest.get("大单净流入-净额", 0) or 0)
-            signal = "流入" if main_net > 0 else ("流出" if main_net < 0 else "平衡")
-            return {
-                "main_net": main_net,
-                "super_large_net": super_large,
-                "large_net": large,
-                "signal": signal,
-            }
+            from .iwencai_api import query_stock_fund_flow
+            result = query_stock_fund_flow(code)
+            if result is not None:
+                return result
         except Exception as e:
             last_error = e
             if attempt < retries:
-                time.sleep(1.5 * (attempt + 1))  # 递增退避：1.5s, 3s
+                time.sleep(1.0 * (attempt + 1))
     logger.debug("个股资金流查询失败 %s（重试%d次）: %s", code, retries, last_error)
     return None
 
 
 def batch_fetch_stock_fund_flow(codes: List[str]) -> Dict[str, Optional[Dict]]:
     """
-    批量获取多只个股的资金流向
+    批量获取多只个股的资金流向（问财 OpenAPI，无频率限制）。
 
-    逐只查询，带请求间隔（东方财富接口有频率限制，间隔 0.8s 避免被封）。
+    逐只查询，走正规 API 通道，不再需要 0.8s 冷却（东财限流不再适用）。
 
     Returns:
         {code: fetch_stock_fund_flow() dict or None}
@@ -1103,10 +1088,10 @@ def batch_fetch_stock_fund_flow(codes: List[str]) -> Dict[str, Optional[Dict]]:
     results = {}
     for i, code in enumerate(codes):
         if i > 0:
-            time.sleep(0.8)  # 请求间隔，避免东方财富限流
+            time.sleep(0.2)  # 轻微间隔，避免瞬时并发过高
         results[code] = fetch_stock_fund_flow(code)
     hit = sum(1 for v in results.values() if v is not None)
-    logger.info("批量资金流: %d/%d 命中", hit, len(codes))
+    logger.info("批量资金流(问财): %d/%d 命中", hit, len(codes))
     return results
 
 

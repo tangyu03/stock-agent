@@ -43,8 +43,8 @@ class EntrySignal:
     applicable_modes: List[str] = field(default_factory=list)  # 适用操作模式
     sector_status: str = ""        # 板块状态
     sector_name: str = ""         # 板块名称
-    sw_level2: str = ""           # 申万二级行业
-    sw_level3: str = ""           # 申万三级行业
+    sw_level2: str = ""           # 同花顺行业（原名申万二级，字段名保留兼容）
+    sw_level3: str = ""           # 行业三级（字段名保留兼容）
     concepts: str = ""            # 概念板块（逗号分隔）
     concept_status: str = ""      # 概念板块状态（主线/轮动/退潮）
     trigger_reason: str = ""       # 触发原因描述

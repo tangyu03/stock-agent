@@ -323,7 +323,7 @@ class InsightMiner:
           ├── 行情数据 → 当前价 / 均线排列 / 近期涨跌幅（AKShare K 线，0 配额）
           ├── 财务数据 → 营收增速 / 净利润增速 / ROE / 负债率（问财，独有）
           ├── 资金数据 → 主力净流入（问财，独有）
-          ├── 板块归属 → 所属申万行业（AKShare，0 配额）
+          ├── 板块归属 → 所属同花顺行业（AKShare/问财）
           └── 排雷     → 是否ST / 停牌 / 负面事件（AKShare 行情 + 问财事件）
         """
         code = target.get("code", "")
@@ -464,7 +464,7 @@ class InsightMiner:
         except Exception as e:
             logger.debug("事件查询失败 %s: %s", code, e)
 
-        # 6. 板块归属（申万行业，0 问财配额）
+        # 6. 板块归属（同花顺行业）
         sector = target.get("sector", "")
         if sector:
             sw_code = normalize_sector(sector)
