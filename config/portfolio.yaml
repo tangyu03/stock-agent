@@ -1,0 +1,113 @@
+version: '1.0'
+stocks:
+- code: '688409'
+  name: 富创精密
+- code: '688652'
+  name: 京仪装备
+- code: '300843'
+  name: 胜蓝股份
+- code: '001399'
+  name: 惠科
+- code: '688531'
+  name: 日联科技
+- code: '688008'
+  name: 澜起科技
+- code: '688041'
+  name: 海光信息
+- code: '688027'
+  name: 国盾量子
+- code: '301666'
+  name: 大普微
+- code: '603232'
+  name: 格尔软件
+- code: '002594'
+  name: 比亚迪
+- code: '688797'
+  name: 臻宝
+- code: '920045'
+  name: 蘅东光
+- code: '688820'
+  name: 盛合晶微
+- code: '688028'
+  name: 沃尔德
+- code: '300757'
+  name: 罗博特科
+- code: '688521'
+  name: 芯原股份
+- code: '6886'
+  name: 芯原股份
+add_plans:
+- plan_id: ap_688028_20260709_60219e
+  stock_code: '688028'
+  stock_name: 沃尔德
+  created_at: '2026-07-09'
+  entry_price: 134.0
+  status: active
+  levels:
+  - level: 1
+    target_price: 127.39
+    source: MA20
+    verify_conditions:
+    - 板块未退潮（main_trend / rotational）
+    - 无新增利空事件
+    - 价格未破第0级止损
+    - 量价未背离
+    executed: false
+    verified: false
+  - level: 2
+    target_price: 120.36
+    source: MA60
+    verify_conditions:
+    - 板块未退潮（main_trend / rotational）
+    - 无新增利空事件
+    - 价格未破第1级止损
+    - 量价未背离
+    executed: false
+    verified: false
+  - level: 3
+    target_price: 100.05
+    source: 前低
+    verify_conditions:
+    - 板块未退潮（main_trend / rotational）
+    - 无新增利空事件
+    - 价格未破第2级止损
+    - 量价未背离
+    executed: false
+    verified: false
+- plan_id: ap_688110_20260709_de7644
+  stock_code: '688110'
+  stock_name: 东芯股份
+  created_at: '2026-07-09'
+  entry_price: 168.8
+  status: active
+  levels:
+  - level: 1
+    target_price: 164.16
+    source: MA20
+    verify_conditions:
+    - 板块未退潮（main_trend / rotational）
+    - 无新增利空事件
+    - 价格未破第0级止损
+    - 量价未背离
+    executed: false
+    verified: false
+  - level: 2
+    target_price: 146.7
+    source: MA60
+    verify_conditions:
+    - 板块未退潮（main_trend / rotational）
+    - 无新增利空事件
+    - 价格未破第1级止损
+    - 量价未背离
+    executed: false
+    verified: false
+  - level: 3
+    target_price: 122.12
+    source: 前低
+    verify_conditions:
+    - 板块未退潮（main_trend / rotational）
+    - 无新增利空事件
+    - 价格未破第2级止损
+    - 量价未背离
+    executed: false
+    verified: false

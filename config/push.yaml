@@ -1,0 +1,22 @@
+version: "1.0"
+
+pushplus:
+  token: "bf2b6f5b05884e36a5d4ec10878a0537"
+  daily_limit: 200
+  template_style: "compact"
+
+schedule:
+  pre_market: "08:50"
+  auction: "09:25"
+  market_open: "09:35"
+  mid_morning: "10:30"
+  mid_afternoon: "14:00"
+  pre_close: "14:50"
+  post_market: "15:30"
+  weekly_report: "20:00"
+  weekly_report_day: "sunday"
+
+levels:
+  routine: "🔵 常规"
+  important: "🟡 重要"
+  urgent: "🔴 紧急"

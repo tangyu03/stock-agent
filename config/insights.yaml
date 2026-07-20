@@ -1,0 +1,38 @@
+version: "1.0"
+
+# 观点录入配置
+insights: []
+  # 示例：
+  # - id: "INS-20260612-001"
+  #   source: "雪球文章 2026-06-12"
+  #   raw_text: "存储涨价到天怒人怨..."
+  #   status: "tracking"
+  #   created_at: "2026-06-12"
+  #
+  #   judgments:
+  #     - id: "J01"
+  #       judgment: "中报唯一值得期待的是AI半导体"
+  #       direction: "看多"
+  #       time_horizon: "中期"
+  #       confidence: "高"
+  #       valid_days: 30
+  #       status: "tracking"
+  #       tags: ["中报", "AI半导体"]
+  #       targets:
+  #         - code: "688256"
+  #           name: "寒武纪"
+  #           role: "AI芯片龙头"
+  #       track_metrics: ["板块资金净流入", "业绩预告", "超额收益"]
+  #       verify_config:
+  #         metrics:
+  #           - type: "sector_fund_flow_3d"
+  #             sector: "AI半导体"
+  #             confirm_threshold: 500000000
+  #             refute_threshold: -300000000
+  #         confirm_logic: "all"
+  #         refute_logic: "any"
+  #
+  #   chains: []
+  #     # - upstream: "J02"
+  #     #   downstream: "J03"
+  #     #   logic: "涨价→扩产"

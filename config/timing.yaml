@@ -1,0 +1,147 @@
+version: "1.0"
+
+# ============================================================
+# 择时引擎阈值配置
+# ============================================================
+# 本文件是 timing_engine.py 所有判断阈值的唯一参数源。
+# 回测 (loop/) 与实盘推送 (orchestrator/intraday) 共用同一份配置，
+# 保证回测优化出的最优参数可直接迁移到实盘。
+#
+# 修改阈值时请同步更新 src/analyzers/timing_engine.py 中
+# 对应的 self._tc[...] 读取代码。
+# ============================================================
+
+timing:
+
+  # ──────────────── 恐慌抄底 (_check_panic_bottom) ────────────────
+  panic_bottom:
+    index_drop_threshold: 4.0            # 上证跌幅 > 4% 判定大盘恐慌
+    gem_star_drop_threshold: 5.0         # 双创跌幅 > 5% 判定大盘恐慌
+    ad_ratio_extreme_weak: 0.15          # 涨跌比 < 0.15 判定市场极弱
+    panic_volume_ratio: 2.0              # 量比 > 2.0 判定恐慌放量
+    panic_volume_index_drop: 2.0         # 恐慌放量需配合上证跌幅 > 2%
+    significant_volume_ratio: 1.5        # 量比 > 1.5 判定显著放量
+    stock_drop_threshold: -7             # 个股单日跌幅 < -7% 判定超卖（从-5%提高）
+    drop_5d_threshold: -0.15            # 5日跌幅 > 15% 判定超卖
+    high_confidence_market_conds: 1      # 高置信度需要的大盘恐慌条件数
+    high_confidence_stock_conds: 2       # 高置信度需要的个股超卖条件数
+
+  # ──────────────── 套利低吸 (_check_arbitrage_entry) ────────────────
+  arbitrage:
+    shrinking_volume_ratio: 1.0          # 量比 < 1.0 视为缩量
+    min_trigger_conditions: 1            # 至少满足几条积极信号才触发
+
+  # ──────────────── 确认追强 (_check_momentum_chase) ────────────────
+  momentum_chase:
+    ma20_trend_min_klines: 21            # MA20 趋势判定最少 K 线数
+    ma20_window: 20                      # MA20 计算窗口
+    breakout_price_ratio: 0.99           # 价格 >= 近20日最高 × 0.99 视为突破
+    volume_confirm_ratio: 1.2            # 量比 < 1.2 视为未放量确认
+
+  # ──────────────── 价量突破 (_check_volume_breakout) ────────────────
+  volume_breakout:
+    require_rs_above_ma: true            # attack 模式下 RS 必须站上均线
+
+  # ──────────────── 出场信号 (check_exit_signals) ────────────────
+  exit:
+
+    # 破位止损/预警
+    breakdown:
+      volume_confirm_ratio: 0.8          # 量比 > 0.8 才视为有效破位
+      heavy_volume_ratio: 1.3            # 量比 > 1.3 视为放量破位
+
+    # 上涨衰竭（15 个子项）
+    exhaustion:
+      rsi_severe_overbought: 80          # RSI > 80 → 严重超买 (strong)
+      rsi_overbought: 70                 # RSI > 70 → 高位 (medium)
+      rsi_divergence_window: 14          # RSI 顶背离需要的 K 线数
+      rsi_divergence_threshold: 65       # 价创新高但 RSI < 65 → 顶背离
+      volume_price_div_window: 10        # 量价背离需要的 K 线数
+      volume_price_div_avg_window: 5     # 量价背离用前 5 日均量
+      volume_shrink_ratio: 0.8           # 今日量 < 前N日均 × 0.8 → 量价背离
+      upper_shadow_window: 3             # 上影线判断需要的 K 线数
+      upper_shadow_strong_ratio: 1.5     # 连续上影 > 实体 × 1.5 (strong)
+      upper_shadow_medium_ratio: 1.0     # 连续上影 > 实体 × 1.0 (medium)
+      upper_shadow_min_count: 2          # 至少 2 根上影线
+      long_upper_shadow_body_ratio: 3    # 长上影 > 实体 × 3 (strong)
+      long_upper_shadow_volume_ratio: 1.5 # 长上影需量比 > 1.5
+      upper_shadow_body_ratio_medium: 2  # 普通上影 > 实体 × 2 (medium)
+      kdj_dead_cross_k: 70              # KDJ K > 70 且 K < D → 死叉
+      kdj_blunt_j: 100                  # KDJ J > 100 → 钝化
+      macd_kdj_resonance_k: 60           # MACD负 + K<D + K>60 → 顶部共振
+      vote_neutral_negative_score: 0    # 中性投票 + score < 0 → 转空
+      ma5_bias_overheat: 0.08           # MA5 乖离 > 8% → 过热
+      strong_signal_min_count: 2         # strong 信号 ≥ 2 才推送冲高止盈（过滤单一信号噪音）
+      macd_as_exhaustion: false         # MACD 死叉不作为独立衰竭信号（已在投票系统"趋势组"算过，避免双重计票）
+
+  # ──────────────── 止损价计算 (calculate_stop_loss) ────────────────
+  stop_loss:
+    multiplier: 0.97                     # 止损价 = 支撑位 × 0.97（核心系数）
+    fallback_support_ratio: 0.92         # 修复 BUG-E1: 支撑位过远时回退到 当前价 × 0.92
+    max_support_distance: 0.12           # 修复 BUG-E1: 支撑位距离超过 12% 时回退到固定百分比
+    use_atr_buffer: false                # 是否启用 ATR buffer（默认关闭）
+    atr_min_klines: 15                   # ATR 计算最少 K 线数
+    atr_period: 14                       # ATR 周期
+    atr_multiplier: 2                    # buffer = N × ATR
+    fallback_buffer_ratio: 0.02          # K线不足时退化为 当前价 × 2%
+
+  # ──────────────── 推导链投票阈值 (_build_derivation) ────────────────
+  derivation:
+    vote_bullish_threshold: 1.0          # vote_score > 1.0 → 投票偏多
+    vote_bearish_threshold: -1.0         # vote_score < -1.0 → 投票偏空
+    rsi_high_contradiction: 65           # RSI > 65 且投票偏空 → 矛盾提示
+    rsi_low_contradiction: 35            # RSI < 35 且投票偏多 → 矛盾提示
+
+  # ──────────────── 技术数据计算 (_fetch_tech_data) ────────────────
+  tech_data:
+    min_klines_for_indicator: 20         # 计算 tech indicators 最少 K 线数
+    min_klines_for_tech_vote: 30         # 计算 tech vote + K线形态 最少 K 线数
+    ma25_window: 25                      # MA25 窗口
+    ma25_prev_window: 26                 # 昨日 MA25 需要的 K 线数
+    ma60_window: 60                      # MA60 窗口
+    ma120_window: 120                    # MA120 窗口
+    volume_ma60_window: 60               # 60 日均量线
+    recent_extreme_window: 20            # 近 N 日最高/最低
+    volume_ratio_avg_window: 21          # 量比均量窗口（21 条算，剔除当日）
+    shrinking_volume_ratio: 1.0          # 设计问题5: 量比 < 1.0 → 缩量回踩候选（原 0.8）
+    pullback_ma5_bias_tolerance: 0.03    # 设计问题5: MA5 乖离 ±3% → 视为回踩（原 ±1%）
+    pullback_ma10_bias_tolerance: 0.03   # 设计问题5: MA10 乖离 ±3% → 视为回踩（原 ±1%）
+    hammer_lower_shadow_ratio: 2         # 锤子线：下影线 > 实体 × 2
+    limit_down_ratio: 0.9                # 跌停价 = 昨收 × 0.9
+    limit_down_touch_tolerance: 1.002    # 最低价触及跌停 × 1.002
+    limit_down_open_threshold: 1.02      # 收盘 > 跌停 × 1.02 → 跌停被撬开
+    weekly_macd_min_weeks: 26            # 周线 MACD 需要的周数
+    ema12_period: 12                     # EMA12 周期
+    ema26_period: 26                     # EMA26 周期
+    dea_smooth_iterations: 8             # DEA 平滑次数
+
+  # ──────────────── 止盈区间 (_calculate_target_range) ────────────────
+  target_range:
+    panic_bottom_low: 1.08               # 恐慌抄底止盈下限 +8%
+    panic_bottom_high: 1.18              # 恐慌抄底止盈上限 +18%
+    arbitrage_with_resistance_low: 0.97  # 套利(有阻力)下限 阻力×0.97
+    arbitrage_with_resistance_high: 1.02 # 套利(有阻力)上限 阻力×1.02
+    arbitrage_no_resistance_low: 1.05    # 套利(无阻力)下限 +5%
+    arbitrage_no_resistance_high: 1.08   # 套利(无阻力)上限 +8%
+    momentum_chase_low: 1.05             # 确认追强下限 +5%
+    momentum_chase_high: 1.12            # 确认追强上限 +12%
+    volume_breakout_low: 1.08            # 价量突破下限 +8%
+    volume_breakout_high: 1.15           # 价量突破上限 +15%
+    default_with_resistance_low: 0.97    # 默认(有阻力)下限
+    default_with_resistance_high: 1.02   # 默认(有阻力)上限
+    default_no_resistance_low: 1.05      # 默认(无阻力)下限
+    default_no_resistance_high: 1.08     # 默认(无阻力)上限
+
+  # ──────────────── 数据预取 (prefetch_*) ────────────────
+  prefetch:
+    index_min_klines: 2                  # 上证指数至少 N 条 K 线
+    market_vol_avg_window: 20            # 20 日均成交额窗口
+    max_workers: 4                       # 并发预取线程数
+
+  # ──────────────── 回测专用：仓位管理 ────────────────
+  # 这部分不参与 timing_engine 实时判断，仅供 backtest loop 使用
+  # 出场逻辑全部由 TimingEngine.check_exit_signals 负责，回测不加额外判断
+  backtest:
+    budget_per_stock: 250000             # 单股最大仓位
+    max_concurrent_positions: 4          # 最大并发持仓数
+    cooldown_days_after_sell: 3          # 卖出后冷却天数

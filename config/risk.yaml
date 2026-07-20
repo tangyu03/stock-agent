@@ -1,0 +1,22 @@
+version: "1.0"
+
+risk:
+  # 止损计算
+  stop_loss_multiplier: 0.97  # 支撑位下方3%
+
+  # 前置过滤
+  stock_filter:
+    min_avg_volume_5d: 50000000  # 近5日均成交额 > 5000万
+    max_gain_20d: 0.30           # 近20日涨幅 < 30%（套利低吸/恐慌抄底）
+    max_gain_20d_momentum: 0.50  # 近20日涨幅 < 50%（确认追强，需附加条件）
+    exclude_st: true
+    exclude_suspended: true
+
+  # 兑现判断规则
+  verify_defaults:
+    confirm_logic: "all"  # 所有指标达标才算兑现
+    refute_logic: "any"   # 任一指标达标即证伪
+    refute_count_threshold: 3  # 连续证伪次数达到后标记为证伪
+
+  # 跌停可执行性检查
+  check_limit_down: true

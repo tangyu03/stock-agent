@@ -1,0 +1,44 @@
+version: "1.0"
+
+# 日内调度时序
+schedule:
+  pre_market:
+    time: "08:50"
+    tasks: ["market_score", "sector_scan", "pre_market_plan"]
+    description: "盘前计划：操作模式+持仓状态+自选关注+观点摘要"
+
+  auction:
+    time: "09:25"
+    tasks: ["auction_analysis", "t0_candidate"]
+    description: "集合竞价异动+今日做T候选"
+
+  market_open:
+    time: "09:35"
+    tasks: ["t0_open_signal", "entry_signal_check"]
+    description: "开盘做T信号+入场信号检查"
+
+  mid_morning:
+    time: "10:30"
+    tasks: ["t0_mid_check", "holding_check"]
+    description: "盘中做T回补/抛售区间+持仓检查"
+
+  mid_afternoon:
+    time: "14:00"
+    tasks: ["t0_tail_opportunity", "t0_daily_stats"]
+    description: "尾盘做T机会+当日做T统计"
+
+  pre_close:
+    time: "14:50"
+    tasks: ["t0_force_close_remind", "holding_eod_check"]
+    description: "未了结T仓强制提醒+尾盘持仓检查"
+
+  post_market:
+    time: "15:30"
+    tasks: ["daily_review", "insight_track", "trade_log"]
+    description: "盘后复盘+观点追踪更新+交易日志"
+
+  weekly_report:
+    time: "20:00"
+    day: "sunday"
+    tasks: ["weekly_report", "insight_weekly_summary"]
+    description: "周度绩效复盘+观点挖掘汇总"

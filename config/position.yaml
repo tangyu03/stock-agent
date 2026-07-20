@@ -1,0 +1,12 @@
+version: "1.0"
+
+position:
+  normal: 0.6
+  mode_limit:
+    attack: 0.8
+    defend: 0.5
+    retreat: 0.1
+  single_stock_max: 0.25
+  t0_max_ratio: 0.333  # 做T仓位 ≤ 持仓1/3
+  t0_max_rounds: 2     # 单日单票最多2轮
+  t0_stop_loss: 0.01   # 做T止损 1%

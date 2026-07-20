@@ -1,0 +1,143 @@
+2026-07-01 00:51:53 [INFO] src.data_layer.akshare_adapter: AKShare 初始化成功 (数据源=sina, spot_data=5527行)
+2026-07-01 00:51:53 [INFO] src.data_layer.akshare_adapter: AKShare 反爬 Session patch 成功（动态 headers 注入）
+2026-07-01 00:51:53 [INFO] src.data_layer.skill_wrapper: Registered 22 skills
+2026-07-01 00:51:53 [INFO] src.decision.watchlist_manager: 自选票池加载: 5 只
+2026-07-01 00:51:53 [INFO] src.llm_client: LLM config loaded, active provider: deepseek
+2026-07-01 00:51:53 [INFO] src.orchestrator.engine: ====== 全量分析 ======
+2026-07-01 00:51:53 [INFO] src.decision.aggregator: ====== v3 每日分析开始 2026-07-01 ======
+2026-07-01 00:51:53 [INFO] src.decision.aggregator: --- 任务①：多模式自适应 ---
+2026-07-01 00:51:54 [INFO] src.decision.aggregator: 自适应模式: defend（上证指数 2026-06-30 收盘 4094.397）
+2026-07-01 00:51:54 [INFO] src.decision.aggregator: --- 任务②：板块扫描 ---
+2026-07-01 00:51:54 [INFO] src.data_layer.sw_industry: 行业自动检测: 17 只, 命中 14 只
+2026-07-01 00:51:54 [INFO] src.analyzers.sector_scanner: === 板块扫描开始 2026-07-01 ===
+2026-07-01 00:51:54 [INFO] src.analyzers.sector_scanner: 待扫描板块: ['通信', '电子', '计算机', '汽车']
+2026-07-01 00:51:58 [INFO] src.analyzers.sector_scanner: 批量预取板块数据完成: 4 个板块，命中指标 4 个
+2026-07-01 00:51:58 [INFO] src.analyzers.sector_scanner: 板块扫描完成: 主线1 / 支线1 / 退潮2
+2026-07-01 00:51:58 [INFO] src.decision.aggregator: --- 任务③：持仓分析 ---
+2026-07-01 00:51:58 [INFO] src.analyzers.sector_scanner: === 交叉诊断开始 ===
+2026-07-01 00:51:58 [INFO] src.analyzers.sector_scanner: 交叉诊断完成: 13 条诊断结果
+2026-07-01 00:52:17 [INFO] src.data_layer.stock_data: AKShare 实时行情缓存：5527 只股票
+2026-07-01 00:52:18 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688409,688652,300843,001399,68', 返回5条(共5条)
+2026-07-01 00:52:20 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688008,688041,688027,301666,60', 返回5条(共5条)
+2026-07-01 00:52:23 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='002594,688797,920045,688820,68', 返回5条(共5条)
+2026-07-01 00:52:23 [INFO] src.data_layer.skill_wrapper: 行情批量查询: 请求 15 只, 命中 3 只（分 3 批）
+2026-07-01 00:52:23 [INFO] src.data_layer.stock_data: 行情预取: 请求 15 只, 命中 3 只（AKShare 0 + 问财 3）
+2026-07-01 00:52:25 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688409,688652,300843,001399,68', 返回5条(共5条)
+2026-07-01 00:52:28 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688008,688041,688027,301666,60', 返回5条(共5条)
+2026-07-01 00:52:30 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='002594,688797,920045,688820,68', 返回5条(共5条)
+2026-07-01 00:52:30 [INFO] src.data_layer.skill_wrapper: 资金流批量查询: 请求 15 只, 命中 0 只
+2026-07-01 00:52:30 [INFO] src.decision.position_analyzer: 分析持仓: 富创精密(688409)
+2026-07-01 00:52:32 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-01 00:52:32 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-01 00:52:36 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:52:36 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688409 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:52:39 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='688409业绩预告、质押、解禁', 返回3条(共1条)
+2026-07-01 00:52:42 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:52:42 [INFO] src.decision.position_analyzer: 分析持仓: 京仪装备(688652)
+2026-07-01 00:52:46 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:52:46 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688652 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:52:49 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='688652业绩预告、质押、解禁', 返回2条(共1条)
+2026-07-01 00:52:51 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:52:51 [INFO] src.decision.position_analyzer: 分析持仓: 胜蓝股份(300843)
+2026-07-01 00:52:53 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:52:53 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='300843 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:52:56 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='300843业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:52:58 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:52:58 [INFO] src.decision.position_analyzer: 分析持仓: 惠科(001399)
+2026-07-01 00:53:01 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:01 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='001399 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:53:04 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='001399业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:53:07 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:07 [INFO] src.decision.position_analyzer: 分析持仓: 日联科技(688531)
+2026-07-01 00:53:10 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:10 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688531 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:53:13 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='688531业绩预告、质押、解禁', 返回2条(共1条)
+2026-07-01 00:53:15 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:15 [INFO] src.decision.position_analyzer: 分析持仓: 澜起科技(688008)
+2026-07-01 00:53:18 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:18 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688008 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:53:21 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='688008业绩预告、质押、解禁', 返回2条(共1条)
+2026-07-01 00:53:24 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:24 [INFO] src.decision.position_analyzer: 分析持仓: 海光信息(688041)
+2026-07-01 00:53:27 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:27 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688041 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:53:30 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='688041业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:53:32 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:32 [INFO] src.decision.position_analyzer: 分析持仓: 国盾量子(688027)
+2026-07-01 00:53:34 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-01 00:53:34 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-01 00:53:37 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:38 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688027 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:53:41 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='688027业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:53:44 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:44 [INFO] src.decision.position_analyzer: 分析持仓: 大普微(301666)
+2026-07-01 00:53:47 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:47 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='301666 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:53:50 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='301666业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:53:53 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:53 [INFO] src.decision.position_analyzer: 分析持仓: 格尔软件(603232)
+2026-07-01 00:53:55 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:53:56 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='603232 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:53:58 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='603232业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:54:01 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:01 [INFO] src.decision.position_analyzer: 分析持仓: 比亚迪(002594)
+2026-07-01 00:54:04 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:04 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='002594 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:54:07 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='002594业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:54:09 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:09 [INFO] src.decision.position_analyzer: 分析持仓: 臻宝(688797)
+2026-07-01 00:54:12 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:12 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688797 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:54:15 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='688797业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:54:18 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:18 [INFO] src.decision.position_analyzer: 分析持仓: 蘅东光(920045)
+2026-07-01 00:54:18 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-01 00:54:18 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='920045 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:54:21 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='920045业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:54:21 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-01 00:54:21 [INFO] src.decision.position_analyzer: 分析持仓: 盛合晶微(688820)
+2026-07-01 00:54:25 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:25 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688820 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:54:28 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='688820业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:54:31 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:31 [INFO] src.decision.position_analyzer: 分析持仓: 沃尔德(688028)
+2026-07-01 00:54:37 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:37 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=stock_quote, query='688028 主力资金净流入', 返回1条(共1条)
+2026-07-01 00:54:40 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='688028业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:54:43 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__eastmoney (failures=3, cooldown=120s)
+2026-07-01 00:54:43 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-01 00:54:43 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-01 00:54:46 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:46 [INFO] src.decision.aggregator: --- 任务④：v3 自适应策略 ---
+2026-07-01 00:54:46 [INFO] src.decision.aggregator: v3 策略：待分析标的 5 只
+2026-07-01 00:54:46 [INFO] src.loop.data_loader: 加载 920045 K线数据 (2026-04-02 ~ 2026-07-01)
+2026-07-01 00:54:46 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-01 00:54:46 [INFO] src.loop.data_loader: 920045: 加载 59 根K线（范围 2026-04-02 ~ 2026-07-01）
+2026-07-01 00:54:46 [INFO] src.loop.data_loader: 加载 688820 K线数据 (2026-04-02 ~ 2026-07-01)
+2026-07-01 00:54:50 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:50 [INFO] src.loop.data_loader: 688820: 加载 47 根K线（范围 2026-04-02 ~ 2026-07-01）
+2026-07-01 00:54:50 [INFO] src.loop.data_loader: 加载 301511 K线数据 (2026-04-02 ~ 2026-07-01)
+2026-07-01 00:54:53 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:53 [INFO] src.loop.data_loader: 301511: 加载 59 根K线（范围 2026-04-02 ~ 2026-07-01）
+2026-07-01 00:54:53 [INFO] src.loop.data_loader: 加载 688028 K线数据 (2026-04-02 ~ 2026-07-01)
+2026-07-01 00:54:58 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:54:58 [INFO] src.loop.data_loader: 688028: 加载 59 根K线（范围 2026-04-02 ~ 2026-07-01）
+2026-07-01 00:54:58 [INFO] src.loop.data_loader: 加载 688110 K线数据 (2026-04-02 ~ 2026-07-01)
+2026-07-01 00:55:01 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-01 00:55:01 [INFO] src.loop.data_loader: 688110: 加载 59 根K线（范围 2026-04-02 ~ 2026-07-01）
+2026-07-01 00:55:01 [INFO] src.loop.stockagent_tuned_v3_signals: 自适应模式已启用，预计算 30 天的 mode
+2026-07-01 00:55:03 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='301511业绩预告、质押、解禁', 返回1条(共1条)
+2026-07-01 00:55:06 [INFO] src.data_layer.skill_wrapper: 问财API调用成功: skill=event_data, query='688110业绩预告、质押、解禁', 返回4条(共1条)
+2026-07-01 00:55:06 [INFO] src.decision.aggregator: v3 策略产生 8 条原始信号
+2026-07-01 00:55:06 [INFO] src.decision.aggregator: v3 信号转换: 买入 4 条, 卖出 4 条
+2026-07-01 00:55:06 [INFO] src.decision.aggregator: v3 信号: 买入 4 条, 卖出 4 条
+2026-07-01 00:55:06 [INFO] src.decision.aggregator: --- 任务⑤：自选分析（v3 已覆盖，仅生成摘要） ---
+2026-07-01 00:55:06 [INFO] src.decision.aggregator: v3 自选摘要: 5 只标的
+2026-07-01 00:55:06 [INFO] src.decision.aggregator: 全局跨源合并: 1 条买入, 12 条卖出
+2026-07-01 00:55:06 [INFO] src.decision.aggregator: ====== v3 每日分析完成 ======
+2026-07-01 00:55:06 [INFO] src.decision.risk_guard: 买入信号被风控修改: 德福科技 - 仓位调整: 2400股(24.5%)
+2026-07-01 00:55:06 [INFO] src.decision.risk_guard: 风控检查完成: 买入1/1通过, 卖出12/12通过
+2026-07-01 00:55:06 [INFO] src.push.pushplus: Push sent: [重要] 买入信号 1条 (count: 1/200)
+2026-07-01 00:55:07 [INFO] src.push.pushplus: Push sent: [紧急] 紧急卖出 12条 (count: 2/200)
+2026-07-01 00:55:09 [INFO] src.push.pushplus: Push sent: [常规] 📊 盘前计划 (count: 3/200)
+2026-07-01 00:55:09 [INFO] src.orchestrator.engine: 全量分析完成 (模式=defend, 买入=1, 卖出=12)

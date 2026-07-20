@@ -1,0 +1,1153 @@
+2026-07-11 20:02:31 [WARNING] src.data_layer.akshare_adapter: AKShare 模块已加载但东财/新浪均不可达，将按需降级
+2026-07-11 20:02:31 [INFO] src.data_layer.akshare_adapter: AKShare 反爬 Session patch 成功（动态 headers 注入）
+2026-07-11 20:02:31 [INFO] src.data_layer.skill_wrapper: Registered 22 skills
+2026-07-11 20:02:31 [INFO] src.llm_client: LLM config loaded, active provider: deepseek
+2026-07-11 20:02:31 [INFO] src.orchestrator.engine: ====== 盘中统一检查 ======
+2026-07-11 20:02:33 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 20:02:34 [INFO] src.data_layer.akshare_adapter: 美股快照: SP500=0.00% Nasdaq=0.00% VIX=0.0 (0.0%)
+2026-07-11 20:02:36 [INFO] src.data_layer.akshare_adapter: 美股期货: SP500=0.52% Nasdaq=0.46% Dow=0.47%
+2026-07-11 20:02:36 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 20:02:37 [INFO] src.data_layer.sw_industry: 行业自动检测: 17 只, 命中 13 只
+2026-07-11 20:02:37 [INFO] src.analyzers.sector_scanner: === 板块扫描开始 2026-07-11 ===
+2026-07-11 20:02:37 [INFO] src.analyzers.sector_scanner: 待扫描板块: ['光学光电子', '半导体', '通信', '计算机', '消费电子', '软件开发']
+2026-07-11 20:02:42 [INFO] src.analyzers.sector_scanner: 批量预取板块数据完成: 6 个板块，命中指标 6 个
+2026-07-11 20:02:42 [INFO] src.analyzers.sector_scanner: 板块扫描完成: 主线1 / 支线2 / 退潮3
+2026-07-11 20:02:42 [INFO] src.orchestrator.unified_engine: ====== 统一分析 realtime 模式 ======
+2026-07-11 20:02:43 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_index_daily)
+2026-07-11 20:02:45 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 20:02:45 [INFO] src.analyzers.timing_engine: 大盘数据预取完成: index_drop=-0.38, volume=0亿, ad_ratio=2.18
+2026-07-11 20:02:45 [INFO] src.analyzers.timing_engine: 并行预取 17 只个股K线 (workers=4)
+2026-07-11 20:02:47 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 20:02:47 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:02:47 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 20:02:47 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:02:49 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__eastmoney (failures=3, cooldown=120s)
+2026-07-11 20:02:49 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 20:02:49 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:02:49 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__eastmoney (failures=4, cooldown=120s)
+2026-07-11 20:02:49 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 20:02:49 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:02:50 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:50 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:51 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:52 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:53 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:54 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:54 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:56 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:56 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:56 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 20:02:56 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:57 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:58 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:02:59 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:03:00 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:03:01 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:03:01 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 20:03:01 [INFO] src.analyzers.timing_engine: 并行预取完成: 17/17 只命中
+2026-07-11 20:03:01 [INFO] src.orchestrator.unified_engine: --- 统一引擎：进场检查 ---
+2026-07-11 20:03:01 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:01 [INFO] src.analyzers.stock_filter: ✅ 688409(688409) 过滤通过
+2026-07-11 20:03:01 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:01 [INFO] src.analyzers.stock_filter: ✅ 富创精密(688409) 过滤通过
+2026-07-11 20:03:01 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:01 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:01 [INFO] src.analyzers.stock_filter: ✅ 688652(688652) 过滤通过
+2026-07-11 20:03:01 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:01 [INFO] src.analyzers.stock_filter: ✅ 京仪装备(688652) 过滤通过
+2026-07-11 20:03:01 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:01 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:01 [INFO] src.analyzers.stock_filter: ✅ 300843(300843) 过滤通过
+2026-07-11 20:03:02 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:02 [INFO] src.analyzers.stock_filter: ✅ 胜蓝股份(300843) 过滤通过
+2026-07-11 20:03:02 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:02 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:02 [INFO] src.analyzers.stock_filter: ✅ 001399(001399) 过滤通过
+2026-07-11 20:03:02 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:02 [INFO] src.analyzers.stock_filter: ✅ 惠科(001399) 过滤通过
+2026-07-11 20:03:02 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:02 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:02 [INFO] src.analyzers.stock_filter: ✅ 688531(688531) 过滤通过
+2026-07-11 20:03:02 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:02 [INFO] src.analyzers.stock_filter: ✅ 日联科技(688531) 过滤通过
+2026-07-11 20:03:02 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:02 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:02 [INFO] src.analyzers.stock_filter: ✅ 688008(688008) 过滤通过
+2026-07-11 20:03:02 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:02 [INFO] src.analyzers.stock_filter: ✅ 澜起科技(688008) 过滤通过
+2026-07-11 20:03:02 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:03 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:03 [INFO] src.analyzers.stock_filter: ✅ 688041(688041) 过滤通过
+2026-07-11 20:03:03 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:03 [INFO] src.analyzers.stock_filter: ✅ 海光信息(688041) 过滤通过
+2026-07-11 20:03:03 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:03 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:03 [INFO] src.analyzers.stock_filter: ✅ 688027(688027) 过滤通过
+2026-07-11 20:03:03 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:03 [INFO] src.analyzers.stock_filter: ✅ 国盾量子(688027) 过滤通过
+2026-07-11 20:03:03 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:03 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:03 [INFO] src.analyzers.stock_filter: ✅ 301666(301666) 过滤通过
+2026-07-11 20:03:03 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:03 [INFO] src.analyzers.stock_filter: ✅ 大普微(301666) 过滤通过
+2026-07-11 20:03:03 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:03 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:03 [INFO] src.analyzers.stock_filter: ✅ 603232(603232) 过滤通过
+2026-07-11 20:03:04 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:04 [INFO] src.analyzers.stock_filter: ✅ 格尔软件(603232) 过滤通过
+2026-07-11 20:03:04 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:04 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:04 [INFO] src.analyzers.stock_filter: ✅ 002594(002594) 过滤通过
+2026-07-11 20:03:04 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:04 [INFO] src.analyzers.stock_filter: ✅ 比亚迪(002594) 过滤通过
+2026-07-11 20:03:04 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:04 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:04 [INFO] src.analyzers.stock_filter: ✅ 688797(688797) 过滤通过
+2026-07-11 20:03:04 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:04 [INFO] src.analyzers.stock_filter: ✅ 臻宝(688797) 过滤通过
+2026-07-11 20:03:04 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:05 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:05 [INFO] src.analyzers.stock_filter: ✅ 920045(920045) 过滤通过
+2026-07-11 20:03:05 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:05 [INFO] src.analyzers.stock_filter: ✅ 蘅东光(920045) 过滤通过
+2026-07-11 20:03:06 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:06 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:06 [INFO] src.analyzers.stock_filter: ✅ 688820(688820) 过滤通过
+2026-07-11 20:03:06 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:06 [INFO] src.analyzers.stock_filter: ✅ 盛合晶微(688820) 过滤通过
+2026-07-11 20:03:06 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:06 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:06 [INFO] src.analyzers.stock_filter: ✅ 688028(688028) 过滤通过
+2026-07-11 20:03:06 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:06 [INFO] src.analyzers.stock_filter: ✅ 沃尔德(688028) 过滤通过
+2026-07-11 20:03:06 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:06 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:06 [INFO] src.analyzers.stock_filter: ✅ 300757(300757) 过滤通过
+2026-07-11 20:03:06 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:06 [INFO] src.analyzers.stock_filter: ✅ 罗博特科(300757) 过滤通过
+2026-07-11 20:03:07 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:07 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:07 [INFO] src.analyzers.stock_filter: ✅ 688521(688521) 过滤通过
+2026-07-11 20:03:07 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:07 [INFO] src.analyzers.stock_filter: ✅ 芯原股份(688521) 过滤通过
+2026-07-11 20:03:07 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:07 [INFO] src.orchestrator.unified_engine: --- 统一引擎：出场检查 ---
+2026-07-11 20:03:07 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:07 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:07 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:07 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:07 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:07 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:07 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:08 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:08 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:08 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:08 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:08 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:10 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 20:03:10 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:03:10 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:10 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:10 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:10 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 20:03:10 [INFO] src.orchestrator.unified_engine: 统一引擎完成: 进场=1 出场=18
+2026-07-11 20:03:10 [INFO] src.push.pushplus: Push sent: [重要] 防守 5.0分 | 买1 | 卖18 (count: 1/200)
+2026-07-11 20:03:10 [INFO] src.orchestrator.engine: 盘中检查完成 (模式=defend 进场=1 出场=18)
+2026-07-11 20:03:27 [WARNING] src.data_layer.akshare_adapter: AKShare 模块已加载但东财/新浪均不可达，将按需降级
+2026-07-11 20:03:27 [INFO] src.data_layer.akshare_adapter: AKShare 反爬 Session patch 成功（动态 headers 注入）
+2026-07-11 20:03:27 [INFO] src.data_layer.skill_wrapper: Registered 22 skills
+2026-07-11 20:03:27 [INFO] src.llm_client: LLM config loaded, active provider: deepseek
+2026-07-11 20:03:27 [INFO] src.orchestrator.engine: ====== 盘中统一检查 ======
+2026-07-11 20:03:27 [WARNING] src.loop.market_mode_adaptive: 指数K线获取失败: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sh000001/hisdata/klc_kl.js?d=2020_2_4 (Caused by NameResolutionError("HTTPSConnection(host='finance.sina.com.cn', port=443): Failed to resolve 'finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:27 [WARNING] src.analyzers.gem_sci_tech_scorer: 创业板指 K 线获取失败: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sz399006/hisdata/klc_kl.js?d=2020_2_4 (Caused by NameResolutionError("HTTPSConnection(host='finance.sina.com.cn', port=443): Failed to resolve 'finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:27 [WARNING] src.analyzers.gem_sci_tech_scorer: 科创50 K 线获取失败: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sz399688/hisdata/klc_kl.js?d=2020_2_4 (Caused by NameResolutionError("HTTPSConnection(host='finance.sina.com.cn', port=443): Failed to resolve 'finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [INFO] src.data_layer.akshare_adapter: 美股快照: SP500=0.00% Nasdaq=0.00% VIX=0.0 (0.0%)
+2026-07-11 20:03:32 [INFO] src.data_layer.akshare_adapter: 美股期货: SP500=0.00% Nasdaq=0.00% Dow=0.00%
+2026-07-11 20:03:32 [INFO] src.data_layer.sw_industry: 行业自动检测: 17 只, 命中 13 只
+2026-07-11 20:03:32 [INFO] src.analyzers.sector_scanner: === 板块扫描开始 2026-07-11 ===
+2026-07-11 20:03:32 [INFO] src.analyzers.sector_scanner: 待扫描板块: ['半导体', '软件开发', '消费电子', '通信', '计算机', '光学光电子']
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 拉取申万指数K线失败 sw_code=801081: HTTPSConnectionPool(host='www.swsresearch.com', port=443): Max retries exceeded with url: /institute-sw/api/index_publish/trend/?swindexcode=801081&period=DAY (Caused by NameResolutionError("HTTPSConnection(host='www.swsresearch.com', port=443): Failed to resolve 'www.swsresearch.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 涨停池获取失败: HTTPSConnectionPool(host='push2ex.eastmoney.com', port=443): Max retries exceeded with url: /getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=10000&sort=fbt%3Aasc&date=20260711 (Caused by NameResolutionError("HTTPSConnection(host='push2ex.eastmoney.com', port=443): Failed to resolve 'push2ex.eastmoney.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 拉取申万指数K线失败 sw_code=801751: HTTPSConnectionPool(host='www.swsresearch.com', port=443): Max retries exceeded with url: /institute-sw/api/index_publish/trend/?swindexcode=801751&period=DAY (Caused by NameResolutionError("HTTPSConnection(host='www.swsresearch.com', port=443): Failed to resolve 'www.swsresearch.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 涨停池获取失败: HTTPSConnectionPool(host='push2ex.eastmoney.com', port=443): Max retries exceeded with url: /getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=10000&sort=fbt%3Aasc&date=20260711 (Caused by NameResolutionError("HTTPSConnection(host='push2ex.eastmoney.com', port=443): Failed to resolve 'push2ex.eastmoney.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 拉取申万指数K线失败 sw_code=801083: HTTPSConnectionPool(host='www.swsresearch.com', port=443): Max retries exceeded with url: /institute-sw/api/index_publish/trend/?swindexcode=801083&period=DAY (Caused by NameResolutionError("HTTPSConnection(host='www.swsresearch.com', port=443): Failed to resolve 'www.swsresearch.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 涨停池获取失败: HTTPSConnectionPool(host='push2ex.eastmoney.com', port=443): Max retries exceeded with url: /getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=10000&sort=fbt%3Aasc&date=20260711 (Caused by NameResolutionError("HTTPSConnection(host='push2ex.eastmoney.com', port=443): Failed to resolve 'push2ex.eastmoney.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 拉取申万指数K线失败 sw_code=801770: HTTPSConnectionPool(host='www.swsresearch.com', port=443): Max retries exceeded with url: /institute-sw/api/index_publish/trend/?swindexcode=801770&period=DAY (Caused by NameResolutionError("HTTPSConnection(host='www.swsresearch.com', port=443): Failed to resolve 'www.swsresearch.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 涨停池获取失败: HTTPSConnectionPool(host='push2ex.eastmoney.com', port=443): Max retries exceeded with url: /getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=10000&sort=fbt%3Aasc&date=20260711 (Caused by NameResolutionError("HTTPSConnection(host='push2ex.eastmoney.com', port=443): Failed to resolve 'push2ex.eastmoney.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 拉取申万指数K线失败 sw_code=801750: HTTPSConnectionPool(host='www.swsresearch.com', port=443): Max retries exceeded with url: /institute-sw/api/index_publish/trend/?swindexcode=801750&period=DAY (Caused by NameResolutionError("HTTPSConnection(host='www.swsresearch.com', port=443): Failed to resolve 'www.swsresearch.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 涨停池获取失败: HTTPSConnectionPool(host='push2ex.eastmoney.com', port=443): Max retries exceeded with url: /getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=10000&sort=fbt%3Aasc&date=20260711 (Caused by NameResolutionError("HTTPSConnection(host='push2ex.eastmoney.com', port=443): Failed to resolve 'push2ex.eastmoney.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 拉取申万指数K线失败 sw_code=801084: HTTPSConnectionPool(host='www.swsresearch.com', port=443): Max retries exceeded with url: /institute-sw/api/index_publish/trend/?swindexcode=801084&period=DAY (Caused by NameResolutionError("HTTPSConnection(host='www.swsresearch.com', port=443): Failed to resolve 'www.swsresearch.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [WARNING] src.data_layer.sw_industry: 涨停池获取失败: HTTPSConnectionPool(host='push2ex.eastmoney.com', port=443): Max retries exceeded with url: /getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=10000&sort=fbt%3Aasc&date=20260711 (Caused by NameResolutionError("HTTPSConnection(host='push2ex.eastmoney.com', port=443): Failed to resolve 'push2ex.eastmoney.com' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:03:32 [INFO] src.analyzers.sector_scanner: 批量预取板块数据完成: 6 个板块，命中指标 6 个
+2026-07-11 20:03:32 [INFO] src.analyzers.sector_scanner: 板块扫描完成: 主线0 / 支线0 / 退潮0
+2026-07-11 20:03:32 [INFO] src.orchestrator.unified_engine: ====== 统一分析 realtime 模式 ======
+2026-07-11 20:03:34 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_index_daily__sina attempt 1/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 4.8s
+2026-07-11 20:03:40 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_index_daily__sina attempt 2/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 7.2s
+2026-07-11 20:03:49 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_index_daily__sina attempt 3/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 13.6s
+2026-07-11 20:04:04 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_index_daily__sina failed after 4 attempts: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sz000001/hisdata/klc_kl.js?d=2020_2_4 (Caused by NameResolutionError("HTTPSConnection(host=
+2026-07-11 20:04:04 [WARNING] src.data_layer.akshare_adapter: 数据源 sina 失败 (stock_zh_index_daily)，尝试下一个
+2026-07-11 20:04:06 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_index_daily__eastmoney attempt 1/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 4.2s
+2026-07-11 20:04:12 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_index_daily__eastmoney attempt 2/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 8.1s
+2026-07-11 20:04:22 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_index_daily__eastmoney attempt 3/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 14.6s
+2026-07-11 20:04:38 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_index_daily__eastmoney failed after 4 attempts: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/kline/get?secid=0.000001&fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2
+2026-07-11 20:04:38 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_index_daily)，尝试下一个
+2026-07-11 20:04:38 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_index_daily)
+2026-07-11 20:04:38 [ERROR] src.data_layer.akshare_adapter: get_market_volume failed: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh000001,sz399001 (Caused by NameResolutionError("HTTPConnection(host='qt.gtimg.cn', port=80): Failed to resolve 'qt.gtimg.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:04:41 [WARNING] src.data_layer.akshare_adapter: AKShare stock_market_activity_legu attempt 1/4 failed: HTTPSConnectionPool(host='legulegu.com', port=443): Max retries exceeded with url: /stockdata/market, retry in 5.3s
+2026-07-11 20:04:47 [WARNING] src.data_layer.akshare_adapter: AKShare stock_market_activity_legu attempt 2/4 failed: HTTPSConnectionPool(host='legulegu.com', port=443): Max retries exceeded with url: /stockdata/market, retry in 8.5s
+2026-07-11 20:04:56 [WARNING] src.data_layer.akshare_adapter: AKShare stock_market_activity_legu attempt 3/4 failed: HTTPSConnectionPool(host='legulegu.com', port=443): Max retries exceeded with url: /stockdata/market, retry in 14.5s
+2026-07-11 20:05:12 [ERROR] src.data_layer.akshare_adapter: AKShare stock_market_activity_legu failed after 4 attempts: HTTPSConnectionPool(host='legulegu.com', port=443): Max retries exceeded with url: /stockdata/market-activity (Caused by NameResolutionError("HTTPSConnection(host='legulegu.com', port=443): Failed to 
+2026-07-11 20:05:12 [WARNING] src.analyzers.gem_sci_tech_scorer: 创业板指 K 线获取失败: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sz399006/hisdata/klc_kl.js?d=2020_2_4 (Caused by NameResolutionError("HTTPSConnection(host='finance.sina.com.cn', port=443): Failed to resolve 'finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:05:12 [WARNING] src.analyzers.gem_sci_tech_scorer: 科创50 K 线获取失败: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sz399688/hisdata/klc_kl.js?d=2020_2_4 (Caused by NameResolutionError("HTTPSConnection(host='finance.sina.com.cn', port=443): Failed to resolve 'finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:05:12 [INFO] src.analyzers.timing_engine: 大盘数据预取完成: index_drop=0.00, volume=0亿, ad_ratio=1.00
+2026-07-11 20:05:12 [INFO] src.analyzers.timing_engine: 并行预取 17 只个股K线 (workers=4)
+2026-07-11 20:05:15 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 1/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 5.4s
+2026-07-11 20:05:15 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 1/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 5.1s
+2026-07-11 20:05:15 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 1/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 4.5s
+2026-07-11 20:05:16 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 1/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 5.4s
+2026-07-11 20:05:20 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 2/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 9.0s
+2026-07-11 20:05:21 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 2/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 7.3s
+2026-07-11 20:05:22 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 2/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 7.9s
+2026-07-11 20:05:23 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 2/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 7.8s
+2026-07-11 20:05:29 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 3/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 14.2s
+2026-07-11 20:05:30 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 3/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 14.0s
+2026-07-11 20:05:32 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 3/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 14.4s
+2026-07-11 20:05:33 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney attempt 3/4 failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt, retry in 14.0s
+2026-07-11 20:05:45 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney failed after 4 attempts: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57
+2026-07-11 20:05:45 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:05:45 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney failed after 4 attempts: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57
+2026-07-11 20:05:45 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:05:48 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 1/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 5.5s
+2026-07-11 20:05:48 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__eastmoney (failures=3, cooldown=120s)
+2026-07-11 20:05:48 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney failed after 4 attempts: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57
+2026-07-11 20:05:48 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:05:48 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 1/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 5.9s
+2026-07-11 20:05:48 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__eastmoney (failures=4, cooldown=120s)
+2026-07-11 20:05:48 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney failed after 4 attempts: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/kline/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57
+2026-07-11 20:05:48 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:05:51 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 1/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 4.7s
+2026-07-11 20:05:51 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 1/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 4.8s
+2026-07-11 20:05:54 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 2/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 8.4s
+2026-07-11 20:05:55 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 2/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 8.1s
+2026-07-11 20:05:58 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 2/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 7.6s
+2026-07-11 20:05:59 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 2/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 8.4s
+2026-07-11 20:06:04 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 3/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 14.5s
+2026-07-11 20:06:05 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 3/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 14.9s
+2026-07-11 20:06:08 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 3/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 13.1s
+2026-07-11 20:06:09 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 3/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 13.3s
+2026-07-11 20:06:20 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina failed after 4 attempts: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sh688409/hisdata_klc2/klc_kl.js (Caused by NameResolutionError("HTTPSConnection(host='finan
+2026-07-11 20:06:20 [WARNING] src.data_layer.akshare_adapter: 数据源 sina 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:06:20 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina failed after 4 attempts: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sh688652/hisdata_klc2/klc_kl.js (Caused by NameResolutionError("HTTPSConnection(host='finan
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: 数据源 sina 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__sina (failures=3, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina failed after 4 attempts: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sz001399/hisdata_klc2/klc_kl.js (Caused by NameResolutionError("HTTPSConnection(host='finan
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: 数据源 sina 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=3, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=4, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=5, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=6, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=7, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=8, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=9, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: _get_bj_hist_sina failed for bj920045: HTTPConnectionPool(host='money.finance.sina.com.cn', port=80): Max retries exceeded with url: /quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=bj920045&scale=240&ma=no&datalen=200 (Caused by NameResolutionError("HTTPConnection(host='money.finance.sina.com.cn', port=80): Failed to resolve 'money.finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=10, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=11, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=12, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=13, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__sina (failures=4, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina failed after 4 attempts: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sz300843/hisdata_klc2/klc_kl.js (Caused by NameResolutionError("HTTPSConnection(host='finan
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: 数据源 sina 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=14, cooldown=120s)
+2026-07-11 20:06:24 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:24 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 1/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 4.6s
+2026-07-11 20:06:27 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 1/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 5.3s
+2026-07-11 20:06:31 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 2/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 8.1s
+2026-07-11 20:06:34 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 2/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 7.0s
+2026-07-11 20:06:40 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 3/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 13.8s
+2026-07-11 20:06:43 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina attempt 3/4 failed: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock, retry in 14.4s
+2026-07-11 20:06:55 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__sina (failures=5, cooldown=120s)
+2026-07-11 20:06:55 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina failed after 4 attempts: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sh688531/hisdata_klc2/klc_kl.js (Caused by NameResolutionError("HTTPSConnection(host='finan
+2026-07-11 20:06:55 [WARNING] src.data_layer.akshare_adapter: 数据源 sina 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:06:55 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=15, cooldown=120s)
+2026-07-11 20:06:55 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__sina (failures=6, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__sina failed after 4 attempts: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sh688008/hisdata_klc2/klc_kl.js (Caused by NameResolutionError("HTTPSConnection(host='finan
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: 数据源 sina 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=16, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.timing_engine: 并行预取完成: 0/17 只命中
+2026-07-11 20:06:59 [INFO] src.orchestrator.unified_engine: --- 统一引擎：进场检查 ---
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688409 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=17, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 688409(688409) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688409 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=18, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 富创精密(688409) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688409 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=19, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688652 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=20, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 688652(688652) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688652 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=21, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 京仪装备(688652) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688652 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=22, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz300843 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=23, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 300843(300843) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz300843 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=24, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 胜蓝股份(300843) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz300843 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=25, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz001399 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=26, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 001399(001399) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz001399 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=27, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 惠科(001399) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz001399 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=28, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688531 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=29, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 688531(688531) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688531 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=30, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 日联科技(688531) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688531 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=31, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688008 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=32, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 688008(688008) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688008 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=33, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 澜起科技(688008) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688008 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=34, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688041 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=35, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 688041(688041) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688041 (Caused by NameResolutionErr
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:06:59 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:06:59 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=36, cooldown=120s)
+2026-07-11 20:06:59 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:06:59 [INFO] src.analyzers.stock_filter: ✅ 海光信息(688041) 过滤通过
+2026-07-11 20:06:59 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688041 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=37, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688027 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=38, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 688027(688027) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688027 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=39, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 国盾量子(688027) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688027 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=40, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz301666 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=41, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 301666(301666) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz301666 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=42, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 大普微(301666) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz301666 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=43, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh603232 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=44, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 603232(603232) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh603232 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=45, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 格尔软件(603232) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh603232 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=46, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz002594 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=47, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 002594(002594) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz002594 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=48, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 比亚迪(002594) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz002594 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=49, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688797 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=50, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 688797(688797) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688797 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=51, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 臻宝(688797) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688797 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=52, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz920045 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: _get_bj_hist_sina failed for bj920045: HTTPConnectionPool(host='money.finance.sina.com.cn', port=80): Max retries exceeded with url: /quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=bj920045&scale=240&ma=no&datalen=200 (Caused by NameResolutionError("HTTPConnection(host='money.finance.sina.com.cn', port=80): Failed to resolve 'money.finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 920045(920045) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz920045 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: _get_bj_hist_sina failed for bj920045: HTTPConnectionPool(host='money.finance.sina.com.cn', port=80): Max retries exceeded with url: /quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=bj920045&scale=240&ma=no&datalen=200 (Caused by NameResolutionError("HTTPConnection(host='money.finance.sina.com.cn', port=80): Failed to resolve 'money.finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 蘅东光(920045) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz920045 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: _get_bj_hist_sina failed for bj920045: HTTPConnectionPool(host='money.finance.sina.com.cn', port=80): Max retries exceeded with url: /quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=bj920045&scale=240&ma=no&datalen=200 (Caused by NameResolutionError("HTTPConnection(host='money.finance.sina.com.cn', port=80): Failed to resolve 'money.finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688820 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=53, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 688820(688820) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688820 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=54, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 盛合晶微(688820) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688820 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=55, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688028 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=56, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 688028(688028) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688028 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=57, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 沃尔德(688028) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688028 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=58, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz300757 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=59, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 300757(300757) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz300757 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=60, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 罗博特科(300757) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz300757 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=61, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688521 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=62, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 688521(688521) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688521 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=63, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.analyzers.stock_filter: ✅ 芯原股份(688521) 过滤通过
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688521 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=64, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.orchestrator.unified_engine: --- 统一引擎：出场检查 ---
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688409 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=65, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688652 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=66, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz300843 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=67, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz001399 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=68, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688531 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=69, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688008 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=70, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688041 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=71, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688027 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=72, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz301666 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=73, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh603232 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=74, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz002594 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=75, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688797 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=76, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz920045 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: _get_bj_hist_sina failed for bj920045: HTTPConnectionPool(host='money.finance.sina.com.cn', port=80): Max retries exceeded with url: /quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=bj920045&scale=240&ma=no&datalen=200 (Caused by NameResolutionError("HTTPConnection(host='money.finance.sina.com.cn', port=80): Failed to resolve 'money.finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688820 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=77, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688028 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=78, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sz300757 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=79, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 腾讯行情拉取失败（chunk 1-1）: HTTPConnectionPool(host='qt.gtimg.cn', port=80): Max retries exceeded with url: /q=sh688521 (Caused by NameResolutionErr
+2026-07-11 20:07:00 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: HTTPSConnectionPool(host='push2.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/ulist.np/get?fltt=2&in
+2026-07-11 20:07:00 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 20:07:00 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist (failures=80, cooldown=120s)
+2026-07-11 20:07:00 [ERROR] src.data_layer.akshare_adapter: 所有数据源均失败 (stock_zh_a_hist)
+2026-07-11 20:07:00 [INFO] src.orchestrator.unified_engine: 统一引擎完成: 进场=0 出场=17
+2026-07-11 20:07:00 [ERROR] src.push.pushplus: Push error: HTTPConnectionPool(host='www.pushplus.plus', port=80): Max retries exceeded with url: /send (Caused by NameResolutionError("HTTPConnection(host='www.pushplus.plus', port=80): Failed to resolve 'www.pushplus.plus' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:07:00 [INFO] src.orchestrator.engine: 盘中检查完成 (模式=defend 进场=0 出场=17)
+2026-07-11 20:44:30 [WARNING] src.analyzers.gem_sci_tech_scorer: 创业板指 K 线获取失败: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sz399006/hisdata/klc_kl.js?d=2020_2_4 (Caused by NameResolutionError("HTTPSConnection(host='finance.sina.com.cn', port=443): Failed to resolve 'finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 20:44:30 [WARNING] src.analyzers.gem_sci_tech_scorer: 科创50 K 线获取失败: HTTPSConnectionPool(host='finance.sina.com.cn', port=443): Max retries exceeded with url: /realstock/company/sz399688/hisdata/klc_kl.js?d=2020_2_4 (Caused by NameResolutionError("HTTPSConnection(host='finance.sina.com.cn', port=443): Failed to resolve 'finance.sina.com.cn' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-07-11 22:33:57 [WARNING] src.data_layer.akshare_adapter: AKShare 模块已加载但东财/新浪均不可达，将按需降级
+2026-07-11 22:33:57 [INFO] src.data_layer.akshare_adapter: AKShare 反爬 Session patch 成功（动态 headers 注入）
+2026-07-11 22:33:57 [INFO] src.data_layer.skill_wrapper: Registered 22 skills
+2026-07-11 22:33:57 [INFO] src.llm_client: LLM config loaded, active provider: deepseek
+2026-07-11 22:33:57 [INFO] src.orchestrator.engine: ====== 盘中统一检查 ======
+2026-07-11 22:33:59 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 22:34:00 [INFO] src.data_layer.akshare_adapter: 美股快照: SP500=0.00% Nasdaq=0.00% VIX=0.0 (0.0%)
+2026-07-11 22:34:01 [INFO] src.data_layer.akshare_adapter: 美股期货: SP500=0.52% Nasdaq=0.46% Dow=0.47%
+2026-07-11 22:34:02 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 22:34:02 [INFO] src.data_layer.sw_industry: 行业自动检测: 17 只, 命中 13 只
+2026-07-11 22:34:02 [INFO] src.analyzers.sector_scanner: === 板块扫描开始 2026-07-11 ===
+2026-07-11 22:34:02 [INFO] src.analyzers.sector_scanner: 待扫描板块: ['光学光电子', '软件开发', '通信', '计算机', '半导体', '消费电子']
+2026-07-11 22:34:12 [INFO] src.analyzers.sector_scanner: 批量预取板块数据完成: 6 个板块，命中指标 6 个
+2026-07-11 22:34:12 [INFO] src.analyzers.sector_scanner: 板块扫描完成: 主线1 / 支线2 / 退潮3
+2026-07-11 22:34:12 [INFO] src.orchestrator.unified_engine: ====== 统一分析 realtime 模式 ======
+2026-07-11 22:34:13 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_index_daily)
+2026-07-11 22:34:18 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 22:34:18 [INFO] src.analyzers.timing_engine: 大盘数据预取完成: index_drop=-0.38, volume=0亿, ad_ratio=2.18
+2026-07-11 22:34:18 [INFO] src.analyzers.timing_engine: 并行预取 17 只个股K线 (workers=4)
+2026-07-11 22:34:19 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 22:34:19 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 22:34:19 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 22:34:19 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 22:34:19 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__eastmoney (failures=3, cooldown=120s)
+2026-07-11 22:34:19 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 22:34:19 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 22:34:20 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__eastmoney (failures=4, cooldown=120s)
+2026-07-11 22:34:20 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 22:34:20 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 22:34:22 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:22 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:22 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:23 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:25 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:26 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:26 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:26 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:28 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:28 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 22:34:29 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:29 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:29 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:30 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:32 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:32 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:33 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 22:34:33 [INFO] src.analyzers.timing_engine: 并行预取完成: 17/17 只命中
+2026-07-11 22:34:33 [INFO] src.orchestrator.unified_engine: --- 统一引擎：进场检查 ---
+2026-07-11 22:34:33 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:33 [INFO] src.analyzers.stock_filter: ✅ 688409(688409) 过滤通过
+2026-07-11 22:34:33 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:33 [INFO] src.analyzers.stock_filter: ✅ 富创精密(688409) 过滤通过
+2026-07-11 22:34:33 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:33 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:33 [INFO] src.analyzers.stock_filter: ✅ 688652(688652) 过滤通过
+2026-07-11 22:34:33 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:33 [INFO] src.analyzers.stock_filter: ✅ 京仪装备(688652) 过滤通过
+2026-07-11 22:34:34 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:34 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:34 [INFO] src.analyzers.stock_filter: ✅ 300843(300843) 过滤通过
+2026-07-11 22:34:34 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:34 [INFO] src.analyzers.stock_filter: ✅ 胜蓝股份(300843) 过滤通过
+2026-07-11 22:34:34 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:34 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:34 [INFO] src.analyzers.stock_filter: ✅ 001399(001399) 过滤通过
+2026-07-11 22:34:34 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:34 [INFO] src.analyzers.stock_filter: ✅ 惠科(001399) 过滤通过
+2026-07-11 22:34:34 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:34 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:34 [INFO] src.analyzers.stock_filter: ✅ 688531(688531) 过滤通过
+2026-07-11 22:34:34 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:34 [INFO] src.analyzers.stock_filter: ✅ 日联科技(688531) 过滤通过
+2026-07-11 22:34:34 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:34 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:34 [INFO] src.analyzers.stock_filter: ✅ 688008(688008) 过滤通过
+2026-07-11 22:34:35 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:35 [INFO] src.analyzers.stock_filter: ✅ 澜起科技(688008) 过滤通过
+2026-07-11 22:34:35 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:35 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:35 [INFO] src.analyzers.stock_filter: ✅ 688041(688041) 过滤通过
+2026-07-11 22:34:35 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:35 [INFO] src.analyzers.stock_filter: ✅ 海光信息(688041) 过滤通过
+2026-07-11 22:34:35 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:35 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:35 [INFO] src.analyzers.stock_filter: ✅ 688027(688027) 过滤通过
+2026-07-11 22:34:35 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:35 [INFO] src.analyzers.stock_filter: ✅ 国盾量子(688027) 过滤通过
+2026-07-11 22:34:35 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:35 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:35 [INFO] src.analyzers.stock_filter: ✅ 301666(301666) 过滤通过
+2026-07-11 22:34:36 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:36 [INFO] src.analyzers.stock_filter: ✅ 大普微(301666) 过滤通过
+2026-07-11 22:34:36 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:36 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:36 [INFO] src.analyzers.stock_filter: ✅ 603232(603232) 过滤通过
+2026-07-11 22:34:36 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:36 [INFO] src.analyzers.stock_filter: ✅ 格尔软件(603232) 过滤通过
+2026-07-11 22:34:36 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:36 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:36 [INFO] src.analyzers.stock_filter: ✅ 002594(002594) 过滤通过
+2026-07-11 22:34:36 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:36 [INFO] src.analyzers.stock_filter: ✅ 比亚迪(002594) 过滤通过
+2026-07-11 22:34:36 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:36 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:36 [INFO] src.analyzers.stock_filter: ✅ 688797(688797) 过滤通过
+2026-07-11 22:34:36 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:36 [INFO] src.analyzers.stock_filter: ✅ 臻宝(688797) 过滤通过
+2026-07-11 22:34:36 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:37 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 22:34:37 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 22:34:37 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 22:34:37 [INFO] src.analyzers.stock_filter: ✅ 920045(920045) 过滤通过
+2026-07-11 22:34:37 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 22:34:37 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 22:34:37 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 22:34:37 [INFO] src.analyzers.stock_filter: ✅ 蘅东光(920045) 过滤通过
+2026-07-11 22:34:37 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 22:34:37 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 22:34:37 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:37 [INFO] src.analyzers.stock_filter: ✅ 688820(688820) 过滤通过
+2026-07-11 22:34:38 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:38 [INFO] src.analyzers.stock_filter: ✅ 盛合晶微(688820) 过滤通过
+2026-07-11 22:34:38 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:38 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:38 [INFO] src.analyzers.stock_filter: ✅ 688028(688028) 过滤通过
+2026-07-11 22:34:38 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:38 [INFO] src.analyzers.stock_filter: ✅ 沃尔德(688028) 过滤通过
+2026-07-11 22:34:38 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:38 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:38 [INFO] src.analyzers.stock_filter: ✅ 300757(300757) 过滤通过
+2026-07-11 22:34:38 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:38 [INFO] src.analyzers.stock_filter: ✅ 罗博特科(300757) 过滤通过
+2026-07-11 22:34:38 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:38 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:38 [INFO] src.analyzers.stock_filter: ✅ 688521(688521) 过滤通过
+2026-07-11 22:34:38 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:38 [INFO] src.analyzers.stock_filter: ✅ 芯原股份(688521) 过滤通过
+2026-07-11 22:34:39 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:39 [INFO] src.orchestrator.unified_engine: --- 统一引擎：出场检查 ---
+2026-07-11 22:34:39 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:39 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:39 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:39 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:39 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:39 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:39 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:39 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:40 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:40 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:40 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:40 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:40 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 22:34:40 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 22:34:40 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:40 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:40 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:41 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 22:34:41 [INFO] src.orchestrator.unified_engine: 统一引擎完成: 进场=1 出场=18
+2026-07-11 22:34:41 [INFO] src.push.pushplus: Push sent: [重要] 防守 5.0分 | 买1 | 卖18 (count: 1/200)
+2026-07-11 22:34:41 [INFO] src.orchestrator.engine: 盘中检查完成 (模式=defend 进场=1 出场=18)
+2026-07-11 23:34:14 [WARNING] src.data_layer.akshare_adapter: AKShare 模块已加载但东财/新浪均不可达，将按需降级
+2026-07-11 23:34:14 [INFO] src.data_layer.akshare_adapter: AKShare 反爬 Session patch 成功（动态 headers 注入）
+2026-07-11 23:34:14 [INFO] src.data_layer.skill_wrapper: Registered 22 skills
+2026-07-11 23:34:14 [INFO] src.llm_client: LLM config loaded, active provider: deepseek
+2026-07-11 23:34:14 [INFO] src.orchestrator.engine: ====== 盘中统一检查 ======
+2026-07-11 23:34:17 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 23:34:17 [INFO] src.data_layer.akshare_adapter: 美股快照: SP500=0.00% Nasdaq=0.00% VIX=0.0 (0.0%)
+2026-07-11 23:34:18 [INFO] src.data_layer.akshare_adapter: 美股期货: SP500=0.52% Nasdaq=0.46% Dow=0.47%
+2026-07-11 23:34:18 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 23:34:19 [INFO] src.data_layer.sw_industry: 行业自动检测: 17 只, 命中 13 只
+2026-07-11 23:34:19 [INFO] src.analyzers.sector_scanner: === 板块扫描开始 2026-07-11 ===
+2026-07-11 23:34:19 [INFO] src.analyzers.sector_scanner: 待扫描板块: ['计算机', '通信', '消费电子', '光学光电子', '半导体', '软件开发']
+2026-07-11 23:34:27 [INFO] src.analyzers.sector_scanner: 批量预取板块数据完成: 6 个板块，命中指标 6 个
+2026-07-11 23:34:27 [INFO] src.analyzers.sector_scanner: 板块扫描完成: 主线1 / 支线2 / 退潮3
+2026-07-11 23:34:27 [INFO] src.orchestrator.unified_engine: ====== 统一分析 realtime 模式 ======
+2026-07-11 23:34:30 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_index_daily)
+2026-07-11 23:34:33 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 23:34:33 [INFO] src.analyzers.timing_engine: 大盘数据预取完成: index_drop=-0.38, volume=0亿, ad_ratio=2.18
+2026-07-11 23:34:33 [INFO] src.analyzers.timing_engine: 并行预取 17 只个股K线 (workers=4)
+2026-07-11 23:34:34 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 23:34:34 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 23:34:34 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 23:34:34 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 23:34:35 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__eastmoney (failures=3, cooldown=120s)
+2026-07-11 23:34:35 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 23:34:35 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 23:34:35 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__eastmoney (failures=4, cooldown=120s)
+2026-07-11 23:34:35 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 23:34:35 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 23:34:37 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:38 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:38 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:39 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:40 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:40 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:41 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:42 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:44 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:44 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 23:34:44 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:44 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:45 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:46 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:48 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:48 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:48 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:34:48 [INFO] src.analyzers.timing_engine: 并行预取完成: 17/17 只命中
+2026-07-11 23:34:48 [INFO] src.orchestrator.unified_engine: --- 统一引擎：进场检查 ---
+2026-07-11 23:34:48 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:48 [INFO] src.analyzers.stock_filter: ✅ 688409(688409) 过滤通过
+2026-07-11 23:34:48 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:48 [INFO] src.analyzers.stock_filter: ✅ 富创精密(688409) 过滤通过
+2026-07-11 23:34:48 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:48 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:48 [INFO] src.analyzers.stock_filter: ✅ 688652(688652) 过滤通过
+2026-07-11 23:34:48 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:48 [INFO] src.analyzers.stock_filter: ✅ 京仪装备(688652) 过滤通过
+2026-07-11 23:34:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:49 [INFO] src.analyzers.stock_filter: ✅ 300843(300843) 过滤通过
+2026-07-11 23:34:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:49 [INFO] src.analyzers.stock_filter: ✅ 胜蓝股份(300843) 过滤通过
+2026-07-11 23:34:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:49 [INFO] src.analyzers.stock_filter: ✅ 001399(001399) 过滤通过
+2026-07-11 23:34:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:49 [INFO] src.analyzers.stock_filter: ✅ 惠科(001399) 过滤通过
+2026-07-11 23:34:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:49 [INFO] src.analyzers.stock_filter: ✅ 688531(688531) 过滤通过
+2026-07-11 23:34:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:49 [INFO] src.analyzers.stock_filter: ✅ 日联科技(688531) 过滤通过
+2026-07-11 23:34:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:50 [INFO] src.analyzers.stock_filter: ✅ 688008(688008) 过滤通过
+2026-07-11 23:34:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:50 [INFO] src.analyzers.stock_filter: ✅ 澜起科技(688008) 过滤通过
+2026-07-11 23:34:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:50 [INFO] src.analyzers.stock_filter: ✅ 688041(688041) 过滤通过
+2026-07-11 23:34:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:50 [INFO] src.analyzers.stock_filter: ✅ 海光信息(688041) 过滤通过
+2026-07-11 23:34:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:50 [INFO] src.analyzers.stock_filter: ✅ 688027(688027) 过滤通过
+2026-07-11 23:34:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:50 [INFO] src.analyzers.stock_filter: ✅ 国盾量子(688027) 过滤通过
+2026-07-11 23:34:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:51 [INFO] src.analyzers.stock_filter: ✅ 301666(301666) 过滤通过
+2026-07-11 23:34:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:51 [INFO] src.analyzers.stock_filter: ✅ 大普微(301666) 过滤通过
+2026-07-11 23:34:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:51 [INFO] src.analyzers.stock_filter: ✅ 603232(603232) 过滤通过
+2026-07-11 23:34:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:51 [INFO] src.analyzers.stock_filter: ✅ 格尔软件(603232) 过滤通过
+2026-07-11 23:34:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:51 [INFO] src.analyzers.stock_filter: ✅ 002594(002594) 过滤通过
+2026-07-11 23:34:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:51 [INFO] src.analyzers.stock_filter: ✅ 比亚迪(002594) 过滤通过
+2026-07-11 23:34:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:52 [INFO] src.analyzers.stock_filter: ✅ 688797(688797) 过滤通过
+2026-07-11 23:34:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:52 [INFO] src.analyzers.stock_filter: ✅ 臻宝(688797) 过滤通过
+2026-07-11 23:34:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:52 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 23:34:52 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 23:34:52 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 23:34:52 [INFO] src.analyzers.stock_filter: ✅ 920045(920045) 过滤通过
+2026-07-11 23:34:53 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 23:34:53 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 23:34:53 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 23:34:53 [INFO] src.analyzers.stock_filter: ✅ 蘅东光(920045) 过滤通过
+2026-07-11 23:34:53 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 23:34:53 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 23:34:53 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:53 [INFO] src.analyzers.stock_filter: ✅ 688820(688820) 过滤通过
+2026-07-11 23:34:53 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:53 [INFO] src.analyzers.stock_filter: ✅ 盛合晶微(688820) 过滤通过
+2026-07-11 23:34:53 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:53 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:53 [INFO] src.analyzers.stock_filter: ✅ 688028(688028) 过滤通过
+2026-07-11 23:34:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:54 [INFO] src.analyzers.stock_filter: ✅ 沃尔德(688028) 过滤通过
+2026-07-11 23:34:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:54 [INFO] src.analyzers.stock_filter: ✅ 300757(300757) 过滤通过
+2026-07-11 23:34:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:54 [INFO] src.analyzers.stock_filter: ✅ 罗博特科(300757) 过滤通过
+2026-07-11 23:34:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:54 [INFO] src.analyzers.stock_filter: ✅ 688521(688521) 过滤通过
+2026-07-11 23:34:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:54 [INFO] src.analyzers.stock_filter: ✅ 芯原股份(688521) 过滤通过
+2026-07-11 23:34:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:54 [INFO] src.orchestrator.unified_engine: --- 统一引擎：出场检查 ---
+2026-07-11 23:34:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:56 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 23:34:56 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 23:34:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:57 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:57 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:34:57 [INFO] src.orchestrator.unified_engine: 统一引擎完成: 进场=0 出场=18
+2026-07-11 23:34:57 [INFO] src.push.pushplus: Push sent: [重要] 防守 5.0分 | 卖18 (count: 1/200)
+2026-07-11 23:34:57 [INFO] src.orchestrator.engine: 盘中检查完成 (模式=defend 进场=0 出场=18)
+2026-07-11 23:47:18 [WARNING] src.data_layer.akshare_adapter: AKShare 模块已加载但东财/新浪均不可达，将按需降级
+2026-07-11 23:47:18 [INFO] src.data_layer.akshare_adapter: AKShare 反爬 Session patch 成功（动态 headers 注入）
+2026-07-11 23:47:18 [INFO] src.data_layer.skill_wrapper: Registered 22 skills
+2026-07-11 23:47:18 [INFO] src.llm_client: LLM config loaded, active provider: deepseek
+2026-07-11 23:47:18 [INFO] src.orchestrator.engine: ====== 盘中统一检查 ======
+2026-07-11 23:47:22 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 23:47:23 [INFO] src.data_layer.akshare_adapter: 美股快照: SP500=0.00% Nasdaq=0.00% VIX=0.0 (0.0%)
+2026-07-11 23:47:23 [INFO] src.data_layer.akshare_adapter: 美股期货: SP500=0.52% Nasdaq=0.46% Dow=0.47%
+2026-07-11 23:47:24 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 23:47:24 [INFO] src.data_layer.sw_industry: 行业自动检测: 17 只, 命中 13 只
+2026-07-11 23:47:24 [INFO] src.analyzers.sector_scanner: === 板块扫描开始 2026-07-11 ===
+2026-07-11 23:47:24 [INFO] src.analyzers.sector_scanner: 待扫描板块: ['软件开发', '消费电子', '计算机', '通信', '半导体', '光学光电子']
+2026-07-11 23:47:28 [INFO] src.analyzers.sector_scanner: 批量预取板块数据完成: 6 个板块，命中指标 6 个
+2026-07-11 23:47:28 [INFO] src.analyzers.sector_scanner: 板块扫描完成: 主线1 / 支线2 / 退潮3
+2026-07-11 23:47:28 [INFO] src.orchestrator.unified_engine: ====== 统一分析 realtime 模式 ======
+2026-07-11 23:47:30 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_index_daily)
+2026-07-11 23:47:33 [INFO] src.analyzers.gem_sci_tech_scorer: 双创技术位: 创业板=空头排列/失守MA20,MA60，MA120支撑/阴跌中继(0.05,sig=danger) 科创50=空头排列/失守MA20，MA60+MA120支撑(0.55,sig=warning) → 分化 (risk=warning,danger=1)
+2026-07-11 23:47:33 [INFO] src.analyzers.timing_engine: 大盘数据预取完成: index_drop=-0.38, volume=0亿, ad_ratio=2.18
+2026-07-11 23:47:33 [INFO] src.analyzers.timing_engine: 并行预取 17 只个股K线 (workers=4)
+2026-07-11 23:47:35 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 23:47:35 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 23:47:35 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 23:47:35 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 23:47:36 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__eastmoney (failures=3, cooldown=120s)
+2026-07-11 23:47:36 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 23:47:36 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 23:47:36 [WARNING] src.data_layer.akshare_adapter: Circuit breaker OPEN for stock_zh_a_hist__eastmoney (failures=4, cooldown=120s)
+2026-07-11 23:47:36 [WARNING] src.data_layer.akshare_adapter: AKShare stock_zh_a_hist__eastmoney RemoteDisconnected（反爬，软熔断 60s），跳到下一个数据源
+2026-07-11 23:47:36 [WARNING] src.data_layer.akshare_adapter: 数据源 eastmoney 失败 (stock_zh_a_hist)，尝试下一个
+2026-07-11 23:47:38 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:39 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:40 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:40 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:41 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:41 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:42 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:42 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:44 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:44 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 23:47:45 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:45 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:46 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:47 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:48 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:48 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:49 [INFO] src.data_layer.akshare_adapter: 数据源 sina 返回成功 (stock_zh_a_hist)
+2026-07-11 23:47:49 [INFO] src.analyzers.timing_engine: 并行预取完成: 17/17 只命中
+2026-07-11 23:47:49 [INFO] src.orchestrator.unified_engine: --- 统一引擎：进场检查 ---
+2026-07-11 23:47:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:49 [INFO] src.analyzers.stock_filter: ✅ 688409(688409) 过滤通过
+2026-07-11 23:47:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:49 [INFO] src.analyzers.stock_filter: ✅ 富创精密(688409) 过滤通过
+2026-07-11 23:47:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:49 [INFO] src.analyzers.stock_filter: ✅ 688652(688652) 过滤通过
+2026-07-11 23:47:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:49 [INFO] src.analyzers.stock_filter: ✅ 京仪装备(688652) 过滤通过
+2026-07-11 23:47:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:49 [INFO] src.analyzers.stock_filter: ✅ 300843(300843) 过滤通过
+2026-07-11 23:47:49 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:49 [INFO] src.analyzers.stock_filter: ✅ 胜蓝股份(300843) 过滤通过
+2026-07-11 23:47:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:50 [INFO] src.analyzers.stock_filter: ✅ 001399(001399) 过滤通过
+2026-07-11 23:47:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:50 [INFO] src.analyzers.stock_filter: ✅ 惠科(001399) 过滤通过
+2026-07-11 23:47:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:50 [INFO] src.analyzers.stock_filter: ✅ 688531(688531) 过滤通过
+2026-07-11 23:47:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:50 [INFO] src.analyzers.stock_filter: ✅ 日联科技(688531) 过滤通过
+2026-07-11 23:47:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:50 [INFO] src.analyzers.stock_filter: ✅ 688008(688008) 过滤通过
+2026-07-11 23:47:50 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:50 [INFO] src.analyzers.stock_filter: ✅ 澜起科技(688008) 过滤通过
+2026-07-11 23:47:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:51 [INFO] src.analyzers.stock_filter: ✅ 688041(688041) 过滤通过
+2026-07-11 23:47:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:51 [INFO] src.analyzers.stock_filter: ✅ 海光信息(688041) 过滤通过
+2026-07-11 23:47:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:51 [INFO] src.analyzers.stock_filter: ✅ 688027(688027) 过滤通过
+2026-07-11 23:47:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:51 [INFO] src.analyzers.stock_filter: ✅ 国盾量子(688027) 过滤通过
+2026-07-11 23:47:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:51 [INFO] src.analyzers.stock_filter: ✅ 301666(301666) 过滤通过
+2026-07-11 23:47:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:51 [INFO] src.analyzers.stock_filter: ✅ 大普微(301666) 过滤通过
+2026-07-11 23:47:51 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:52 [INFO] src.analyzers.stock_filter: ✅ 603232(603232) 过滤通过
+2026-07-11 23:47:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:52 [INFO] src.analyzers.stock_filter: ✅ 格尔软件(603232) 过滤通过
+2026-07-11 23:47:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:52 [INFO] src.analyzers.stock_filter: ✅ 002594(002594) 过滤通过
+2026-07-11 23:47:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:52 [INFO] src.analyzers.stock_filter: ✅ 比亚迪(002594) 过滤通过
+2026-07-11 23:47:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:52 [INFO] src.analyzers.stock_filter: ✅ 688797(688797) 过滤通过
+2026-07-11 23:47:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:52 [INFO] src.analyzers.stock_filter: ✅ 臻宝(688797) 过滤通过
+2026-07-11 23:47:52 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:53 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 23:47:53 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 23:47:53 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 23:47:53 [INFO] src.analyzers.stock_filter: ✅ 920045(920045) 过滤通过
+2026-07-11 23:47:53 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 23:47:53 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 23:47:53 [INFO] src.data_layer.akshare_adapter: 检测到北交所股票 920045，使用新浪北交所接口
+2026-07-11 23:47:53 [INFO] src.analyzers.stock_filter: ✅ 蘅东光(920045) 过滤通过
+2026-07-11 23:47:54 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 23:47:54 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 23:47:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:54 [INFO] src.analyzers.stock_filter: ✅ 688820(688820) 过滤通过
+2026-07-11 23:47:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:54 [INFO] src.analyzers.stock_filter: ✅ 盛合晶微(688820) 过滤通过
+2026-07-11 23:47:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:54 [INFO] src.analyzers.stock_filter: ✅ 688028(688028) 过滤通过
+2026-07-11 23:47:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:54 [INFO] src.analyzers.stock_filter: ✅ 沃尔德(688028) 过滤通过
+2026-07-11 23:47:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:54 [INFO] src.analyzers.stock_filter: ✅ 300757(300757) 过滤通过
+2026-07-11 23:47:54 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:54 [INFO] src.analyzers.stock_filter: ✅ 罗博特科(300757) 过滤通过
+2026-07-11 23:47:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:55 [INFO] src.analyzers.stock_filter: ✅ 688521(688521) 过滤通过
+2026-07-11 23:47:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:55 [INFO] src.analyzers.stock_filter: ✅ 芯原股份(688521) 过滤通过
+2026-07-11 23:47:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:55 [INFO] src.orchestrator.unified_engine: --- 统一引擎：出场检查 ---
+2026-07-11 23:47:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:55 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:56 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:57 [WARNING] src.data_layer.stock_data: 东财 ulist 拉取失败（chunk 1-1）: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-07-11 23:47:57 [INFO] src.data_layer.stock_data: 东财实时行情: 请求 1 只, 命中 0 只
+2026-07-11 23:47:57 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:57 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:57 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:57 [INFO] src.data_layer.stock_data: 腾讯实时行情: 请求 1 只, 命中 1 只
+2026-07-11 23:47:57 [INFO] src.orchestrator.unified_engine: 统一引擎完成: 进场=0 出场=18
+2026-07-11 23:47:57 [INFO] src.push.pushplus: Push sent: [重要] 防守 5.0分 | 卖18 (count: 1/200)
+2026-07-11 23:47:57 [INFO] src.orchestrator.engine: 盘中检查完成 (模式=defend 进场=0 出场=18)

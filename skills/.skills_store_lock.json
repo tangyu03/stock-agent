@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "skills": {
+    "simple-tech-analyzer": {
+      "name": "simple-tech-analyzer",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=simple-tech-analyzer",
+      "source": "skillhub",
+      "version": ""
+    },
+    "deepstock": {
+      "name": "deepstock",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=deepstock",
+      "source": "skillhub",
+      "version": ""
+    },
+    "tv-indicators-analysis": {
+      "name": "tv-indicators-analysis",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=tv-indicators-analysis",
+      "source": "skillhub",
+      "version": ""
+    },
+    "a-stock-kline-analyzer": {
+      "name": "a-stock-kline-analyzer",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=a-stock-kline-analyzer",
+      "source": "skillhub",
+      "version": ""
+    },
+    "stockmatcher": {
+      "name": "stockmatcher",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=stockmatcher",
+      "source": "skillhub",
+      "version": ""
+    },
+    "trading-knowledge": {
+      "name": "trading-knowledge",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=trading-knowledge",
+      "source": "skillhub",
+      "version": ""
+    },
+    "wuritu-stock-technical-analysis": {
+      "name": "wuritu-stock-technical-analysis",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=wuritu-stock-technical-analysis",
+      "source": "skillhub",
+      "version": ""
+    },
+    "smart-money": {
+      "name": "smart-money",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=smart-money",
+      "source": "skillhub",
+      "version": ""
+    },
+    "sentiment-score": {
+      "name": "sentiment-score",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=sentiment-score",
+      "source": "skillhub",
+      "version": ""
+    },
+    "sentiment-tracker": {
+      "name": "sentiment-tracker",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=sentiment-tracker",
+      "source": "skillhub",
+      "version": ""
+    },
+    "sector-rotation": {
+      "name": "sector-rotation",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=sector-rotation",
+      "source": "skillhub",
+      "version": ""
+    },
+    "sector-rotation-analyst": {
+      "name": "sector-rotation-analyst",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=sector-rotation-analyst",
+      "source": "skillhub",
+      "version": ""
+    },
+    "a-share-capital-flow": {
+      "name": "a-share-capital-flow",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=a-share-capital-flow",
+      "source": "skillhub",
+      "version": ""
+    },
+    "capital-flow-analysis": {
+      "name": "capital-flow-analysis",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=capital-flow-analysis",
+      "source": "skillhub",
+      "version": ""
+    },
+    "xiapi-style-rotation": {
+      "name": "xiapi-style-rotation",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=xiapi-style-rotation",
+      "source": "skillhub",
+      "version": ""
+    },
+    "chan-theory": {
+      "name": "chan-theory",
+      "zip_url": "https://lightmake.site/api/v1/download?slug=chan-theory",
+      "source": "skillhub",
+      "version": ""
+    }
+  }
+}
