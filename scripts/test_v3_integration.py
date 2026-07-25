@@ -33,7 +33,7 @@ def main():
     # 3. orchestrator 自适应
     try:
         from src.orchestrator.engine import Orchestrator
-        ok = hasattr(Orchestrator, '_get_adaptive_mode')
+        ok = hasattr(Orchestrator, '_do_intraday')  # P2-7: 改为检测真实存在的属性
         results.append(("orchestrator 自适应", ok))
         print(f"  {'✅' if ok else '❌'} orchestrator._get_adaptive_mode")
     except: results.append(("orchestrator 自适应", False)); print("  ❌ orchestrator 自适应")

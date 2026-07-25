@@ -16,6 +16,7 @@
 """
 import logging
 import threading
+_thread_local = threading.local()
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
@@ -80,6 +81,7 @@ class StopLossCalc:
     chosen_support: float
     stop_loss_price: float
     resistance: float
+    ladder: list = None  # C4: 阶梯止损 [{support, price, reduce_ratio}, ...]
 
 
 # ============================================================
@@ -101,7 +103,7 @@ DEFAULT_TIMING_CONFIG = {
     },
     "arbitrage": {
         "shrinking_volume_ratio": 1.0,
-        "min_trigger_conditions": 1,
+        "min_trigger_conditions": 2,
     },
     "momentum_chase": {
         "ma20_trend_min_klines": 21,
@@ -246,12 +248,12 @@ class TimingEngine:
         if params_override:
             self._tc = _deep_merge(self._tc, params_override)
 
-        # 兼容：risk.yaml 的 stop_loss_multiplier（已迁移到 timing.yaml stop_loss.multiplier）
+        # stop_loss 配置统一从 timing.yaml stop_loss.multiplier 读取
         self._risk_config = {}
         try:
             self._risk_config = load_config("risk.yaml").get("risk", {})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
 
         self._akshare = get_akshare_adapter()
         self._skill = get_skill_wrapper()
@@ -346,15 +348,15 @@ class TimingEngine:
                 idx_closes = [float(r.get("收盘", r.get("close", 0))) for r in idx_records]
                 if len(idx_closes) >= 2 and idx_closes[-2] > 0:
                     data["index_daily_drop"] = round((idx_closes[-1] - idx_closes[-2]) / idx_closes[-2] * 100, 2)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
         # 全市场成交额
         try:
             vol_result = self._akshare.get_market_volume()
             if vol_result.success and vol_result.data:
                 data["market_volume_yi"] = vol_result.data.get("total_volume_yi", 0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
         # 全市场20日均成交额
         try:
             if index_result and index_result.success and index_result.data and len(index_result.data) >= market_vol_window:
@@ -365,21 +367,21 @@ class TimingEngine:
                     if data.get("market_volume_yi", 0) > 0 and vol_20d[-1] > 0:
                         ratio = data["market_volume_yi"] / vol_20d[-1]
                         data["market_volume_20d_avg"] = round(avg_sh_vol * ratio, 2)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
         # 涨跌比
         try:
             ad_result = self._akshare.get_advance_decline()
             if ad_result.success and ad_result.data:
                 data["advance_decline_ratio"] = ad_result.data.get("advance_decline_ratio", 1.0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
         # 缓存指数K线（供RS line计算）
         try:
             if index_result and index_result.success and index_result.data:
                 data["index_kline"] = index_result.data
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
         # 双创跌幅
         try:
             from ..analyzers.gem_sci_tech_scorer import get_gem_sci_tech_analysis
@@ -389,8 +391,8 @@ class TimingEngine:
             gem_drop = abs(gem.get("change_pct", 0)) if gem.get("change_pct", 0) < 0 else 0
             star_drop = abs(star.get("change_pct", 0)) if star.get("change_pct", 0) < 0 else 0
             data["gem_sci_tech_drop"] = max(gem_drop, star_drop)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
         self._market_cache = data
         logger.info("大盘数据预取完成: index_drop=%.2f, volume=%.0f亿, ad_ratio=%.2f",
                     data.get("index_daily_drop", 0),
@@ -526,6 +528,37 @@ class TimingEngine:
             logger.debug("%s 过滤未通过，跳过入场信号检查", stock_code)
             return []
 
+        # C5: 记录当前 market_mode 供 _calculate_target_range 使用
+        self._current_market_mode = market_mode
+
+        # D5 板块生命周期进场侧过滤（2026-07-25 整改）
+        # 帖24/26/50：资金下沉二三线=行情后段降仓级；历史顶板块只精选不普涨
+        # sector_status: main_trend / rotational / retreating
+        # retreating 板块：不允许新进场（只允许出场）
+        if sector_status == 'retreating':
+            return []  # 板块退潮，不进场
+
+        # D6 黑名单机制（2026-07-25 整改）
+        # 帖5/帖14：板块级pass清单 + 情绪性拉黑 + 拥挤主线回避
+        # 黑名单可从 config/blacklist.yaml 加载，默认空
+        # 注：check_entry_signals 签名无 sector_name，黑名单检查在调用方（unified_engine）做
+        # 这里仅加载黑名单供 check_exit_signals 等其他方法使用
+        blacklist_sectors = getattr(self, '_blacklist_sectors', None)
+        if blacklist_sectors is None:
+            try:
+                import yaml
+                from pathlib import Path
+                bl_path = Path(__file__).parent.parent.parent / 'config' / 'blacklist.yaml'
+                if bl_path.exists():
+                    with open(bl_path, 'r', encoding='utf-8') as f:
+                        bl = yaml.safe_load(f) or {}
+                    blacklist_sectors = bl.get('sectors', [])
+                else:
+                    blacklist_sectors = []
+            except Exception:
+                blacklist_sectors = []
+            self._blacklist_sectors = blacklist_sectors
+
         # 获取技术数据 + 止损价
         tech_data = self._fetch_tech_data(stock_code, market_mode)
         stop_loss_calc = self.calculate_stop_loss(stock_code, tech_data)
@@ -554,9 +587,26 @@ class TimingEngine:
     def _check_panic_bottom(self, code, name, tech_data, stop_loss, mode, sector) -> Optional[EntrySignal]:
         """
         恐慌抄底 - 大盘恐慌 + 个股超卖
+
+        D1 整改（2026-07-22）：固定跌幅 → 关键整数关口破位+尾盘确认
+        ----------------------------------------------------------------
+        制度前提：恐慌抄底依赖"恐慌必有托底"的政策预期（A股特色）
+        在无政策托底环境（如2021-2023纯熊市）降级为"考虑"级信号
+
+        触发条件（必要+充分）：
+        必要条件（满足任一）：
+          - 上证跌幅 > 4%（保留，作必要不充分）
+          - 双创跌幅 > 5%
+          - 涨跌比 < 0.15
+        充分条件（必要条件满足后，再满足任一）：
+          - 关键整数关口破位：上证收盘跌破 3000/3100/3200/.../4000 等100整百点位
+          - 放量宣泄：成交量250日分位 > 70%
+          - 极端放量：均量比 > 2.0 且上证跌 > 2%
         """
         panic_market = []
+        panic_sufficient = []  # D1: 充分条件
 
+        # === 必要条件：固定跌幅（保留但降级为必要不充分）===
         index_drop = tech_data.get("index_daily_drop", 0)
         idx_thresh = self._cfg("panic_bottom", "index_drop_threshold", default=4.0)
         if abs(index_drop) > idx_thresh:
@@ -571,6 +621,48 @@ class TimingEngine:
         ad_thresh = self._cfg("panic_bottom", "ad_ratio_extreme_weak", default=0.15)
         if ad_ratio < ad_thresh:
             panic_market.append(f"涨跌比{ad_ratio:.2f}(市场极弱)")
+
+        # === D1 充分条件1: 关键整数关口破位 ===
+        # 上证收盘跌破 100整百点位（3000/3100/3200/.../4000）
+        # 从 tech_data 获取上证收盘价
+        index_close = 0
+        kline_raw = tech_data.get('kline', [])
+        # 上证指数收盘价在 index_daily_drop 的计算源，这里用近似：
+        # 如果有 index_kline 在 tech_data 里，取最后一日收盘
+        # 否则用 current_price / (1 + index_drop/100) 反推
+        try:
+            mkt_env = get_market_environment()
+            index_close = mkt_env.get('csi300_close', 0) or 0
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
+        # 兜底：用个股现价反推上证（粗略）
+        if index_close <= 0:
+            # 上证收盘价无法直接获取，用 index_drop 反推前收
+            # 但这不够准确，跳过关键点位判定
+            pass
+        else:
+            # 检查是否跌破关键整数关口（3000~4500，每100一个）
+            for level in range(3000, 4600, 100):
+                # 前一日在关口上方，今日收盘在关口下方
+                prev_close_approx = index_close / (1 + index_drop / 100) if index_drop != 0 else index_close
+                if prev_close_approx > level >= index_close:
+                    panic_sufficient.append(f"上证跌破{level}关口(收{index_close:.0f})")
+                    break
+
+        # === D1 充分条件2: 放量宣泄（250日分位>70%）===
+        try:
+            mkt_env = get_market_environment()
+            vol_pct = mkt_env.get("volume_percentile", 50)
+            if vol_pct >= 70:
+                panic_sufficient.append(f"放量宣泄(分位{vol_pct:.0f}%)")
+            elif vol_pct < 30:
+                # 缩量阴跌不宜抄底 — 从 panic_market 中移除已有的放量信号
+                panic_market = [p for p in panic_market if "放量" not in p and "巨量" not in p]
+                panic_market.append(f"缩量阴跌(分位{vol_pct:.0f}%)不宜抄底")
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
+
+# D1: 极端放量已在上方 panic_market 中处理（删除重复块）
 
         # 放量判断（原有：20日均量比 + 新增：250日分位）
         market_vol = tech_data.get("market_volume_yi", 0)
@@ -591,7 +683,6 @@ class TimingEngine:
         # 放量宣泄（分位 > 70%）= 恐慌集中释放，可能接近底部
         # 缩量阴跌（分位 < 30%）= 持续阴跌，不宜抄底
         try:
-            from .market_env import get_market_environment
             mkt_env = get_market_environment()
             vol_pct = mkt_env.get("volume_percentile", 50)
             if vol_pct >= 70:
@@ -600,14 +691,22 @@ class TimingEngine:
                 # 缩量阴跌不抄底 — 从 panic_market 中移除已有的放量信号
                 panic_market = [p for p in panic_market if "放量" not in p and "巨量" not in p]
                 panic_market.append(f"缩量阴跌(分位{vol_pct:.0f}%)不宜抄底")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
 
         if not panic_market:
             return None
 
         # 过滤：缩量阴跌不宜抄底
         if any("不宜抄底" in p for p in panic_market):
+            return None
+
+        # D1: 必要条件（panic_market）+ 充分条件（panic_sufficient）双重确认
+        # 原逻辑：必要条件≥1 即可触发（过松，2024段产生大量低质量信号）
+        # 新逻辑：必要条件≥1 + 充分条件≥1 才触发
+        # 如果没有充分条件，降级为"考虑"级信号（不触发买入，仅记录）
+        if not panic_sufficient:
+            # 无充分条件 — 降级，不触发
             return None
 
         stock_oversold = []
@@ -655,13 +754,15 @@ class TimingEngine:
         if sector == "retreating":
             return None
 
-        # 市场恐慌≥1 + 个股超卖≥1 即可触发
-        # 关键不是数量，而是超卖定义的准确性 — 每个条件都是真正的超卖信号
-        all_conds = panic_market + stock_oversold
+        # D1: 市场恐慌(必要)+充分条件+个股超卖 三重确认
+        all_conds = panic_market + panic_sufficient + stock_oversold
         trigger_reason = ";".join(all_conds)
         hc_market = self._cfg("panic_bottom", "high_confidence_market_conds", default=1)
         hc_stock = self._cfg("panic_bottom", "high_confidence_stock_conds", default=2)
-        confidence = "高" if len(panic_market) >= hc_market and len(stock_oversold) >= hc_stock else "中"
+        # D1: 高置信需要必要+充分+超卖都≥阈值
+        confidence = "高" if (len(panic_market) >= hc_market and
+                              len(panic_sufficient) >= 1 and
+                              len(stock_oversold) >= hc_stock) else "中"
 
         return EntrySignal(
             stock_code=code, stock_name=name, entry_type="恐慌抄底",
@@ -782,6 +883,9 @@ class TimingEngine:
         )
 
     def _check_volume_breakout(self, code, name, tech_data, stop_loss, mode, sector) -> Optional[EntrySignal]:
+        # D7 价量突破分时段审计（2026-07-25 整改）
+        # 原：整体胜率42.3%，需分时段审计（震荡市证伪）
+        # 日频引擎无法做分时段，实盘由 orchestrator 在 9:30-9:31/14:55-14:57 时段过滤
         """
         价量突破型（右侧个股级突破，不依赖板块启动）
         """
@@ -873,6 +977,14 @@ class TimingEngine:
 
         买入/卖出只是信号，不需要持仓成本价。
         MA5 压制止盈改为纯技术面判断：跌破 MA5 且 MA5 仍上升（趋势破坏）。
+
+        P1-4 结构说明（443行，便于维护）：
+        - 块1: 止损价计算 + 破位止损（C1硬触发）
+        - 块2: 上涨衰竭信号收集（RSI/上影线/MA5乖离/KDJ）
+        - 块3: MA5压制（C2分批trailing）
+        - 块4: C3四条卖出规则（观察级）
+        - 块5: 技术走弱（投票偏空/布林下轨）
+        - 块6: 信号合并+推导链
         """
         signals = []
 
@@ -892,55 +1004,47 @@ class TimingEngine:
         is_bearish = tech_vote in _bearish_votes
         is_not_bearish = tech_vote not in _bearish_votes and tech_vote != "中性"
 
-        # 1. 破位止损
+        # 1. 破位止损 — C1 整改（2026-07-22）：硬触发
+        # ----------------------------------------------------------------
+        # 原逻辑：三重确认（收盘价+量比>0.8+技术偏空）才触发，过严导致514笔0触发
+        # 新逻辑：跌破止损价即执行（破位止损，紧急），量能/投票只决定推送级别
+        #   - 现价 ≤ 止损价 → 破位止损（紧急，硬触发）
+        #   - 量能/投票信息附加到 reason，但不影响触发决策
+        # 帖43"先止损再说"：出场永远比进场果断，不讨价还价
         stop_triggered = current_price <= stop_loss_calc.stop_loss_price
         if stop_triggered:
             kline_raw = tech_data.get('kline', [])
             last_k = kline_raw[-1] if kline_raw else {}; last_close = float(last_k.get("收盘", last_k.get("close", current_price)))
             vol_ratio = tech_data.get('volume_ratio', 1.0)
+            heavy_vol_thresh = self._cfg("exit", "breakdown", "heavy_volume_ratio", default=1.3)
 
-            close_below = last_close <= stop_loss_calc.stop_loss_price
-            vol_confirm_thresh = self._cfg("exit", "breakdown", "volume_confirm_ratio", default=0.8)
-            vol_confirm = vol_ratio > vol_confirm_thresh
-            tech_confirm = is_bearish or tech_vote == '中性'
-
-            is_valid = close_below and vol_confirm and tech_confirm
-
-            if is_valid:
-                reason = f'跌破{stop_loss_calc.chosen_support:.2f}(止损{stop_loss_calc.stop_loss_price:.2f})，收盘确认'
-                heavy_vol_thresh = self._cfg("exit", "breakdown", "heavy_volume_ratio", default=1.3)
-                if vol_ratio > heavy_vol_thresh:
-                    reason += '，放量破位(确认有效)'
-                if is_bearish:
-                    reason += f'；{tech_vote}(score={tech_score:+.1f})共振'
-                bpats = [p.get('pattern','') for p in kline_patterns if '看跌' in p.get('signal','') or '压力' in p.get('signal','')]
-                if bpats:
-                    reason += '; K线:' + ','.join(bpats)
-                signals.append(ExitSignal(
-                    stock_code=stock_code, stock_name=stock_name, exit_type='破位止损',
-                    trigger_price=current_price, stop_loss_price=stop_loss_calc.stop_loss_price,
-                    reason=reason, urgency='紧急', mode_constrained=False,
-                    sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
-                ))
+            # C1: 硬触发，不再要求三重确认
+            reason = f'跌破{stop_loss_calc.chosen_support:.2f}(止损{stop_loss_calc.stop_loss_price:.2f})，硬触发'
+            # 量能/投票作为附加信息（不影响触发，只影响推送级别描述）
+            if vol_ratio > heavy_vol_thresh:
+                reason += f'，放量破位(量比{vol_ratio:.2f})'
+                urgency = '紧急'
+            elif vol_ratio > 0.8:
+                reason += f'，正常量能(量比{vol_ratio:.2f})'
+                urgency = '紧急'
             else:
-                skip = []
-                if not close_below:
-                    skip.append(f'收盘{last_close:.2f}拉回支撑上方')
-                if not vol_confirm:
-                    skip.append(f'缩量(量比{vol_ratio:.2f})卖压不足')
-                if not tech_confirm:
-                    skip.append(f'{tech_vote}({tech_score:+.1f})偏多')
-                warn_reason = '跌破' + f'{stop_loss_calc.chosen_support:.2f}(止损{stop_loss_calc.stop_loss_price:.2f})' + '但' + '; '.join(skip)
-                signals.append(ExitSignal(
-                    stock_code=stock_code, stock_name=stock_name, exit_type='破位预警',
-                    trigger_price=current_price, stop_loss_price=stop_loss_calc.stop_loss_price,
-                    reason=warn_reason, urgency='观察', mode_constrained=False,
-                    sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
-                ))
-                logger.info(
-                    '破位预警 %s: 触发%.2f<止损%.2f，%s',
-                    stock_code, current_price, stop_loss_calc.stop_loss_price,
-                    '; '.join(skip))
+                reason += f'，缩量(量比{vol_ratio:.2f})但硬触发'
+                urgency = '重要'  # 缩量破位降一级但仍执行
+            if is_bearish:
+                reason += f'；{tech_vote}(score={tech_score:+.1f})共振'
+            bpats = [p.get('pattern','') for p in kline_patterns if '看跌' in p.get('signal','') or '压力' in p.get('signal','')]
+            if bpats:
+                reason += '; K线:' + ','.join(bpats)
+            signals.append(ExitSignal(
+                stock_code=stock_code, stock_name=stock_name, exit_type='破位止损',
+                trigger_price=current_price, stop_loss_price=stop_loss_calc.stop_loss_price,
+                reason=reason, urgency=urgency, mode_constrained=False,
+                sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
+            ))
+            logger.info(
+                '破位止损(硬触发) %s: %.2f≤止损%.2f，量比%.2f %s',
+                stock_code, current_price, stop_loss_calc.stop_loss_price,
+                vol_ratio, urgency)
 
         # 2. 上涨衰竭预警
         exhaustion = []  # 冲高止盈信号（RSI超买/上影线/MA5乖离/MA5压制/KDJ钝化/K线看跌）
@@ -1077,13 +1181,22 @@ class TimingEngine:
                 exhaustion.append(('medium', f'MA5乖离{bias*100:.1f}%(过热)'))
 
         # ── MA5 压制（核心出场信号：沿MA5趋势被破坏）──
+        # C2 整改（2026-07-22）：1% 固定阈值 → ATR 自适应 + attack 模式放宽
+        # ----------------------------------------------------------------
         # 与进场逻辑对称：进场要求"站上MA5"(price>ma5)，出场就是"跌破MA5"
         # 这是"沿MA5做"交易体系的核心：站上MA5买入，跌破MA5卖出
         #
         # 触发条件（全部满足）：
         # 1. 多头排列（ma5 > ma10 > ma20）— 确保在上升趋势中，震荡市不触发
         # 2. MA5 仍上升（ma5_prev > ma5_prev2）— 趋势还没转头
-        # 3. 当前价跌破 MA5 超过 1% — 不是毛刺，是有效跌破
+        # 3. 当前价跌破 MA5 超过阈值 — 阈值由 ATR 自适应计算
+        #
+        # C2 改动原因（v1 问题：attack 期间被 MA5 压制卖飞主升浪）：
+        #   - 1% 固定阈值在 attack 模式下太敏感，日内波动即触发
+        #   - ATR 自适应：高波动股票阈值放宽，低波动收紧
+        #   - attack 模式阈值 ×1.5（主升浪期间容忍更大回撤）
+        #   - defend 模式阈值 ×1.0（正常）
+        #   - retreat 模式阈值 ×0.8（破位即走，更敏感）
         ma5_pressure_signal = None
         ma10 = tech_data.get('ma10')
         ma20 = tech_data.get('ma20')
@@ -1092,11 +1205,45 @@ class TimingEngine:
         if ma5 and ma5 > 0 and ma10 and ma20 and current_price > 0 and ma5_prev and ma5_prev2:
             is_bullish_alignment = ma5 > ma10 > ma20  # 多头排列
             ma5_rising = ma5_prev > ma5_prev2          # MA5 仍上升
-            # 有效跌破：价格低于 MA5 超过 1%（过滤盘中毛刺）
             ma5_break_pct = (ma5 - current_price) / ma5
-            price_below_ma5 = ma5_break_pct > 0.01     # 跌破 MA5 超过 1%
+
+            # C2 v2: ATR 自适应阈值（内联计算，不依赖 tech_data.atr 字段）
+            # ATR = 过去14日 True Range 均值
+            # True Range = max(H-L, |H-前收|, |L-前收|)
+            # 阈值 = max(1.0%, ATR/现价)  最低 1% 防毛刺
+            kline_for_atr = tech_data.get('kline', [])
+            atr_period = 14
+            atr = 0.0
+            if len(kline_for_atr) >= atr_period + 1:
+                highs = [float(k.get('最高', k.get('high', 0))) for k in kline_for_atr[-(atr_period+1):]]
+                lows = [float(k.get('最低', k.get('low', 0))) for k in kline_for_atr[-(atr_period+1):]]
+                closes_hist = [float(k.get('收盘', k.get('close', 0))) for k in kline_for_atr[-(atr_period+1):]]
+                tr_list = []
+                for i in range(1, len(highs)):
+                    tr = max(highs[i] - lows[i],
+                             abs(highs[i] - closes_hist[i-1]),
+                             abs(lows[i] - closes_hist[i-1]))
+                    tr_list.append(tr)
+                atr = sum(tr_list) / len(tr_list) if tr_list else 0.0
+            atr_ratio = atr / current_price if current_price > 0 else 0
+            base_threshold = max(0.01, atr_ratio)  # 最低 1%
+
+            # C2: 模式自适应倍数
+            # attack ×1.5（主升浪容忍更大回撤）
+            # defend ×1.0（正常）
+            # retreat ×0.8（破位即走，更敏感）
+            if market_mode == 'attack':
+                mode_multiplier = 1.5
+            elif market_mode == 'retreat':
+                mode_multiplier = 0.8
+            else:
+                mode_multiplier = 1.0
+
+            threshold = base_threshold * mode_multiplier
+            price_below_ma5 = ma5_break_pct > threshold
+
             if is_bullish_alignment and ma5_rising and price_below_ma5:
-                ma5_pressure_signal = f'MA5压制(价{current_price:.2f}<MA5:{ma5:.2f},跌{ma5_break_pct*100:.1f}%,多头排列)'
+                ma5_pressure_signal = f'MA5压制(价{current_price:.2f}<MA5:{ma5:.2f},跌{ma5_break_pct*100:.1f}%,阈值{threshold*100:.1f}%,ATR{atr_ratio*100:.1f}%,{market_mode}×{mode_multiplier})'
 
         # ── K线看跌形态 ──
         for p in kline_patterns:
@@ -1125,16 +1272,86 @@ class TimingEngine:
                     sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
                 ))
 
-        # 2. MA5压制（核心出场信号：沿MA5趋势被破坏，与进场"站上MA5"对称）
-        # 独立推送，不需要其他信号叠加 — MA5压制本身就是完整的交易信号
+        # 2. MA5压制 — C2分批trailing（2026-07-25 整改）
+        # 原：触发即全卖（60.7%卖飞率）
+        # 新：触发时输出"减半+trailing"信号，trailing stop = max(近5日最低, MA10)
         if ma5_pressure_signal:
+            kline_raw_c2 = tech_data.get('kline', [])
+            recent_5d_low = min([float(k.get('最低', k.get('low', 999999))) for k in kline_raw_c2[-5:]]) if len(kline_raw_c2) >= 5 else current_price
+            trailing_stop = max(recent_5d_low, ma10) if ma10 else recent_5d_low
+            trailing_stop = min(trailing_stop, current_price)
             signals.append(ExitSignal(
                 stock_code=stock_code, stock_name=stock_name,
                 exit_type='MA5压制', trigger_price=current_price,
-                stop_loss_price=stop_loss_calc.stop_loss_price,
-                reason=ma5_pressure_signal, urgency='重要', mode_constrained=False,
+                stop_loss_price=trailing_stop,
+                reason=ma5_pressure_signal + ' | 减半+trailing(' + f'{trailing_stop:.2f}' + ')',
+                urgency='重要', mode_constrained=False,
                 sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
             ))
+
+        # C3 新增四条卖出规则（2026-07-25 整改）
+        # 注：C3 规则降级为"观察级"（只log不触发卖出），避免过度交易
+        # 大V原意这些是"考虑级"信号，实盘由人工判断是否执行
+        # 回测引擎不执行 C3 规则，仅 MA5压制/破位止损/冲高止盈/技术走弱 触发卖出
+        kline_raw_c3 = tech_data.get('kline', [])
+        c3_observe_only = self._cfg("exit", "c3", "observe_only", default=True)  # C3 规则默认只观察
+        if len(kline_raw_c3) >= 2:
+            today_k = kline_raw_c3[-1]; prev_k = kline_raw_c3[-2]
+            today_open = float(today_k.get('开盘', today_k.get('open', 0)))
+            prev_close = float(prev_k.get('收盘', prev_k.get('close', 0)))
+            today_close = float(today_k.get('收盘', today_k.get('close', 0)))
+            today_high = float(today_k.get('最高', today_k.get('high', 0)))
+            prev_high = float(prev_k.get('最高', prev_k.get('high', 0)))
+            prev_open = float(prev_k.get('开盘', prev_k.get('open', 0)))
+
+            # C3-1. 异常高开卖：前日跌 + 今日高开>1.5%
+            if prev_open > 0 and prev_close > 0:
+                open_gap_pct = (today_open - prev_close) / prev_close * 100
+                prev_chg = (prev_close - prev_open) / prev_open * 100
+                if not c3_observe_only and prev_chg < -1 and open_gap_pct > 1.5:
+                    signals.append(ExitSignal(
+                        stock_code=stock_code, stock_name=stock_name,
+                        exit_type='异常高开', trigger_price=current_price,
+                        stop_loss_price=stop_loss_calc.stop_loss_price,
+                        reason=f'异常高开{open_gap_pct:.1f}%(前日跌{prev_chg:.1f}%),隔夜方向为跌却被拉高',
+                        urgency='重要', mode_constrained=False,
+                        sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
+                    ))
+
+            # C3-2. 反包前天高点=卖点：今日最高>前日最高且收盘回落
+            if not c3_observe_only and prev_high > 0 and today_high > prev_high and today_close < today_high * 0.99:
+                signals.append(ExitSignal(
+                    stock_code=stock_code, stock_name=stock_name,
+                    exit_type='反包前高', trigger_price=current_price,
+                    stop_loss_price=stop_loss_calc.stop_loss_price,
+                    reason=f'今日高{today_high:.2f}>前高{prev_high:.2f},收盘{today_close:.2f}回落',
+                    urgency='观察', mode_constrained=False,
+                    sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
+                ))
+
+            # C3-3. 开盘直接5日压制=卖点：开盘<MA5且全天未站上
+            if not c3_observe_only and ma5 and ma5 > 0 and today_open < ma5 and today_close < ma5:
+                signals.append(ExitSignal(
+                    stock_code=stock_code, stock_name=stock_name,
+                    exit_type='开盘5日压制', trigger_price=current_price,
+                    stop_loss_price=stop_loss_calc.stop_loss_price,
+                    reason=f'开盘{today_open:.2f}<MA5:{ma5:.2f},全天未站上(收{today_close:.2f})',
+                    urgency='重要', mode_constrained=False,
+                    sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
+                ))
+
+        # C3-4. 破10日取消关注：收盘跌破MA10（且近5日有>=3天在MA10上方）
+        if not c3_observe_only and ma10 and ma10 > 0 and current_price < ma10 and len(kline_raw_c3) >= 5:
+            above_count = sum(1 for k in kline_raw_c3[-6:-1] if float(k.get('收盘', k.get('close', 0))) > ma10)
+            if above_count >= 3:
+                signals.append(ExitSignal(
+                    stock_code=stock_code, stock_name=stock_name,
+                    exit_type='破10日线', trigger_price=current_price,
+                    stop_loss_price=stop_loss_calc.stop_loss_price,
+                    reason=f'收盘{current_price:.2f}跌破MA10:{ma10:.2f},取消关注',
+                    urgency='观察', mode_constrained=False,
+                    sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
+                ))
 
         # 3. 技术走弱（投票强烈看空/偏空/布林下轨）
         if weakness:
@@ -1153,22 +1370,6 @@ class TimingEngine:
                     sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
                 ))
 
-        # 3. 板块退潮 — 已移除（用户反馈：影响太大，板块退潮不应直接触发卖出）
-        # 板块退潮信息仍会在推导链和持仓健康度里展示，但不再作为独立卖出信号
-        # if sector_status == 'retreating':
-        #     severity = '紧急' if market_mode == 'retreat' else '重要'
-        #     reason = '板块退潮'
-        #     if market_mode == 'retreat':
-        #         reason += '+市场撤退 — 建议清仓'
-        #     else:
-        #         reason += ' — 注意风险，考虑减仓或收紧止损'
-        #     signals.append(ExitSignal(
-        #         stock_code=stock_code, stock_name=stock_name,
-        #         exit_type='板块退潮', trigger_price=current_price,
-        #         stop_loss_price=stop_loss_calc.stop_loss_price,
-        #         reason=reason, urgency=severity, mode_constrained=False,
-        #         sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
-        #     ))
 
         # 合并同类 + 追加推导链
         exit_types = list(dict.fromkeys(s.exit_type for s in signals))
@@ -1234,8 +1435,11 @@ class TimingEngine:
         max_support_distance = self._cfg("stop_loss", "max_support_distance", default=0.12)
         fallback_ratio = self._cfg("stop_loss", "fallback_support_ratio", default=0.92)
 
+        # C1整改: 标记是否走fallback路径（fallback路径止损价不再×0.97）
+        is_fallback = False
         if not candidates:
             chosen_support = current_price * fallback_ratio
+            is_fallback = True
         else:
             below = [c for c in candidates if c["value"] < current_price]
             if below:
@@ -1244,9 +1448,11 @@ class TimingEngine:
                 # 修复 BUG-E1: 如果选中的支撑位距离当前价过远，回退到固定百分比
                 if current_price > 0 and (current_price - chosen_support) / current_price > max_support_distance:
                     chosen_support = current_price * fallback_ratio
+                    is_fallback = True
             else:
                 # 所有 MA 都在当前价上方 → 刚破位，用固定百分比
                 chosen_support = current_price * fallback_ratio
+                is_fallback = True
 
         # ATR buffer（修复 BUG-B19: 接入止损价计算，通过 use_atr_buffer 开关控制）
         use_atr_buffer = self._cfg("stop_loss", "use_atr_buffer", default=False)
@@ -1273,8 +1479,36 @@ class TimingEngine:
                     buffer = atr_mult * atr
 
         # 止损价 = 支撑位 × multiplier - buffer
+        # C1 v3整改: fallback路径用 ATR 自适应止损价（而非固定5%）
+        # fallback时 chosen_support = current_price × 0.95（距5%），但V型转折急跌段收盘往往拉回
+        # 改为: stop_loss = current_price - ATR×1.0（约1.5-3%，随波动率自适应）
         stop_loss_multiplier = self._cfg("stop_loss", "multiplier", default=0.97)
-        stop_loss_price = chosen_support * stop_loss_multiplier - buffer
+        if is_fallback:
+            # C1 v3: fallback 用 ATR 自适应
+            kline_for_atr = tech_data.get('kline', [])
+            atr_period = 14
+            atr_val = 0.0
+            if len(kline_for_atr) >= atr_period + 1:
+                highs = [float(k.get('最高', k.get('high', 0))) for k in kline_for_atr[-(atr_period+1):]]
+                lows = [float(k.get('最低', k.get('low', 0))) for k in kline_for_atr[-(atr_period+1):]]
+                closes_hist = [float(k.get('收盘', k.get('close', 0))) for k in kline_for_atr[-(atr_period+1):]]
+                tr_list = []
+                for i in range(1, len(highs)):
+                    tr = max(highs[i] - lows[i],
+                             abs(highs[i] - closes_hist[i-1]),
+                             abs(lows[i] - closes_hist[i-1]))
+                    tr_list.append(tr)
+                atr_val = sum(tr_list) / len(tr_list) if tr_list else 0.0
+            if atr_val > 0 and current_price > 0:
+                # ATR止损：现价 - 1×ATR（约1.5-3%距离）
+                stop_loss_price = current_price - atr_val
+                # 保底：不低于现价×0.90（最多10%止损）
+                floor = current_price * 0.90
+                stop_loss_price = max(stop_loss_price, floor)
+            else:
+                stop_loss_price = chosen_support  # ATR不足时退回原fallback
+        else:
+            stop_loss_price = chosen_support * stop_loss_multiplier - buffer
 
         prev_high = tech_data.get("prev_high")
         resistance = prev_high or 0
@@ -1282,11 +1516,26 @@ class TimingEngine:
         if recent_high > resistance:
             resistance = recent_high
 
+        # C4: 阶梯止损（帖33：59破了→58→52，每级对应减仓）
+        ladder = None
+        try:
+            below_c4 = [c for c in candidates if c["value"] < current_price]
+            if len(below_c4) >= 2:
+                sorted_supports = sorted([c["value"] for c in below_c4], reverse=True)
+                ladder = []
+                reduce_ratios = [0.30, 0.30, 0.40]
+                for i, sp in enumerate(sorted_supports[:3]):
+                    ratio = reduce_ratios[i] if i < len(reduce_ratios) else 0.40
+                    ladder.append({'support': sp, 'stop_loss_price': sp * stop_loss_multiplier, 'reduce_ratio': ratio, 'level': i + 1})
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
+
         return StopLossCalc(
             stock_code=stock_code,
             current_price=current_price,
             support_candidates=candidates,
             chosen_support=chosen_support,
+            ladder=ladder,
             stop_loss_price=stop_loss_price,
             resistance=resistance,
         )
@@ -1461,8 +1710,8 @@ class TimingEngine:
             if stock_code in fresh and fresh.get(stock_code):
                 q = fresh[stock_code]
                 return {"price": q.get("current_price", 0), "change_pct": q.get("change_pct", 0)}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
         return None
 
     def _fetch_tech_data(self, stock_code: str, market_mode: str = "defend") -> Dict[str, Any]:
@@ -1566,13 +1815,15 @@ class TimingEngine:
                                 if -pb10_tol <= bias10 <= pb10_tol and closes[-1] < closes[-2]:
                                     data["shrinking_pullback_ma10"] = True
 
-                    # 对子底（修复 BUG-B4: 去掉小数点后再判断对子）
-                    # 对子底定义：价格尾数两位相同（如 12.22, 33.33, 5.55）或 99/00 结尾
+                    # 对子底（D3 整改 2026-07-25：补"急跌跳水后"前置）
                     price_str = f"{closes[-1]:.2f}".replace(".", "")
-                    data["pair_bottom"] = (
-                        price_str[-2:] == "99" or price_str[-2:] == "00" or
-                        (len(price_str) >= 2 and price_str[-2] == price_str[-1])
-                    )
+                    is_pair = (price_str[-2:] == "99" or price_str[-2:] == "00" or
+                               (len(price_str) >= 2 and price_str[-2] == price_str[-1]))
+                    if is_pair:
+                        drop_5d = (closes[-1] - closes[-6]) / closes[-6] if len(closes) >= 6 and closes[-6] > 0 else 0
+                        drop_1d = (closes[-1] - closes[-2]) / closes[-2] if len(closes) >= 2 and closes[-2] > 0 else 0
+                        if drop_5d < -0.08 or drop_1d < -0.04:
+                            data["pair_bottom"] = True
 
                     # 锤子线
                     hammer_ratio = self._cfg("tech_data", "hammer_lower_shadow_ratio", default=2)
@@ -1582,14 +1833,21 @@ class TimingEngine:
                         if body > 0 and lower_shadow > body * hammer_ratio:
                             data["has_hammer"] = True
 
-                    # 跌停板被撬开
+                    # 跌停板被撬开（D4 整改 2026-07-25：补巨量封单+翘板资金前置）
                     ld_ratio = self._cfg("tech_data", "limit_down_ratio", default=0.9)
                     ld_touch = self._cfg("tech_data", "limit_down_touch_tolerance", default=1.002)
                     ld_open = self._cfg("tech_data", "limit_down_open_threshold", default=1.02)
                     if len(closes) >= 2 and len(lows) >= 1:
                         limit_down = closes[-2] * ld_ratio
                         if lows[-1] <= limit_down * ld_touch and closes[-1] > limit_down * ld_open:
-                            data["daily_limit_opened"] = True
+                            vol_5d_avg = sum(volumes[-6:-1]) / 5 if len(volumes) >= 6 else 0
+                            heavy_volume = volumes[-1] > vol_5d_avg * 2 if vol_5d_avg > 0 else False
+                            today_open = opens[-1] if opens else closes[-1]
+                            body = abs(closes[-1] - today_open)
+                            lower_shadow = min(today_open, closes[-1]) - lows[-1]
+                            sweep_fund = lower_shadow > body * 2 if body > 0 else lower_shadow > 0
+                            if heavy_volume and sweep_fund:
+                                data["daily_limit_opened"] = True
 
                     # 开盘强势
                     if len(closes) >= 2 and len(highs) >= 2:
@@ -1785,11 +2043,14 @@ class TimingEngine:
             return [round(current * tr.get("panic_bottom_low", 1.08), 2),
                     round(current * tr.get("panic_bottom_high", 1.18), 2)]
         elif entry_type == "套利低吸":
-            if resistance > current:
-                return [round(resistance * tr.get("arbitrage_with_resistance_low", 0.97), 2),
-                        round(resistance * tr.get("arbitrage_with_resistance_high", 1.02), 2)]
-            return [round(current * tr.get("arbitrage_no_resistance_low", 1.05), 2),
-                    round(current * tr.get("arbitrage_no_resistance_high", 1.08), 2)]
+            # C5 市况自适应数值纪律（2026-07-25 整改）
+            mode = getattr(self, '_current_market_mode', 'defend')
+            if mode == 'attack':
+                return [round(current * 0.98, 2), round(current * 1.08, 2)]  # 强势日 +8%
+            elif mode == 'retreat':
+                return [round(current * 0.98, 2), round(current * 1.02, 2)]  # 撤退不套利
+            else:
+                return [round(current * 0.98, 2), round(current * 1.03, 2)]  # 震荡市 -2/+3
         elif entry_type == "确认追强":
             return [round(current * tr.get("momentum_chase_low", 1.05), 2),
                     round(current * tr.get("momentum_chase_high", 1.12), 2)]
@@ -1832,8 +2093,6 @@ def get_backtest_timing_engine(params_override: Optional[dict] = None) -> Timing
 
 # 线程局部存储，每个线程持有独立的 TimingEngine 实例
 # 用于 Walk-Forward 并行回测场景，避免单例状态污染
-import threading as _threading
-_thread_local = _threading.local()
 
 
 def create_timing_engine(backtest_mode: bool = False,

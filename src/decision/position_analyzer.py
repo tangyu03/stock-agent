@@ -90,7 +90,7 @@ class PositionAnalyzer:
             exit_signals = []
             tech_data: Dict[str, Any] = {}
             try:
-                te.reset_caches() if not hasattr(te, "_backtest_mode") or not te._backtest_mode else None
+                # P1-12: 删除误清缓存（aggregator 已预取，不应在循环中reset）
                 exit_sigs = te.check_exit_signals(
                     stock_code=code,
                     stock_name=name,

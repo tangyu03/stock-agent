@@ -14,6 +14,7 @@ import os
 import sys
 import argparse
 import logging
+import logging.handlers
 from pathlib import Path
 from datetime import datetime
 
@@ -40,7 +41,12 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(LOG_DIR / f"agent_{datetime.now().strftime('%Y%m%d')}.log", encoding="utf-8"),
+        logging.handlers.TimedRotatingFileHandler(
+            LOG_DIR / "agent.log",
+            when="midnight",
+            backupCount=30,
+            encoding="utf-8",
+        ),
     ],
 )
 
@@ -90,7 +96,10 @@ def main():
             logger.warning("未提取到有效判断")
 
     elif args.command == "run":
-        get_orchestrator().run(args.phase)
+        try:
+            get_orchestrator().run(args.phase)
+        except Exception as e:
+            logger.error("调度异常: %s", e, exc_info=True)
 
     else:
         parser.print_help()

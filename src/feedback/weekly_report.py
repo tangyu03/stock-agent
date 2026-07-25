@@ -136,7 +136,7 @@ class WeeklyReport:
         """持仓状态"""
         from ..config_models import load_config
         portfolio = load_config("portfolio.yaml")
-        holdings = portfolio.get("holdings", [])
+        holdings = portfolio.get("stocks") or portfolio.get("holdings") or []
         total_asset = portfolio.get("total_asset", 0)
 
         if not holdings:

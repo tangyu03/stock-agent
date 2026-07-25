@@ -135,7 +135,7 @@ def get_structured_logger(
         json_format = os.environ.get("LOG_FORMAT", "").lower() == "json"
 
     logger.setLevel(level)
-    logger.propagate = False  # 不传播到 root logger，避免重复输出
+    logger.propagate = True  # P0-9: 传播到 root logger，让 FileHandler 写入文件
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)

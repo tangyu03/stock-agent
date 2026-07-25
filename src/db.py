@@ -1,26 +1,70 @@
 """
 数据库初始化与管理
 SQLite + WAL模式，支持并发读取
+
+P1-13: 连接池优化（thread-local 复用连接）
+原：每次 get_connection() 新建连接，close() 释放
+新：thread-local 缓存连接，同一线程复用，避免重复创建
 """
 import sqlite3
 import os
+import threading
 from pathlib import Path
 from datetime import date
+from contextlib import contextmanager
 import logging
 
 logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).parent.parent / "data" / "stock_agent.db"
 
+# P1-13: thread-local 连接池
+_thread_local = threading.local()
+
 
 def get_connection() -> sqlite3.Connection:
-    """获取数据库连接，启用WAL模式"""
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    """
+    获取数据库连接，启用WAL模式
+
+    P1-13: thread-local 复用连接
+    同一线程多次调用返回同一连接，避免重复创建/关闭
+    """
+    conn = getattr(_thread_local, 'conn', None)
+    if conn is None:
+        conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        _thread_local.conn = conn
     return conn
+
+
+@contextmanager
+def get_conn():
+    """
+    P1-13: 上下文管理器（推荐使用方式）
+    with get_conn() as conn:
+        conn.execute(...)
+    """
+    conn = get_connection()
+    try:
+        yield conn
+    except Exception as e:
+        conn.rollback()
+        raise
+    # 不 close（thread-local 复用）
+
+
+def close_thread_connection():
+    """关闭当前线程的连接（线程结束时调用）"""
+    conn = getattr(_thread_local, 'conn', None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _thread_local.conn = None
 
 
 def init_db():
@@ -160,7 +204,6 @@ def init_db():
     """)
 
     conn.commit()
-    conn.close()
     logger.info("Database initialized successfully at %s", DB_PATH)
 
 

@@ -77,8 +77,8 @@ timing:
   # ──────────────── 止损价计算 (calculate_stop_loss) ────────────────
   stop_loss:
     multiplier: 0.97                     # 止损价 = 支撑位 × 0.97（核心系数）
-    fallback_support_ratio: 0.92         # 修复 BUG-E1: 支撑位过远时回退到 当前价 × 0.92
-    max_support_distance: 0.12           # 修复 BUG-E1: 支撑位距离超过 12% 时回退到固定百分比
+    fallback_support_ratio: 0.95         # C1整改: 0.92→0.95，刚破位时止损价离现价5%而非8%
+    max_support_distance: 0.06           # C1整改: 0.12→0.06，支撑位距现价超6%即回退
     use_atr_buffer: false                # 是否启用 ATR buffer（默认关闭）
     atr_min_klines: 15                   # ATR 计算最少 K 线数
     atr_period: 14                       # ATR 周期

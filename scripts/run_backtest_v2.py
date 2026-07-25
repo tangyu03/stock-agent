@@ -7,6 +7,7 @@
 """
 import os
 import sys
+from pathlib import Path
 import json
 import logging
 from datetime import datetime
@@ -15,7 +16,7 @@ from typing import Dict, List, Tuple
 
 import yaml
 
-FIXED_ROOT = "/home/z/my-project/download/stock-agent-fixed"
+FIXED_ROOT = str(Path(__file__).parent.parent)  # 项目根目录
 sys.path.insert(0, FIXED_ROOT)
 
 # 性能优化：在导入 timing_engine 前，monkey-patch institutional_scorer
@@ -36,11 +37,11 @@ os.environ["TQDM_DISABLE"] = "1"
 logging.basicConfig(level=logging.ERROR, format="%(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("backtest")
 
-CACHE_PATH = "/home/z/my-project/scripts/backtest/kline_cache.json"
+CACHE_PATH = str(Path(__file__).parent / "kline_cache.json")
 
 
 def load_portfolio() -> List[Dict]:
-    with open("/home/z/my-project/upload/stock-agent-extracted/stock-agent/config/portfolio.yaml", "r", encoding="utf-8") as f:
+    with open(Path(__file__).parent.parent / "config" / "portfolio.yaml", "r", encoding="utf-8") as f:
         p = yaml.safe_load(f)
     stocks = p.get("stocks") or []
     return [s for s in stocks if s.get("code") and len(s.get("code", "")) == 6]
@@ -296,7 +297,7 @@ def analyze(pairs: List[Dict], total_signals: int):
         avg_pnl = sum(p["pnl_pct"] for p in ps) / t if t else 0
         print(f"  {stk:25s}: {t:3d}笔 胜率{wr:5.1f}% 平均{avg_pnl:+6.2f}%")
 
-    out_path = "/home/z/my-project/scripts/backtest/pairs_detail.json"
+    out_path = str(Path(__file__).parent / "pairs_detail.json")
     summary = {
         "total_signals": total_signals,
         "total_pairs": total,

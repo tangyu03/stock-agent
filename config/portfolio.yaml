@@ -34,8 +34,6 @@ stocks:
   name: 罗博特科
 - code: '688521'
   name: 芯原股份
-- code: '6886'
-  name: 芯原股份
 add_plans:
 - plan_id: ap_688028_20260709_60219e
   stock_code: '688028'

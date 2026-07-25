@@ -379,34 +379,45 @@ class MarketModeAdaptive:
         dimensions.append({"key": "gem_sci_tech", "name": "双创技术", "condition": gem_cond, "status": "neutral"})
 
         # ================================================================
-        # 模式判定：基于 IBD 派发日模型 + 价格与均线关系
+        # 模式判定：B1 五日线回归 v2（2026-07-22 整改，含缓冲优化）
+        # ----------------------------------------------------------------
+        # 主基准：指数5日线（帖16"指数锚定5日"是绝对原则）
+        #   - 收盘 < MA5×0.99（跌破1%缓冲） → retreat（收缩）
+        #   - 收盘 > MA5 且 多头排列 且 派发日≤5 → attack（激情）
+        #   - 其他（站上5日线但不满足激情条件） → defend（谨慎）
+        # v2 改动（v1 问题：模式切换太频繁30%，attack平均仅3.7天）：
+        #   1. retreat 用 1% 缓冲，避免日内毛刺触发
+        #   2. attack 去掉"5日仍上升"条件（震荡市5日线方向频繁变化）
+        # 派发日降级为辅助参考（不再作硬条件）
         # ================================================================
         dist_count = dist["count"]
-        above_ma50 = current > ma50
+        above_ma5 = current > ma5
+        below_ma5_buffer = current < ma5 * 0.99  # 1%缓冲
         ma_bullish = ma5 > ma10 > ma20
+        above_ma50 = current > ma50  # 仅作展示
 
         reasons = []
-        if dist_count <= 4 and above_ma50 and ma_bullish:
-            mode_before = "attack"
-            reasons.append(f"派发日{dist_count}/{dist['window']}<5")
-            reasons.append("站上MA50")
-            reasons.append("多头排列")
-        elif dist_count >= 7 or (not above_ma50 and not ma_bullish):
+        if below_ma5_buffer:
+            # 收盘跌破 MA5 1% → 收缩（带缓冲，避免毛刺）
             mode_before = "retreat"
+            reasons.append(f"跌破5日线1%缓冲(价{current:.0f}<MA5×0.99:{ma5*0.99:.0f})")
             if dist_count >= 7:
-                reasons.append(f"派发日{dist_count}/{dist['window']}>=7 严重派发")
-            if not above_ma50:
-                reasons.append("跌破MA50")
-            if not ma_bullish:
-                reasons.append("均线空头")
+                reasons.append(f"派发日{dist_count}/{dist['window']}≥7 严重派发(辅助)")
+        elif above_ma5 and ma_bullish and dist_count <= 5:
+            # 激情档：站上5日线 + 多头排列 + 派发日不严重
+            mode_before = "attack"
+            reasons.append(f"站上5日线(价{current:.0f}>MA5:{ma5:.0f})")
+            reasons.append("多头排列(MA5>MA10>MA20)")
+            if dist_count <= 4:
+                reasons.append(f"派发日{dist_count}/{dist['window']}≤4(辅助)")
         else:
+            # 谨慎档：站上5日线但不满足激情条件（含5日线附近震荡）
             mode_before = "defend"
-            if 5 <= dist_count <= 6:
-                reasons.append(f"派发日{dist_count}/{dist['window']}偏高")
-            if not above_ma50:
-                reasons.append("跌破MA50")
+            reasons.append(f"5日线附近(价{current:.0f}≈MA5:{ma5:.0f})")
             if not ma_bullish:
-                reasons.append("均线转弱")
+                reasons.append("均线未多头排列")
+            if dist_count >= 5:
+                reasons.append(f"派发日{dist_count}/{dist['window']}≥5(辅助)")
 
         # 外围扰动降级（仅实时）
         from datetime import datetime as dt
@@ -430,7 +441,7 @@ class MarketModeAdaptive:
             "mode_reason": " | ".join(reasons),
         }
 
-    def _score_dimensions(self, date: str, index_kline: List[Dict]) -> Dict:
+    def score_dimensions(self, date: str, index_kline: List[Dict]) -> Dict:
         """兼容旧接口，委托给 _assess_market"""
         result = self._assess_market(date, index_kline)
         if result is None:
@@ -457,7 +468,7 @@ class MarketModeAdaptive:
         Returns:
             "attack" / "defend" / "retreat"
         """
-        result = self._score_dimensions(date, index_kline)
+        result = self.score_dimensions(date, index_kline)
         if result is None:
             return "defend"
         return result["mode"]
@@ -553,7 +564,22 @@ class MarketModeAdaptive:
     # ================================================================
 
     def _fetch_index_kline(self) -> List[Dict]:
-        """获取上证指数日K线（用于实时模式评估）"""
+        """获取上证指数日K线（P1-14: 优先用AKShareAdapter，fallback直调）"""
+        # 优先走 adapter（带超时+熔断）
+        try:
+            from ..data_layer.akshare_adapter import get_akshare_adapter
+            adapter = get_akshare_adapter()
+            result = adapter.get_index_data("000001")
+            if result.success and result.data:
+                return [
+                    {"date": str(row.get("date", ""))[:10],
+                     "close": float(row.get("close", 0)),
+                     "volume": float(row.get("volume", 0))}
+                    for row in result.data
+                ]
+        except Exception as e:
+            logger.warning("指数K线获取失败(adapter): %s", e)
+        # fallback: 直接调 akshare
         try:
             import akshare as ak
             df = ak.stock_zh_index_daily(symbol="sh000001")
@@ -564,7 +590,7 @@ class MarketModeAdaptive:
                     for _, row in df.iterrows()
                 ]
         except Exception as e:
-            logger.warning("指数K线获取失败: %s", e)
+            logger.warning("指数K线获取失败(akshare直调): %s", e)
         return []
 
     def assess_daily(self, force_refresh: bool = False) -> Dict:
@@ -593,7 +619,7 @@ class MarketModeAdaptive:
 
         # 1. 获取指数K线 + 5维评分
         index_kline = self._fetch_index_kline()
-        scoring = self._score_dimensions(today, index_kline) if index_kline else None
+        scoring = self.score_dimensions(today, index_kline) if index_kline else None
 
         if scoring:
             mode = scoring["mode"]

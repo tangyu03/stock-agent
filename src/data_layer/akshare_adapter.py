@@ -473,6 +473,7 @@ class AKShareAdapter:
 
             try:
                 import concurrent.futures
+                # P2-11: 超时后线程不会真正停止，但akshare最终会因socket超时返回
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(func, *args, **kwargs)
                     result = future.result(timeout=30)  # 每次调用最多30秒
@@ -646,91 +647,13 @@ class AKShareAdapter:
 
     # ============ 北向资金 ============
 
-    def get_north_flow(self) -> AKShareResult:
-        """获取北向资金净流入"""
-        if not self.is_available():
-            return AKShareResult(success=False, error="AKShare not available", source="get_north_flow")
-
-        # ping检测不一定准确，仍按需尝试实际调用（熔断机制兜底）
 
 
-        try:
-            df = self._call_with_retry(
-                self._ak.stock_hsgt_north_net_flow_in_em,
-                "stock_hsgt_north_net_flow_in_em",
-                symbol="北向",
-            )
-            if df is None:
-                return AKShareResult(success=False, error="Retry exhausted", source="stock_hsgt_north_net_flow_in_em")
-            return AKShareResult(
-                success=True,
-                data=df.to_dict("records") if not df.empty else [],
-                source="stock_hsgt_north_net_flow_in_em",
-                data_source=DataSource.EASTMONEY,
-            )
-        except Exception as e:
-            self._record_failure("stock_hsgt_north_net_flow_in_em")
-            logger.error("get_north_flow failed: %s", e)
-            return AKShareResult(success=False, error=str(e), source="get_north_flow")
 
-    # ============ 板块数据 ============
-
-    def get_sector_constituents(self, sector_name: str) -> AKShareResult:
-        """获取板块成分股"""
-        source_key = f"stock_board_industry_cons_em_{sector_name}"
-        if not self.is_available():
-            return AKShareResult(success=False, error="AKShare not available", source="get_sector_constituents")
-
-        # ping检测不一定准确，仍按需尝试实际调用（熔断机制兜底）
-
-
-        try:
-            df = self._call_with_retry(self._ak.stock_board_industry_cons_em, source_key, symbol=sector_name)
-            if df is None:
-                return AKShareResult(success=False, error="Retry exhausted", source=source_key)
-            return AKShareResult(
-                success=True,
-                data=df.to_dict("records") if not df.empty else [],
-                source="stock_board_industry_cons_em",
-                data_source=DataSource.EASTMONEY,
-            )
-        except Exception as e:
-            self._record_failure(source_key)
-            logger.error("get_sector_constituents failed for '%s': %s", sector_name, e)
-            return AKShareResult(success=False, error=str(e), source="get_sector_constituents")
-
-    # ============ 龙虎榜 ============
-
-    def get_lhb_daily(self, date: Optional[str] = None) -> AKShareResult:
-        """获取龙虎榜数据"""
-        if not self.is_available():
-            return AKShareResult(success=False, error="AKShare not available", source="get_lhb_daily")
-
-        # ping检测不一定准确，仍按需尝试实际调用（熔断机制兜底）
-
-
-        try:
-            if date is None:
-                date = datetime.now().strftime("%Y%m%d")
-            df = self._call_with_retry(self._ak.stock_lhb_daily_em, "stock_lhb_daily_em", date=date)
-            if df is None:
-                return AKShareResult(success=False, error="Retry exhausted", source="stock_lhb_daily_em")
-            return AKShareResult(
-                success=True,
-                data=df.to_dict("records") if not df.empty else [],
-                source="stock_lhb_daily_em",
-                data_source=DataSource.EASTMONEY,
-            )
-        except Exception as e:
-            self._record_failure("stock_lhb_daily_em")
-            logger.error("get_lhb_daily failed: %s", e)
-            return AKShareResult(success=False, error=str(e), source="get_lhb_daily")
-
-    # ============ 历史K线 —— 多源切换 ============
-
-    # 北交所/次新股预检阈值：K线不足此数跳过重试直接降级
-    MIN_KLINE_BARS = 20
-
+    # P2-1: K线键名规范说明
+    # 本模块返回的K线字典统一用中文键（"日期/开盘/收盘/最高/最低/成交量"）
+    # 调用方用 k.get("收盘", k.get("close", 0)) 兼容写法读取
+    # 后续迭代应统一为英文键，减少兼容代码
     def get_stock_hist(
         self,
         code: str,
@@ -804,9 +727,8 @@ class AKShareAdapter:
             active_ds = self.get_active_source("stock_zh_a_hist")
             records = df.to_dict("records") if not df.empty else []
 
-            # 新浪源返回字段名可能不同，统一为东财格式
-            if active_ds == DataSource.SINA:
-                records = self._normalize_sina_hist(records)
+            # P2-1: 统一所有源的K线为英文键
+            records = self._normalize_to_english(records)
 
             return AKShareResult(
                 success=True,
@@ -1154,31 +1076,41 @@ class AKShareAdapter:
     # ============ 数据标准化 ============
 
     @staticmethod
-    def _normalize_sina_hist(records: List[Dict]) -> List[Dict]:
+    @staticmethod
+    def _normalize_to_english(records: List[Dict]) -> List[Dict]:
         """
-        将新浪源返回的 K 线数据统一为东财字段格式
-
-        新浪字段: date, open, high, low, close, volume
-        东财字段: 日期, 开盘, 最高, 最低, 收盘, 成交量
+        P2-1: 统一K线为英文键（date/open/high/low/close/volume）
+        同时保留中文键作为别名（双向兼容，调用方可任选）
         """
         field_map = {
-            "date": "日期",
-            "open": "开盘",
-            "high": "最高",
-            "low": "最低",
-            "close": "收盘",
-            "volume": "成交量",
+            "日期": "date", "开盘": "open", "最高": "high",
+            "最低": "low", "收盘": "close", "成交量": "volume",
+        }
+        # 中文→英文别名映射（供调用方兼容写法）
+        cn_aliases = {
+            "date": "日期", "open": "开盘", "high": "最高",
+            "low": "最低", "close": "收盘", "volume": "成交量",
         }
         normalized = []
         for rec in records:
             if not isinstance(rec, dict):
                 continue
             new_rec = {}
+            # 先映射英文键
             for old_key, val in rec.items():
                 new_key = field_map.get(old_key, old_key)
                 new_rec[new_key] = val
+            # 再加中文别名（双向兼容）
+            for en_key, cn_key in cn_aliases.items():
+                if en_key in new_rec and cn_key not in new_rec:
+                    new_rec[cn_key] = new_rec[en_key]
             normalized.append(new_rec)
         return normalized
+
+    @staticmethod
+    def _normalize_sina_hist(records: List[Dict]) -> List[Dict]:
+        """P2-1: 保留兼容（委托给 _normalize_to_english）"""
+        return AKShareAdapter._normalize_to_english(records)
 
 
 # 单例

@@ -57,8 +57,8 @@ class PushConfig(BaseModel):
 class HoldingItem(BaseModel):
     code: str
     name: str
-    shares: int
-    cost: float
+    shares: Optional[int] = 0
+    cost: Optional[float] = 0.0
     category: str = "A"
 
 
@@ -143,7 +143,6 @@ CONFIG_VALIDATORS = {
     "llm.yaml": LLMConfig,
     "push.yaml": PushConfig,
     "portfolio.yaml": PortfolioConfig,
-    "watchlist.yaml": WatchlistConfig,
     "position.yaml": PositionConfig,
     "risk.yaml": RiskConfig,
     "insights.yaml": InsightsConfig,

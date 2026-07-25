@@ -20,7 +20,7 @@ from datetime import datetime
 
 from ..config_models import load_config
 from ..analyzers.market_scorer import get_market_scorer, MarketScoreResult
-from ..analyzers.sector_scanner import get_sector_scanner, SectorScanResult, CrossDiagnosisResult
+# P1-17: sector_scanner 已废弃，统一用 sector_ranker
 from ..analyzers.timing_engine import EntrySignal, ExitSignal
 from .holding_health import HoldingHealth, WatchlistAnalysisResult
 from .position_analyzer import get_position_analyzer
@@ -79,7 +79,6 @@ class Aggregator:
     def __init__(self):
         self._portfolio_config = load_config("portfolio.yaml")
         self._market_scorer = get_market_scorer()
-        self._sector_scanner = get_sector_scanner()
         # P0 修复：初始化 _position_analyzer
         self._position_analyzer = get_position_analyzer()
 
@@ -109,9 +108,11 @@ class Aggregator:
         # 任务①：多模式自适应
         logger.info("--- 任务①：多模式自适应 ---")
         try:
-            import akshare as ak
+            # P0-6: 改用 safe_ak_func 带超时保护
+            from ..data_layer.akshare_safe import safe_ak_func
             from ..loop.market_mode_adaptive import get_market_mode_adaptive
-            df = ak.stock_zh_index_daily(symbol="sh000001")
+            stock_zh_index_daily = safe_ak_func("stock_zh_index_daily", timeout=30)
+            df = stock_zh_index_daily(symbol="sh000001")
             if df is not None and len(df) >= 20:
                 for _, r in df.tail(30).iterrows():
                     date_str = str(r["date"])
@@ -127,7 +128,7 @@ class Aggregator:
                     mode = mode_adaptive.get_mode_for_date(today_str, index_kline)
                     summary.market_mode = mode
                     # 获取模式判定原因（真实数据驱动）
-                    dim_result = mode_adaptive._score_dimensions(today_str, index_kline)
+                    dim_result = mode_adaptive.score_dimensions(today_str, index_kline)
                     if dim_result:
                         summary.mode_reason = dim_result.get("mode_reason", "")
                     summary.position_limit = {"attack": 0.8, "defend": 0.5, "retreat": 0.1}.get(mode, 0.5)
@@ -189,10 +190,7 @@ class Aggregator:
             sector_classifications = self._build_sector_classification_map(
                 summary.sector_result, holdings, holdings  # P0 修复：原代码 watchlist 未定义
             )
-            cross_diagnosis = self._sector_scanner.cross_diagnose(
-                summary.sector_result, holdings, holdings, summary.market_mode
-            )
-            summary.cross_diagnosis = cross_diagnosis
+# P1-17: cross_diagnose 已移除（统一用 sector_ranker）
 
         holding_codes = [s.get("code") for s in stocks if s and isinstance(s, dict) and s.get("code")]
         if holding_codes:

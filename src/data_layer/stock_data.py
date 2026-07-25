@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 # 缓存全市场实时行情（当日有效）
 _spot_cache: Dict[str, Dict] = {}
+_quote_prefetch_cache: Dict[str, Optional[Dict]] = {}
+_quote_prefetch_date: Optional[str] = None
 
 
 def batch_get_realtime_quotes(codes: List[str]) -> Dict[str, Dict]:
@@ -1430,7 +1432,13 @@ def prefetch_quotes(codes: List[str]) -> Dict[str, Optional[Dict]]:
 
 
 def get_prefetched_quote(code: str) -> Optional[Dict]:
-    """获取单只股票实时行情（无缓存，直接拉取）"""
+    """获取单只股票实时行情（P2-13: 优先读prefetch缓存）"""
+    # P2-13: 优先读缓存
+    global _quote_prefetch_cache, _quote_prefetch_date
+    today = datetime.now().strftime("%Y%m%d")
+    if _quote_prefetch_cache and _quote_prefetch_date == today:
+        return _quote_prefetch_cache.get(code)
+    # 缓存未命中，直接拉取
     try:
         quotes = batch_get_realtime_quotes([code])
         return quotes.get(code)

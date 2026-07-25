@@ -2,8 +2,8 @@
 机构持仓打分模块
 
 数据源（4 个）：
-  1. 北向资金 — stock_hsgt_individual_em 个股北向持股明细
-     判断：持股数环比变化（增/减/平）
+  1. 融资余额 — stock_margin_detail_sse/szse 融资融券明细（F9替换北向，2024-08起北向停披）
+     判断：融资余额环比变化（增/减/平，>2%阈值）
   2. 龙虎榜机构席位 — stock_lhb_jgmmtj 龙虎榜机构买卖统计
      判断：机构净买入额（>0 看多）
   3. 主力资金流 — stock_individual_fund_flow 个股主力净流入
@@ -83,92 +83,151 @@ def _reset_institutional_state():
 
 
 # ---------------------------------------------------------------------------
-# 数据源 1: 北向资金（个股北向持股明细）
+# 数据源 1: 融资余额（F9 整改 2026-07-22：替换北向资金）
 # ---------------------------------------------------------------------------
+# 原数据源：ak.stock_hsgt_individual_em（北向个股持股明细）
+#   问题：2024-08-16 起交易所停止披露北向实时数据，接口返回拟合值（R²≈0.32）
+# 新数据源：ak.stock_margin_detail_sse + ak.stock_margin_detail_szse（融资融券明细）
+#   判断：融资余额环比变化（今日 vs 5日前）
+#     - 融资余额增加 >2% → 看多(+1)，杠杆资金加仓
+#     - 融资余额减少 >2% → 看空(-1)，杠杆资金撤退
+#     - 其他 → 中性(0)
+#
+# 缓存策略：session 级全市场缓存（当日所有股票共享一份）
+#   融资余额接口按日期返回全市场数据，单次调用即可获取所有股票
+#   避免每只股票都调一次接口（17只×1次=17次）
 
-def _fetch_north_bound_holding(code: str) -> Dict[str, Any]:
+_margin_market_cache: Dict[str, Dict[str, float]] = {}  # {date: {code: 融资余额}}
+_margin_cache_date: str = ""
+
+def _find_recent_trading_day(target_date: str, max_lookback: int = 10, skip_today: bool = False) -> str:
+    """找最近的交易日（周末/假期回退）。简单版：跳过周六日。
+
+    Args:
+        target_date: 目标日期 YYYYMMDD
+        max_lookback: 最多回退天数
+        skip_today: 是否跳过target_date本身（今天数据可能未更新）
     """
-    查询个股北向持股明细，判断增持/减持。
+    from datetime import datetime, timedelta
+    try:
+        dt = datetime.strptime(target_date, "%Y%m%d")
+    except Exception:
+        return target_date
+    start_offset = 1 if skip_today else 0
+    for i in range(start_offset, max_lookback):
+        d = dt - timedelta(days=i)
+        if d.weekday() < 5:  # 周一到周五
+            return d.strftime("%Y%m%d")
+    return target_date
 
-    数据源：ak.stock_hsgt_individual_em(symbol=code)
-    注意：参数名是 symbol（不是 stock）。
+def _fetch_margin_balance(code: str) -> Dict[str, Any]:
+    """
+    查询个股融资余额变化，判断杠杆资金动向。
 
-    返回近 30 日北向持股变化，取最新一日 vs 3 日前对比。
+    数据源：
+      - 沪市：ak.stock_margin_detail_sse(date)
+      - 深市：ak.stock_margin_detail_szse(date)
 
-    Returns:
-        {"vote": 1/-1/0, "detail": str, "raw": dict}
-        vote: 1=增持看多, -1=减持看空, 0=无变化或无数据
+    判断：最近交易日融资余额 vs 5个交易日前融资余额
+      - 增加 >2% → 看多(+1)
+      - 减少 >2% → 看空(-1)
+      - 其他 → 中性(0)
+
+    F9 v2 改进：
+      - 自动找最近交易日（跳过周末）
+      - 深市接口不稳定，失败时降级为中性
+      - session 级全市场缓存
     """
     if _api_disabled["north_bound"]:
-        return {"vote": 0, "detail": "北向接口已短路", "raw": {}}
+        return {"vote": 0, "detail": "融资余额接口已短路", "raw": {}}
 
     try:
         import akshare as ak
-        # ⚠️ 参数名是 symbol，不是 stock（akshare 源码确认）
-        # 某些股票（如 688652）东财返回 result=None（"返回数据为空"），
-        # akshare 内部没处理 None 直接 subscript 报 'NoneType' object is not subscriptable
-        # 用 try-catch 包住，当作无数据处理
-        try:
-            df = ak.stock_hsgt_individual_em(symbol=code)
-        except (TypeError, KeyError, IndexError) as e:
-            # akshare 内部异常（'NoneType' object is not subscriptable 等）
-            _mark_api_success("north_bound")
-            return {"vote": 0, "detail": "北向无数据(东财返回空)", "raw": {}}
-        if df is None or df.empty:
-            _mark_api_success("north_bound")
-            return {"vote": 0, "detail": "无北向持股数据", "raw": {}}
+        from datetime import datetime, timedelta
 
-        # 兼容列名（akshare 真实列名：持股日期、持股数量）
-        date_col = "持股日期" if "持股日期" in df.columns else (
-            "日期" if "日期" in df.columns else df.columns[0]
-        )
-        hold_col = None
-        for c in ["持股数量", "持股股数", "持股数"]:
-            if c in df.columns:
-                hold_col = c
-                break
-        if not hold_col:
+        today = datetime.now().strftime("%Y%m%d")
+        # session 缓存：当日只拉一次全市场数据
+        global _margin_market_cache, _margin_cache_date
+        if _margin_cache_date != today:
+            _margin_market_cache = {}
+            _margin_cache_date = today
+
+        # 找最近交易日（今天和7天前，各回退找交易日）
+        latest_target = today
+        prev_target = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
+        latest_date = _find_recent_trading_day(latest_target, skip_today=True)  # 跳过今天（数据未更新）
+        prev_date = _find_recent_trading_day(prev_target)
+
+        # 拉取两个交易日的全市场数据
+        for fetch_date in [latest_date, prev_date]:
+            if fetch_date in _margin_market_cache:
+                continue
+            _margin_market_cache[fetch_date] = {}
+            # 沪市
+            try:
+                df_sse = ak.stock_margin_detail_sse(date=fetch_date)
+                if df_sse is not None and not df_sse.empty:
+                    code_col = "标的证券代码" if "标的证券代码" in df_sse.columns else df_sse.columns[1]
+                    bal_col = "融资余额" if "融资余额" in df_sse.columns else None
+                    if bal_col:
+                        for _, row in df_sse.iterrows():
+                            c = str(row[code_col]).zfill(6)
+                            bal = float(row[bal_col])
+                            if c and bal > 0:
+                                _margin_market_cache[fetch_date][c] = bal
+            except Exception:
+                pass
+            # 深市（不稳定，失败不影响沪市数据）
+            try:
+                df_szse = ak.stock_margin_detail_szse(date=fetch_date)
+                if df_szse is not None and not df_szse.empty:
+                    code_col = "证券代码" if "证券代码" in df_szse.columns else df_szse.columns[1]
+                    bal_col = "融资余额" if "融资余额" in df_szse.columns else None
+                    if bal_col:
+                        for _, row in df_szse.iterrows():
+                            c = str(row[code_col]).zfill(6)
+                            bal = float(row[bal_col])
+                            if c and bal > 0:
+                                _margin_market_cache[fetch_date][c] = bal
+            except Exception:
+                pass  # 深市失败静默降级
+
+        latest_bal = _margin_market_cache.get(latest_date, {}).get(code, 0)
+        prev_bal = _margin_market_cache.get(prev_date, {}).get(code, 0)
+
+        if latest_bal <= 0:
             _mark_api_success("north_bound")
-            return {"vote": 0, "detail": f"北向列名异常: {list(df.columns)[:8]}", "raw": {}}
+            return {"vote": 0, "detail": "无融资余额数据（非两融标的或深市接口失败）", "raw": {}}
 
-        # 按日期排序，取最近 4 个交易日
-        df = df.sort_values(date_col, ascending=False).head(4)
-        if len(df) < 2:
+        if prev_bal <= 0:
             _mark_api_success("north_bound")
-            return {"vote": 0, "detail": "北向数据不足 2 日", "raw": {}}
+            return {"vote": 0, "detail": f"融资余额{latest_bal/1e8:.2f}亿（无对比数据）", "raw": {"latest": latest_bal}}
 
-        latest_hold = float(df.iloc[0][hold_col])
-        prev_hold = float(df.iloc[-1][hold_col])
-
-        if prev_hold <= 0:
-            _mark_api_success("north_bound")
-            return {"vote": 0, "detail": "前期无持股，无法判断趋势", "raw": {}}
-
-        change_pct = (latest_hold - prev_hold) / prev_hold
+        change_pct = (latest_bal - prev_bal) / prev_bal
         _mark_api_success("north_bound")
 
-        if change_pct > 0.01:  # 增持 >1%
+        if change_pct > 0.02:  # 融资余额增加 >2%
             return {
                 "vote": 1,
-                "detail": f"北向增持 {change_pct*100:.1f}%（{prev_hold:.0f}→{latest_hold:.0f}）",
-                "raw": {"latest": latest_hold, "prev": prev_hold, "change_pct": change_pct},
+                "detail": f"融资余额增加{change_pct*100:.1f}%（{prev_bal/1e8:.2f}→{latest_bal/1e8:.2f}亿）",
+                "raw": {"latest": latest_bal, "prev": prev_bal, "change_pct": change_pct},
             }
-        elif change_pct < -0.01:  # 减持 >1%
+        elif change_pct < -0.02:  # 融资余额减少 >2%
             return {
                 "vote": -1,
-                "detail": f"北向减持 {change_pct*100:.1f}%（{prev_hold:.0f}→{latest_hold:.0f}）",
-                "raw": {"latest": latest_hold, "prev": prev_hold, "change_pct": change_pct},
+                "detail": f"融资余额减少{change_pct*100:.1f}%（{prev_bal/1e8:.2f}→{latest_bal/1e8:.2f}亿）",
+                "raw": {"latest": latest_bal, "prev": prev_bal, "change_pct": change_pct},
             }
         else:
             return {
                 "vote": 0,
-                "detail": f"北向持股持平（变化 {change_pct*100:.1f}%）",
-                "raw": {"latest": latest_hold, "prev": prev_hold, "change_pct": change_pct},
+                "detail": f"融资余额持平（变化{change_pct*100:.1f}%，{latest_bal/1e8:.2f}亿）",
+                "raw": {"latest": latest_bal, "prev": prev_bal, "change_pct": change_pct},
             }
     except Exception as e:
         err_msg = str(e)[:80]
         _mark_api_failure("north_bound", err_msg)
-        return {"vote": 0, "detail": f"北向接口异常: {err_msg}", "raw": {}}
+        return {"vote": 0, "detail": f"融资余额接口异常: {err_msg}", "raw": {}}
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +571,7 @@ def score_institutional_holding(code: str) -> Dict[str, Any]:
 
     # 调用 4 个数据源
     votes = {
-        "north_bound": _fetch_north_bound_holding(code),
+        "north_bound": _fetch_margin_balance(code),
         "lhb": _fetch_lhb_institutional(code),
         "main_force": _fetch_main_force_flow(code),
         "shareholder": _fetch_shareholder_count(code),

@@ -70,13 +70,16 @@ class Metrics:
     tracking_error_pct: float = 0.0
 
     # 交易类
-    win_rate: float = 0.0
-    profit_factor: float = 0.0
-    avg_win_pct: float = 0.0
-    avg_loss_pct: float = 0.0
-    trade_count: int = 0
-    winning_trades: int = 0
-    losing_trades: int = 0
+    win_rate: float = 0.0                # 胜率% = winning / (winning+losing+flat) * 100
+    profit_factor: float = 0.0           # = total_wins / total_losses（总盈利/总亏损）
+    avg_win_pct: float = 0.0             # 平均盈利幅度（%，正数）
+    avg_loss_pct: float = 0.0            # 平均亏损幅度（%，负数）
+    trade_count: int = 0                 # 总交易笔数 = winning + losing + flat
+    winning_trades: int = 0              # 盈利笔数（pnl > 0）
+    losing_trades: int = 0               # 亏损笔数（pnl < 0）
+    flat_trades: int = 0                 # 持平笔数（pnl == 0，含进分母但不计胜负）
+    win_loss_ratio: float = 0.0          # = avg_win / |avg_loss|（均盈/均亏比，与 profit_factor 区分）
+    expectancy_per_trade: float = 0.0    # 期望收益%/笔 = win_rate/100 * avg_win + (1-win_rate/100) * avg_loss
 
     def to_dict(self) -> Dict:
         return {k: v for k, v in self.__dict__.items()}
@@ -279,6 +282,15 @@ def calc_trade_stats(sell_pnl_pcts: List[float]) -> Dict:
     """
     交易胜率/盈亏比统计
 
+    口径说明（A1 修正后统一）：
+      - win  = pnl > 0  （正盈利算胜）
+      - loss = pnl < 0  （负亏损算负）
+      - flat = pnl == 0 （恰好为 0，含进胜率分母但不计胜负）
+      - 胜率 = winning / (winning + losing + flat) * 100
+      - 期望 = win_rate/100 * avg_win + (1 - win_rate/100) * avg_loss
+      - profit_factor = total_wins / total_losses（总盈利额/总亏损额，与 win_loss_ratio 不同）
+      - win_loss_ratio = avg_win / |avg_loss|（均盈/均亏比）
+
     Args:
         sell_pnl_pcts: 每笔卖出的盈亏百分比列表
 
@@ -286,31 +298,58 @@ def calc_trade_stats(sell_pnl_pcts: List[float]) -> Dict:
         {
             "win_rate": float,
             "profit_factor": float,
+            "win_loss_ratio": float,
             "avg_win_pct": float,
             "avg_loss_pct": float,
             "winning_trades": int,
             "losing_trades": int,
+            "flat_trades": int,
+            "trade_count": int,
+            "expectancy_per_trade": float,
         }
     """
     if not sell_pnl_pcts:
         return {
-            "win_rate": 0.0, "profit_factor": 0.0,
+            "win_rate": 0.0, "profit_factor": 0.0, "win_loss_ratio": 0.0,
             "avg_win_pct": 0.0, "avg_loss_pct": 0.0,
-            "winning_trades": 0, "losing_trades": 0,
+            "winning_trades": 0, "losing_trades": 0, "flat_trades": 0,
+            "trade_count": 0, "expectancy_per_trade": 0.0,
         }
 
+    # 三分类：胜 / 负 / 平
     wins = [p for p in sell_pnl_pcts if p > 0]
-    losses = [p for p in sell_pnl_pcts if p <= 0]
+    losses = [p for p in sell_pnl_pcts if p < 0]
+    flats = [p for p in sell_pnl_pcts if p == 0]
+
     total_wins = sum(wins) if wins else 0.0
     total_losses = abs(sum(losses)) if losses else 0.0
 
+    avg_win = (sum(wins) / len(wins)) if wins else 0.0
+    avg_loss = (sum(losses) / len(losses)) if losses else 0.0  # 负数
+    avg_flat = (sum(flats) / len(flats)) if flats else 0.0     # 接近 0
+
+    n_total = len(sell_pnl_pcts)
+    win_rate = (len(wins) / n_total * 100) if n_total else 0.0
+    profit_factor = (total_wins / total_losses) if total_losses > 0 else (float("inf") if total_wins > 0 else 0.0)
+    win_loss_ratio = (avg_win / abs(avg_loss)) if avg_loss != 0 else (float("inf") if avg_win > 0 else 0.0)
+    # 期望必须三分类：胜+负+平，等价于全样本均值 sum(pnl)/n
+    # 错误做法：(win_rate/100)*avg_win + (1-win_rate/100)*avg_loss 会把 flat 当作 loss 处理
+    if n_total > 0:
+        expectancy = (len(wins) / n_total) * avg_win + (len(losses) / n_total) * avg_loss + (len(flats) / n_total) * avg_flat
+    else:
+        expectancy = 0.0
+
     return {
-        "win_rate": (len(wins) / len(sell_pnl_pcts) * 100) if sell_pnl_pcts else 0.0,
-        "profit_factor": (total_wins / total_losses) if total_losses > 0 else float("inf") if total_wins > 0 else 0.0,
-        "avg_win_pct": (sum(wins) / len(wins)) if wins else 0.0,
-        "avg_loss_pct": (sum(losses) / len(losses)) if losses else 0.0,
+        "win_rate": win_rate,
+        "profit_factor": profit_factor,
+        "win_loss_ratio": win_loss_ratio,
+        "avg_win_pct": avg_win,
+        "avg_loss_pct": avg_loss,
         "winning_trades": len(wins),
         "losing_trades": len(losses),
+        "flat_trades": len(flats),
+        "trade_count": n_total,
+        "expectancy_per_trade": expectancy,
     }
 
 
@@ -388,11 +427,14 @@ def calc_all_metrics(
         ts = calc_trade_stats(sell_pnl_pcts)
         m.win_rate = round(ts["win_rate"], 4)
         m.profit_factor = round(ts["profit_factor"], 4) if ts["profit_factor"] != float("inf") else 999.99
+        m.win_loss_ratio = round(ts["win_loss_ratio"], 4) if ts["win_loss_ratio"] != float("inf") else 999.99
         m.avg_win_pct = round(ts["avg_win_pct"], 4)
         m.avg_loss_pct = round(ts["avg_loss_pct"], 4)
         m.winning_trades = ts["winning_trades"]
         m.losing_trades = ts["losing_trades"]
-        m.trade_count = m.winning_trades + m.losing_trades
+        m.flat_trades = ts["flat_trades"]
+        m.trade_count = ts["trade_count"]
+        m.expectancy_per_trade = round(ts["expectancy_per_trade"], 4)
 
     return m
 
@@ -473,12 +515,15 @@ def print_metrics(m: Metrics, title: str = "回测指标"):
         print(f"  🎯 信息比率:     {m.information_ratio:>10.4f}")
         print(f"  🎯 跟踪误差:     {m.tracking_error_pct:>10.2f}%")
         print()
-    print(f"  🔄 交易次数:     {m.trade_count:>10d}")
+    print(f"  🔄 交易次数:     {m.trade_count:>10d}  (胜{m.winning_trades}/负{m.losing_trades}/平{m.flat_trades})")
     print(f"  ✅ 盈利次数:     {m.winning_trades:>10d}")
     print(f"  ❌ 亏损次数:     {m.losing_trades:>10d}")
+    print(f"  ⚪ 持平次数:     {m.flat_trades:>10d}")
     print(f"  🎯 胜率:         {m.win_rate:>10.2f}%")
     print(f"  📈 平均盈利:     {m.avg_win_pct:>+10.2f}%")
     print(f"  📉 平均亏损:     {m.avg_loss_pct:>+10.2f}%")
-    print(f"  💰 盈亏比:       {m.profit_factor:>10.4f}")
+    print(f"  💰 盈亏比(PF):   {m.profit_factor:>10.4f}  (总盈利/总亏损)")
+    print(f"  💎 均盈均亏比:   {m.win_loss_ratio:>10.4f}  (avg_win/|avg_loss|)")
+    print(f"  🎯 期望收益/笔: {m.expectancy_per_trade:>+10.4f}%")
     print("=" * 70)
     print()

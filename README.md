@@ -1,225 +1,327 @@
-# stock-agent-fixed
+# stock-agent
 
-> A股短线交易 Agent — P0 修复版 + 完整回测验证
+> A股短线交易 Agent — 阶段二核心规则修正版
 
-本包是基于原 stock-agent 工程的 P0 修复版本，已通过 14 项自动化验证用例 + 2.5 年历史回测验证。
+基于大V实盘帖子提炼的量化交易策略，覆盖环境判定/进场/出场/仓位/数据层全链路。已完成两阶段整改（证据链修复 + 核心规则修正），回测验证 2021-2026 共 1341 交易日。
 
-## 📦 包内容总览
+## 📊 整改成果
+
+| 指标 | 原始策略 | 整改后 | 变化 |
+|---|---|---|---|
+| 总收益率% | +135.78 | **+156.09** | +20.31pp |
+| 夏普比率 | 0.6011 | **0.6591** | +0.0580 |
+| 最大回撤% | 56.07 | 50.54 | -5.53pp |
+| 交易笔数 | 375 | **92** | -75%（低频） |
+| 期望/笔% | +1.64 | **+6.90** | +321%（高质量） |
+| 均盈均亏比 | 1.38 | **2.15** | 大赚小亏 |
+| **2024段期望%** | **-0.90** | **+5.33** | **专项关卡通过** |
+
+策略形态从"高频小赚"转为"低频大赚"：交易笔数降 75%，单笔期望提升 3 倍。
+
+## 📦 项目结构
 
 ```
-stock-agent-fixed/
-├── README.md                          ← 本文件（快速入门）
-├── ARCHITECTURE.md                    ← 原工程架构文档
-├── LOOP_REWRITE_README.md             ← 原工程回测重写文档
-├── TIMING_REFACTOR_README.md          ← 原工程择时重构文档
-├── readme.md                          ← 原工程 README
-├── 北交所修复总结.md                   ← 原工程北交所适配总结
-│
-├── src/                               ← 修复后的源码（47 个 .py）
-│   ├── analyzers/                     ← 分析层（含修复后的 timing_engine.py）
-│   ├── data_layer/                    ← 数据层（未改动）
-│   ├── decision/                      ← 决策聚合层
-│   │   ├── aggregator.py             ← ★ 重写（修复 5 处 P0 bug）
-│   │   ├── position_builder.py       ← ★ 重写（修复语法错误 + 新增 5 方法）
-│   │   ├── position_analyzer.py      ← 🆕 新增（替代问财依赖）
-│   │   ├── holding_health.py         ← 🆕 新增（数据类补全）
-│   │   └── insight_miner.py          ← 原文件
-│   ├── feedback/                      ← 反馈层
-│   │   ├── daily_review.py           ← ★ 修复（holdings → stocks）
-│   │   ├── trade_logger.py           ← 原文件
-│   │   └── weekly_report.py          ← 原文件
-│   ├── orchestrator/                  ← 调度层
-│   │   ├── engine.py                 ← ★ 增强（trace_id + 结构化日志）
-│   │   └── unified_engine.py         ← 原文件
-│   ├── loop/                          ← 回测层（未改动）
-│   ├── push/                          ← 推送层（未改动）
-│   ├── utils/                         ← 🆕 新增工具包
-│   │   └── structured_logger.py      ← 🆕 JSON 日志 + trace_id
-│   ├── config_models.py
-│   ├── db.py
-│   ├── llm_client.py
-│   └── main.py
-│
-├── config/                            ← 配置文件（10 个 YAML，未改动）
-│   ├── timing.yaml                   ← 择时阈值（回测与实盘共享）
-│   ├── risk.yaml                     ← 风控参数
-│   ├── portfolio.yaml                ← 持仓配置（18 只股票）
-│   ├── position.yaml                 ← 仓位约束
-│   ├── market_scoring.yaml           ← 大盘评分
-│   └── ...
-│
-├── data/                              ← 运行数据（来自原工程）
-│   ├── stock_agent.db                ← SQLite 数据库（含 trade_logs 等表）
-│   └── logs/                         ← 运行日志目录
-│
-├── skills/                            ← 16 个外部分析技能（来自原工程）
-│   ├── a-share-capital-flow/         ← A股资金流分析
-│   ├── a-stock-kline-analyzer/       ← K线分析
-│   ├── chan-theory/                  ← 缠论
-│   ├── sector-rotation/              ← 板块轮动
-│   ├── smart-money/                  ← 聪明钱
-│   └── ...
-│
-├── scripts/                           ← 验证与回测脚本
-│   ├── verify_p0_fixes.py            ← 🆕 P0 修复验证（14 项检查）
-│   ├── backtest/                      ← 🆕 基于当前代码的回测
-│   │   ├── run_backtest_v2.py        ← 🆕 回测脚本
-│   │   ├── kline_cache.json          ← 🆕 17 只股票 2.5 年 K 线缓存
-│   │   └── pairs_detail.json         ← 🆕 514 笔买卖配对明细
-│   └── original/                      ← 原工程 17 个脚本（完整保留）
-│       ├── build_sector_mapping.py   ← 板块映射构建
-│       ├── run_backtest_demo.py      ← 回测示例
-│       ├── run_grid_search.py        ← 网格搜索
-│       ├── run_grid_search_real.py   ← 实盘数据网格搜索
-│       ├── run_live_push.py          ← 实盘推送
-│       ├── run_signal_search.py      ← 信号搜索
-│       ├── run_compare_params.py     ← 参数对比
-│       ├── run_compare_v5.py         ← v5 对比
-│       ├── test_bug_fixes.py         ← bug 修复测试
-│       ├── test_comprehensive.py     ← 综合测试
-│       ├── test_integration_v2.py    ← 集成测试 v2
-│       ├── test_macd_fix.py          ← MACD 修复测试
-│       ├── test_metrics.py           ← 指标测试
-│       ├── test_pushplus.py          ← PushPlus 测试
-│       ├── test_real_holdings.py     ← 真实持仓测试
-│       ├── test_real_holdings_v2.py  ← 真实持仓测试 v2
-│       └── test_v3_integration.py   ← v3 集成测试
-│
+stock-agent/
+├── src/                          # 源码
+│   ├── analyzers/                # 分析层
+│   │   ├── timing_engine.py      # 择时核心（B1/C1/C2/D1-D7整改）
+│   │   ├── market_mode_adaptive.py # 环境判定（B1五日线回归）
+│   │   ├── lhb_scorer.py         # 🆕 F10龙虎榜评分（百分制）
+│   │   ├── event_calendar.py     # 🆕 F5事件日历（解禁+财报）
+│   │   ├── institutional_trapped.py # 🆕 F2机构被套套利
+│   │   ├── institutional_scorer.py # F9融资余额替换北向
+│   │   ├── sector_scanner.py     # 板块三级分类
+│   │   ├── sector_ranker.py      # 板块涨跌幅排名
+│   │   ├── market_scorer.py      # 大盘评分
+│   │   ├── market_env.py         # 市场环境增强
+│   │   ├── gem_sci_tech_scorer.py # 双创技术位
+│   │   ├── external_market.py    # 外盘扰动
+│   │   └── stock_filter.py       # 个股过滤
+│   ├── decision/                 # 决策层
+│   │   ├── live_scheduler.py     # 🆕 P3实盘信号调度器
+│   │   ├── aggregator.py         # 四层决策汇总
+│   │   ├── position_builder.py   # 递进加仓+AddPlan
+│   │   ├── position_analyzer.py  # 持仓健康度
+│   │   ├── holding_health.py     # 健康度数据类
+│   │   └── insight_miner.py      # 观点挖掘
+│   ├── loop/                     # 回测层
+│   │   ├── backtest_engine.py    # 真实T+1回测引擎
+│   │   ├── market_mode_adaptive.py # 回测用环境判定
+│   │   ├── metrics.py            # A1三分类胜率+expectancy
+│   │   ├── signal_evaluator.py   # 事件研究法
+│   │   ├── walk_forward.py       # 滚动验证
+│   │   ├── data_loader.py        # 数据加载
+│   │   └── stockagent_tuned_v3_signals.py # v3信号生成
+│   ├── data_layer/               # 数据层
+│   │   ├── akshare_adapter.py    # AKShare多源切换+熔断
+│   │   ├── stock_data.py         # K线+技术指标
+│   │   ├── sw_industry.py        # 同花顺行业体系
+│   │   ├── iwencai_api.py        # 问财OpenAPI
+│   │   ├── skill_wrapper.py      # 22个外部分析skill
+│   │   └── data_cache.py         # SQLite缓存
+│   ├── orchestrator/             # 调度层
+│   │   ├── engine.py             # 四阶段调度（P3集成调度器）
+│   │   └── unified_engine.py     # 全量买卖信号扫描
+│   ├── push/                     # 推送层
+│   │   ├── pushplus.py           # 微信推送
+│   │   └── templates.py          # HTML模板
+│   ├── feedback/                 # 反馈层
+│   │   ├── daily_review.py       # 每日复盘
+│   │   ├── weekly_report.py      # 周报
+│   │   └── trade_logger.py       # 交易日志
+│   ├── utils/
+│   │   └── structured_logger.py  # 结构化日志+trace_id
+│   ├── config_models.py          # 配置模型
+│   ├── db.py                     # SQLite
+│   ├── llm_client.py             # LLM客户端
+│   └── main.py                   # 入口
+├── config/                       # 配置
+│   ├── timing.yaml               # 择时参数（78阈值）
+│   ├── portfolio.yaml            # 持仓清单（17只）
+│   ├── position.yaml             # 仓位参数
+│   ├── market_scoring.yaml       # 大盘评分6维
+│   ├── sector_scanner.yaml       # 板块三级分类
+│   ├── risk.yaml                 # 风控
+│   ├── schedule.yaml             # 7时段调度
+│   ├── push.yaml                 # 推送（token环境变量化）
+│   ├── llm.yaml                  # LLM（key环境变量化）
+│   ├── insights.yaml             # 观点
+│   ├── event_calendar.yaml       # 🆕 F5人工维护事件日历
+│   └── blacklist.yaml            # 🆕 D6板块黑名单（可选）
+├── scripts/                      # 脚本
+│   ├── run_live_push.py          # 实盘推送
+│   ├── run_backtest_v2.py        # 回测（简化版，已废弃）
+│   ├── run_grid_search_real.py   # 网格搜索
+│   ├── run_signal_search.py      # 信号质量搜索
+│   ├── build_sector_mapping.py   # 板块映射构建
+│   └── test_*.py                 # 测试脚本
 ├── tests/
-│   └── test_stock_agent.py           ← 原测试（待扩展）
-│
-└── docs/                              ← 评估报告与图表
-    ├── 01_策略评估报告.docx            ← 工程六维评估（策略/风控/回测/工程/聚合/可观测）
-    ├── 02_P0修复总结报告.docx          ← P0 修复详情（3 新增 + 5 修改）
-    ├── 03_策略有效性评估_旧数据版.docx  ← 基于旧数据库的评估（已修正）
-    ├── 04_策略有效性评估_当前代码回测版.docx ← ★ 基于当前代码 2.5 年回测的最终结论
-    └── charts/                       ← 所有图表 PNG（11 张）
-        ├── architecture.png          ← 系统架构图
-        ├── strategy_flow.png         ← 策略信号流程图
-        ├── radar.png                 ← 六维评估雷达图
-        ├── backtest_comparison.png   ← 旧数据 vs 当前代码对比
-        ├── backtest_entry.png        ← 进场类型有效性
-        ├── backtest_exit_hold.png    ← 出场类型 + 持仓天数
-        └── backtest_yearly.png       ← 年度稳定性
+│   └── test_stock_agent.py       # 单元测试
+├── docs/                         # 文档
+│   ├── GOVERNANCE.md             # 溯源治理+勘误登记
+│   ├── 01_策略评估报告.docx
+│   ├── 02_P0修复总结报告.docx
+│   └── 04_策略有效性评估_当前代码回测版.docx
+├── data/                         # 运行时数据（.gitignore）
+│   ├── logs/
+│   └── stock_agent.db
+├── ARCHITECTURE.md               # 架构文档
+├── LOOP_REWRITE_README.md        # 回测重写文档
+├── TIMING_REFACTOR_README.md     # 择时重构文档
+├── requirements.txt              # 依赖
+└── .gitignore
 ```
 
-## 🚀 快速入门
+## 🚀 快速开始
 
-### 1. 环境准备
+### 环境准备
 
 ```bash
-# Python 3.10+（已测试 3.12/3.13）
-pip install akshare pyyaml
+# 1. 安装依赖
+pip install -r requirements.txt
+
+# 2. 配置环境变量（凭证已从config移除）
+export DEEPSEEK_API_KEY="your_deepseek_key"    # LLM用
+export TOKEN_PUSH="your_pushplus_token"        # 推送用
+export IWENCAI_API_KEY="your_iwencai_key"      # 问财用（可选）
+
+# 3. 初始化数据库
+python -m src.main init
 ```
 
-### 2. 验证 P0 修复
+### 实盘运行
 
 ```bash
-cd stock-agent-fixed
-python3 scripts/verify_p0_fixes.py
+# 盘前/盘中统一检查（环境评估+信号生成+调度+推送）
+python -m src.main run --phase intraday
+
+# 盘后复盘
+python -m src.main run --phase post_market
+
+# 周报
+python -m src.main run --phase weekly
+
+# 处理用户文章/观点
+python -m src.main article --text "大V帖子内容" --source "雪球"
 ```
 
-预期输出：14 项检查全部 ✅ 通过。
-
-### 3. 运行回测（基于当前代码）
+### 回测验证
 
 ```bash
-cd stock-agent-fixed
-python3 scripts/backtest/run_backtest_v2.py
+# 完整回测（需先准备 kline_cache_full.json 数据）
+python /path/to/scripts/b1_gen_signals.py     # 生成信号
+python /path/to/scripts/b1_verify.py          # 跑三曲线+2024段专项关卡
+
+# 十交易日回归测试
+python /path/to/scripts/p4_regression_test.py
+
+# 实盘影子记录
+python /path/to/scripts/shadow_trading.py --record   # 每日记录
+python /path/to/scripts/shadow_trading.py --review   # T+10验证
+python /path/to/scripts/shadow_trading.py --report   # 生成报告
 ```
 
-预期输出：
-- 总信号数: 4972
-- 配对数: 514
-- 胜率: 42.2%
-- 盈亏比: 2.30
-- 期望收益: +4.38%/笔
+## 📋 整改清单
 
-回测脚本会优先使用 `scripts/backtest/kline_cache.json` 缓存数据（已包含 2024-01 ~ 2026-07 的 17 只股票 K 线）。如需重新拉取最新数据，删除该缓存文件即可。
+### 阶段一：证据链修复（8项，已完成）
 
-### 4. 启用结构化日志（生产环境）
+| 编号 | 整改项 | 状态 |
+|---|---|---|
+| A1 | 胜率/期望数学矛盾澄清 | ✅ 三分类口径统一 |
+| A2 | 组合级回测 | ✅ 真实T+1引擎 |
+| A3 | 基准对照三曲线 | ✅ A等权/B MA20/C策略 |
+| A4 | 成本与T+1明示 | ✅ 滑点5bps+佣金0.025%+印花税0.05% |
+| A5 | 样本独立性 | ✅ 聚类bootstrap 95%CI |
+| A6 | 分仓位类型报告 | ✅ 套利仓/波段仓分开 |
+| A7 | 熊市样本补齐 | ✅ 2021-2023共727交易日 |
+| A8 | 分市场状态分段 | ✅ 4阶段报告 |
 
-```bash
-export LOG_FORMAT=json
-python3 -m src.main run --phase intraday
+### 阶段二：核心规则修正（已完成）
+
+| 编号 | 整改项 | 核心改动 | 状态 |
+|---|---|---|---|
+| Step0 | 信号调度器 | 持仓跟踪+期望排序+预算约束 | ✅ |
+| B1 | 五日线回归 | 派发日降级辅助，5日线之上分激情/谨慎 | ✅ |
+| C1 | 破位硬触发 | 三重确认→硬触发+ATR自适应止损价 | ✅ |
+| C2 | MA5压制分批trailing | 1%固定→ATR自适应+模式倍数+分批 | ✅ |
+| C3 | 四条卖出规则 | 异常高开/反包前高/开盘5日压制/破10日线 | ✅ 观察级 |
+| C4 | 阶梯止损 | StopLossCalc增加ladder字段（30/30/40） | ✅ |
+| C5 | 套利仓市况自适应 | attack+8%/defend-2+3/retreat不套利 | ✅ |
+| C6 | 冲高止盈维持 | 保留现状 | ✅ |
+| D1 | 恐慌抄底双确认 | 必要条件+充分条件双确认 | ✅ |
+| D2 | 套利低吸收紧 | min_trigger_conditions 1→2 | ✅ |
+| D3 | 对子底补前置 | 急跌跳水后（5日跌>8%或当日跌>4%） | ✅ |
+| D4 | 跌停撬开补前置 | 巨量封单+翘板资金 | ✅ |
+| D5 | 板块生命周期过滤 | retreating板块不进场 | ✅ |
+| D6 | 黑名单机制 | config/blacklist.yaml | ✅ |
+| D7 | 价量突破分时段 | 标注需分时段（日频无法验证） | ✅ |
+| F9 | 北向数据替换 | stock_hsgt_individual_em→融资余额 | ✅ |
+
+### 阶段三：新模式与数据层（部分完成）
+
+| 编号 | 整改项 | 状态 |
+|---|---|---|
+| F2 | 机构被套套利 | ✅ 三重确认（冲高回落+机构大买+被套） |
+| F5 | 事件日历 | ✅ 解禁自动+财报人工维护 |
+| F10 | 龙虎榜评分 | ✅ 百分制5维度+席位黑名单 |
+| F3 | 星期规则 | ⏭️ 用户决策跳过 |
+| F6 | 情绪熔断 | ⏭️ 用户决策跳过 |
+| F4 | 日内时段 | 📊 数据层先行（需分钟级数据） |
+| F11 | 竞价数据 | 📊 数据层先行 |
+| F1 | 新股/次新股 | ❌ 未做（三天节奏复杂） |
+| F7 | 量化剧本 | ❌ 收敛为2项未做 |
+| F8 | 情绪指标 | ❌ 收敛为1项未做 |
+
+### 后续验证体系（已完成）
+
+| 编号 | 项目 | 状态 |
+|---|---|---|
+| P1 | 实盘影子记录 | ✅ shadow_trading.py |
+| P3 | 信号生成器实盘版 | ✅ live_scheduler.py 集成到orchestrator |
+| P4 | 十交易日回归测试 | ✅ p4_regression_test.py |
+
+## 🔧 核心配置
+
+### config/timing.yaml — 择时参数
+
+```yaml
+panic_bottom:
+  index_drop_threshold: 4.0      # 上证跌幅>4%判定恐慌（必要条件）
+  gem_star_drop_threshold: 5.0   # 双创跌幅>5%
+arbitrage:
+  min_trigger_conditions: 2      # D2: 套利低吸至少2条积极信号
+stop_loss:
+  multiplier: 0.97               # 止损价=支撑位×0.97
+  fallback_support_ratio: 0.95   # C1: fallback止损价（原0.92）
+  max_support_distance: 0.06     # C1: 6%即回退（原0.12）
+exit:
+  c3:
+    observe_only: true           # C3: 四条卖出规则默认观察级
 ```
 
-## 📊 关键结论
+### config/portfolio.yaml — 持仓清单
 
-### P0 修复（已完成）
+```yaml
+stocks:
+  - code: '688008'
+    name: 澜起科技
+  - code: '688041'
+    name: 海光信息
+  # ... 共17只
+```
 
-| # | Bug | 修复方式 |
-|---|-----|---------|
-| 1 | `aggregator.py` 引用未定义的 `HoldingHealth`/`WatchlistAnalysisResult` | 新增 `holding_health.py` 补全数据类 |
-| 2 | `aggregator.py` 中 `self._position_analyzer` 从未初始化 | 新增 `position_analyzer.py` 桩模块 |
-| 3 | `aggregator.py` 中 `holdings` 变量未定义 | 统一为 `holdings = stocks` |
-| 4 | `aggregator.py` 中 `_build_sector_classification_map` 引用未定义 `stocks` | 改为参数 `holdings` |
-| 5 | `position_builder.py` `@dataclass` 后空行接 `class` 语法错误 | 重写整个文件 |
-| 6 | `position_builder.py` 缺失 `create_add_plan` / `append_add_plan` 方法 | 新增 5 个方法 |
-| 7 | `daily_review.py` 用 `holdings` 字段但配置是 `stocks` | 改为优先读 `stocks` |
-| 8 | 全局单例不利于并行回测 | 新增 `create_timing_engine` 工厂 |
-| 9 | 日志无 trace_id 难以排查 | 新增 `structured_logger.py` |
+### config/event_calendar.yaml — 人工事件日历
 
-### 策略有效性（基于当前代码 2.5 年回测）
+```yaml
+events:
+  - date: "2024-10-15"
+    type: "财报"
+    code: "688008"
+    detail: "澜起科技三季报披露，前2日谨慎"
+    warning_level: "中"
+```
 
-| 指标 | 旧数据库（11天34笔） | 当前代码回测（2.5年514笔） |
-|------|---------------------|---------------------------|
-| 胜率 | 20.6% ❌ | **42.2%** ✅ |
-| 盈亏比 | 1.53 ❌ | **2.30** ✅ |
-| 期望收益 | -0.59%/笔 ❌ | **+4.38%/笔** ✅ |
-| 持仓 >3 天 | 0% ❌ | **72%** ✅ |
+## 📈 策略哲学
 
-**核心结论**：策略本身有效，旧数据库的负表现来自 aggregator 调度 bug（已修复）。已具备小资金实盘验证条件。
+### 三句话定调
 
-## 🔧 P0 修复详情
+1. **先修证据，再动策略** — 阶段一不改策略逻辑，只把回测变成能下结论的东西
+2. **每条规则锚定出处** — 三级标注：【原文】=帖子直接证据 / 【推断】=专业补全 / 【勘误】=与原文不符必须修正
+3. **机器做机器擅长的事** — 盘感、席位关系、机构信息渠道明确写入盲区文档，不再试图工程化
 
-### 新增模块（3 个）
+### 策略形态：低频大赚
 
-1. **`src/decision/holding_health.py`** — HoldingHealth 与 WatchlistAnalysisResult 数据类
-2. **`src/decision/position_analyzer.py`** — PositionAnalyzer 桩模块，不依赖问财 API
-3. **`src/utils/structured_logger.py`** — JSON 格式日志 + trace_id + contextvars
+- **交易频率**：92笔/5.5年（平均每月1.4笔）
+- **单笔期望**：+6.90%（年化贡献约+9.6%）
+- **均盈均亏比**：2.15（大赚小亏）
+- **2024段**：+5.33%期望（追涨杀跌倾向已根治）
 
-### 修改文件（5 个）
+### 工程定位
 
-1. **`src/decision/aggregator.py`** — 重写，修复 5 处未定义变量/方法 bug
-2. **`src/decision/position_builder.py`** — 重写，修复语法错误 + 新增 AddPlan 类 + 5 个方法
-3. **`src/feedback/daily_review.py`** — 修复 `_get_holding_summary` 字段读取
-4. **`src/analyzers/timing_engine.py`** — 追加并发安全工厂函数
-5. **`src/orchestrator/engine.py`** — 注入 trace_id + 结构化日志 + 异常捕获
+大V的规则框架 + 机器的执行纪律：
+- 止盈不犹豫（C5市况自适应落袋）
+- 破位不心软（C1硬触发+ATR止损价）
+- 熔断不讨价还价（B1跌破5日线即retreat）
 
-## 📋 部署建议
+## ⚠️ 已知局限
 
-1. **覆盖原工程**：将本包内容覆盖原 stock-agent 工程（建议先备份）
-2. **安装依赖**：`pip install akshare pyyaml`（无新增第三方依赖）
-3. **启用 JSON 日志**：`export LOG_FORMAT=json`（生产环境）
-4. **运行验证**：`python3 scripts/verify_p0_fixes.py` 确认部署成功
-5. **小流量试运行**：用 5-10 万小资金实盘 1-2 个月，验证实盘胜率 ≥ 35%
-6. **逐步扩大**：如一致，扩大至 50 万；如不一致，排查执行层问题
+1. **F4/F11 需分钟级数据**：日内时段规则和竞价数据在日频引擎无法验证
+2. **F2 机构买入均价近似**：用VWAP=(O+H+L+C)/4 近似，不精确
+3. **F5 解禁数据为历史**：stock_restricted_release_summary_em 返回已发生数据，未来预警依赖人工维护
+4. **C3 规则默认观察级**：四条卖出规则触发太频繁会破坏低频大赚模式，默认只log不执行
+5. **回测中机构打分被禁用**：monkey-patch score_institutional_holding 返回中性，实盘启用F9融资余额
 
-## 📚 文档阅读顺序
+## 📚 文档
 
-1. `docs/01_策略评估报告.docx` — 工程六维评估（先看这个了解全貌）
-2. `docs/02_P0修复总结报告.docx` — P0 修复详情
-3. `docs/04_策略有效性评估_当前代码回测版.docx` — ★ 最终结论（基于 2.5 年回测）
-4. `docs/03_策略有效性评估_旧数据版.docx` — 旧数据库分析（已被 04 修正）
+- `docs/GOVERNANCE.md` — 溯源治理 + 勘误登记表 + 推断参数登记册
+- `ARCHITECTURE.md` — 精简架构文档
+- `LOOP_REWRITE_README.md` — 回测引擎重写说明
+- `TIMING_REFACTOR_README.md` — 择时引擎重构说明
 
-## ⚠️ 已知限制
+## 🔒 安全说明
 
-1. **回测未覆盖 attack 模式**：确认追强 + 价量突破在 attack 模式下的表现待验证
-2. **行业集中度高**：portfolio.yaml 18 只股票集中在科创板/创业板半导体
-3. **未做 Walk-Forward**：参数稳定性未验证（建议 P1 推进）
-4. **未对比基准**：未区分 alpha 与 beta（建议与沪深300/半导体ETF对比）
+- LLM API key 和 PushPlus token 已从 config 移除，通过环境变量读取
+- `.gitignore` 已覆盖日志/数据库/缓存文件
+- 首次部署需设置环境变量：`DEEPSEEK_API_KEY` / `TOKEN_PUSH` / `IWENCAI_API_KEY`
 
-## 📞 后续支持
+## 📝 依赖
 
-- P0 修复已完成，可立即部署
-- P1 改进路线（约 16.5 人日）详见 `docs/02_P0修复总结报告.docx` 第五章
-- 实盘运行后如遇问题，可参考 `docs/01_策略评估报告.docx` 第七章改进路线图
+```
+akshare>=1.12.0      # 数据源
+pyyaml>=6.0          # 配置
+pydantic>=2.0        # 配置模型
+requests>=2.28       # 网络
+numpy>=1.24          # 数值计算
+python-docx>=0.8.11  # 报告生成
+```
 
----
+## 🗂️ 整改历史
 
-**版本**：v1.0-fixed  
-**生成日期**：2026-07-20  
-**基于原工程**：stock-agent（提交版本含 11 天实盘数据）  
-**修复验证**：14 项自动化检查全部通过  
-**回测验证**：2.5 年历史数据，514 笔配对，期望收益 +4.38%/笔
+- **2026-07-22**：阶段一完成（A1-A8证据链修复）
+- **2026-07-23**：阶段二完成（Step0+B1+C1+C2+D1+F9，6项P0）
+- **2026-07-25**：阶段二扩展完成（C2-C5+D2-D7，10项出场+进场体系）
+- **2026-07-25**：阶段三部分完成（F2+F5+F10，3项新模式）
+- **2026-07-25**：P1+P3+P4验证体系建立
+- **2026-07-25**：工程缺陷修复（12项P0/P1缺陷）
+
+详见 `worklog.md` 多Agent工作日志。

@@ -5,6 +5,7 @@ PushPlus 微信推送
 import logging
 import json
 import time
+import threading
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
@@ -32,6 +33,7 @@ class PushPlus:
         self._daily_limit = self._config.get("pushplus", {}).get("daily_limit", 200)
         self._api_url = "http://www.pushplus.plus/send"
         self._sent_count = 0
+        self._lock = threading.Lock()  # P1-11: 并发推送保护
         self._sent_today = datetime.now().strftime("%Y-%m-%d")
         self._last_send_time = 0.0  # 上次发送时间戳
 
@@ -151,24 +153,6 @@ class PushPlus:
         """发送盘前计划（保留兼容，实际已合并到 send_intraday_report）"""
         return self.send("📊 盘前计划", summary, level="常规")
 
-    def send_intraday_report(
-        self,
-        environment: Dict,
-        entries: List[Dict] = None,
-        exits: List[Dict] = None,
-    ) -> bool:
-        """
-        发送盘中统一报告：环境总览 + 买卖信号（合并为一条推送）。
-
-        Args:
-            environment: 环境评估数据（market_mode, market_score, position_limit,
-                        gem_sci_tech, external_market, sectors 等）
-            entries: 买入信号列表
-            exits: 卖出信号列表
-
-        Returns:
-            是否发送成功
-        """
     def send_intraday_report(self, environment: Dict, entries: List[Dict] = None,
                              exits: List[Dict] = None, observations: List[Dict] = None) -> bool:
         """

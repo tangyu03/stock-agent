@@ -50,8 +50,9 @@ class MarketScorer:
     def __init__(self):
         self._config = load_config("market_scoring.yaml")
         self._scoring_cfg = self._config["scoring"]
-        self._momentum_cfg = self._config.get("momentum", {})
-        self._mode_mapping = self._config.get("mode_mapping", {})
+        # P0-3: momentum 在 scoring 下，mode_mapping 在 voting 下
+        self._momentum_cfg = self._config.get("scoring", {}).get("momentum", {})
+        self._mode_mapping = self._config.get("voting", {}).get("mode_mapping", {})
         self._akshare = get_akshare_adapter()
         self._skill = get_skill_wrapper()
         self._cache = get_data_cache()

@@ -12,7 +12,6 @@ from datetime import datetime
 
 from ..config_models import load_config
 from ..analyzers.market_scorer import get_market_scorer
-from ..analyzers.sector_scanner import get_sector_scanner
 from ..decision.aggregator import get_aggregator
 from ..push.pushplus import get_pushplus
 # templates 渲染已移至 pushplus.send_intraday_report 内部调用
@@ -31,7 +30,6 @@ class Orchestrator:
 
     def __init__(self):
         self._market_scorer = get_market_scorer()
-        self._sector_scanner = get_sector_scanner()
         self._aggregator = get_aggregator()
         self._pushplus = get_pushplus()
         self._trade_logger = get_trade_logger()
@@ -87,7 +85,15 @@ class Orchestrator:
         self._do_intraday()
 
     def _do_intraday(self):
-        """盘中统一检查：环境评估 + 全量自选池信号 + 合并推送"""
+        """盘中统一检查：环境评估 + 全量自选池信号 + 合并推送
+
+        P2-12 结构说明（217行，便于维护）：
+        - 步骤1: 综合环境评估
+        - 步骤2: 统一引擎（全量自选池）
+        - 步骤3: 构建信号列表（entry/exit/observation）
+        - 步骤4: P3实盘信号调度器
+        - 步骤5: 合并推送
+        """
         logger.info("====== 盘中统一检查 ======")
 
         # ---- 1. 综合环境评估 ----
@@ -230,11 +236,80 @@ class Orchestrator:
                     len(entry_batch), len(exit_batch), len(observation_batch),
                     len(all_holdings), len(signaled_codes))
 
-        # ---- 5. 合并推送（环境 + 买卖信号 + 观察一条消息） ----
-        self._pushplus.send_intraday_report(env, entry_batch, exit_batch, observation_batch)
+        # ---- 4.5 P3: 实盘信号调度器（Step0 逻辑移植）----
+        # 卖出优先 + 买入按期望排序 + 预算约束 + 主动放弃
+        from ..decision.live_scheduler import schedule_live_signals, format_scheduled_summary
+        # 从 trade_logger 读取真实持仓
+        holdings = []
+        try:
+            holdings = self._trade_logger.get_current_holdings() or []
+        except Exception as e:
+            logger.warning("读取持仓失败，按空持仓处理: %s", e)
+            holdings = []
+        total_asset = 1_000_000  # 默认，后续可从 trade_logger 读
+        try:
+            account = self._trade_logger.get_account_summary() or {}
+            total_asset = account.get('total_asset', 1_000_000)
+        except Exception:
+            pass
 
-        logger.info("盘中检查完成 (模式=%s 进场=%d 出场=%d)",
-                    market_mode, len(entry_batch), len(exit_batch))
+        scheduled = schedule_live_signals(
+            entry_signals=entry_batch,
+            exit_signals=exit_batch,
+            holdings=holdings,
+            total_asset=total_asset,
+            market_mode=market_mode,
+        )
+
+        # 用调度后的信号替换原始信号推送
+        scheduled_entry_batch = []
+        for s in scheduled['buy']:
+            # 找原始信号补充字段
+            orig = next((e for e in entry_batch if e.get('stock_code') == s.stock_code), {})
+            scheduled_entry_batch.append({
+                **orig,
+                'stock_code': s.stock_code,
+                'stock_name': s.stock_name,
+                'entry_type': s.entry_type,
+                'trigger_price': s.trigger_price,
+                'note': s.reason + f' | 调度: {s.schedule_note}',
+                'confidence': s.confidence,
+                'shares': s.shares,
+                'expectancy': s.expectancy,
+            })
+        scheduled_exit_batch = []
+        for s in scheduled['sell']:
+            orig = next((e for e in exit_batch if e.get('stock_code') == s.stock_code), {})
+            scheduled_exit_batch.append({
+                **orig,
+                'stock_code': s.stock_code,
+                'stock_name': s.stock_name,
+                'exit_type': s.exit_type,
+                'trigger_price': s.trigger_price,
+                'reason': s.reason,
+                'urgency': s.urgency,
+            })
+
+        # 记录调度日志
+        schedule_summary = format_scheduled_summary(scheduled)
+        logger.info("信号调度完成:\n%s", schedule_summary)
+
+        # ---- 5. 合并推送（环境 + 调度后买卖信号 + 观察一条消息）----
+        # 推送调度后的信号（而非原始全量信号）
+        self._pushplus.send_intraday_report(env, scheduled_entry_batch, scheduled_exit_batch, observation_batch)
+
+        # 额外推送调度摘要（让用户知道哪些信号被跳过及原因）
+        if scheduled['skipped'] and any(scheduled['skipped'].values()):
+            try:
+                self._pushplus.send("信号调度摘要", f"<pre>{schedule_summary}</pre>", level="常规")
+            except Exception:
+                pass
+
+        stats = scheduled['stats']
+        logger.info("盘中检查完成 (模式=%s 调度后: 进场%d 出场%d, 跳过 买%d 卖%d)",
+                    market_mode, stats['buy_executed'], stats['sell_executed'],
+                    stats['entry_in'] - stats['buy_executed'],
+                    stats['sell_in'] - stats['sell_executed'])
 
 
     def _do_post_market(self):

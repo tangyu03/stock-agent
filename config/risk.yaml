@@ -2,7 +2,6 @@ version: "1.0"
 
 risk:
   # 止损计算
-  stop_loss_multiplier: 0.97  # 支撑位下方3%
 
   # 前置过滤
   stock_filter:

@@ -3,6 +3,15 @@
 三级量化分类 + 交叉诊断
 
 修复#5：量化三级分类标准，替代定性描述
+
+⚠️ DEPRECATED（P1-17 整改 2026-07-25）：
+本模块的 scan() 主路径已废弃，统一由 sector_ranker 提供板块分类。
+cross_diagnose() 逻辑保留供后续复用，但不在 orchestrator/aggregator 主路径调用。
+
+原架构：sector_scanner.scan() → SectorScanResult → cross_diagnose()
+新架构：sector_ranker.classify_stocks() → 直接提供板块分类
+
+如需恢复 scanner，在 aggregator.py 重新引入 get_sector_scanner() 即可。
 """
 import logging
 from typing import Tuple, Dict, Any, Optional, List
@@ -60,7 +69,7 @@ class SectorScanResult:
     main_trend_sectors: List[str] = field(default_factory=list)
     rotational_sectors: List[str] = field(default_factory=list)
     retreating_sectors: List[str] = field(default_factory=list)
-    sector_ranks: Dict[str, dict] = field(default_factory=dict)  # {???: {rank, total, change_3d}}
+    sector_ranks: Dict[str, dict] = field(default_factory=dict)  # {sector_name: {rank, total, change_3d}}  # P2-10: 补全注释
 
 
 class SectorScanner:
