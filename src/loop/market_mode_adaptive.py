@@ -431,6 +431,24 @@ class MarketModeAdaptive:
                 reasons.append(f"外盘扰动: {mode_before}→{mode_after}")
                 mode = mode_after
 
+        # S3 预期落空降级（仅实时，bankuai.md B4）
+        # 盘前读取前一日盘后更新的 DivergenceCounter：连续达标则降一档（幂等，当天只降一次）
+        s3_downgraded = False
+        if date == today_str:
+            try:
+                from ..analyzers.expectation_divergence import (
+                    DivergenceCounter, downgrade_one_notch)
+                counter = DivergenceCounter.load()
+                if counter.should_downgrade(today_str):
+                    mode_after = downgrade_one_notch(mode)
+                    if mode_after != mode:
+                        counter.consume(today_str)
+                        s3_downgraded = True
+                        reasons.append(f"S3预期落空: {mode}→{mode_after}")
+                        mode = mode_after
+            except Exception as e:
+                logger.debug("S3 预期落空降级检查跳过: %s", e)
+
         return {
             "dimensions": dimensions,
             "dist_days": dist,
@@ -438,6 +456,7 @@ class MarketModeAdaptive:
             "mode_before_shock": mode_before,
             "mode": mode,
             "shock_downgraded": shock_downgraded,
+            "s3_downgraded": s3_downgraded,
             "mode_reason": " | ".join(reasons),
         }
 

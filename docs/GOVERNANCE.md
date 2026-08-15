@@ -69,6 +69,21 @@
 | 12 | 套利仓-强势日止盈 | +8% | 强势日落袋 | 帖43/帖2 | 待回标 |
 | 13 | 波段仓-胜率目标 | 55% | 套利腿目标胜率 | 帖43 | 待回标 |
 | 14 | 波段仓-单笔目标 | +20% | 波段腿目标单笔 | 帖4 | 待回标 |
+| 15 | S1 主线行业加权乘数 w_mainline | 1.20 | 主线行业个股信号加权（阶段D行业版） | bankuai.md v2 | 待 C3 回标 |
+| 16 | B1 锚点-大波动阈值 | ≥2.0% | 锚点日判定条件1（|单日涨跌幅|） | bankuai.md v2 | 待回测标定 |
+| 17 | B1 锚点-新高新低窗口 | 20日 | 锚点日判定条件2（收盘创新高/新低） | bankuai.md v2 | 待回测标定 |
+| 18 | B1 锚点-量分位 | ≥70%（250日） | 锚点日判定条件3（与 D1 共用参数源） | bankuai.md v2 | 待回测标定 |
+| 19 | B3 虹吸-上升阈值 | 5日变化率 > +30% | → siphoning（冻结对立面进场） | bankuai.md v2 | 待回测标定 |
+| 20 | B3 虹吸-回落阈值 | 5日变化率 < -20% | → releasing（D1 置信+1） | bankuai.md v2 | 待回测标定 |
+| 21 | B4 S3-主线中位涨幅 | <0% | 预期落空触发（attack 模式） | bankuai.md v2 | 待回测标定 |
+| 22 | B4 S3-涨跌比 | <0.8 | 预期落空触发 | bankuai.md v2 | 待回测标定 |
+| 23 | B4 S3-连续天数 | 连续2日 | 触发阈值连续才输出 force_downgrade | bankuai.md v2 | 待回测标定 |
+| 24 | 概念跟踪子集规模 | ≤30 | 概念指数日拉取上限（子集+动态池龙头） | bankuai.md v2 | 待回测标定 |
+| 25 | S2 行业版"对立面"规则 | 待定（相关聚类/涨跌配对/负相关集合） | 虹吸时冻结谁（洞②） | bankuai.md v2 | 待回测标定 |
+| 26 | S3 主线代理（Week-1） | 当日成交额 Top5 | B5 未建期的主线近似，B5 mainline 上线后替换 | bankuai.md v2 | 待回测标定 |
+| 27 | B5 池入围-成交额 Top | 前60 | R1 入围规则（第1周仅开） | bankuai.md v2 | 待 C1a 回标 |
+| 28 | B5 池入围-5日动量 Top | 前20（第2周开） | R2 入围规则 | bankuai.md v2 | 待 C1a 回标 |
+| 29 | B5 stage/mainline 判定 | rs_10前3 ∩ 虹吸前3 ∩ stage∈{lead,confirm} | mainline 判定（含 stage 朴素规则） | bankuai.md v2 | 待 C3 回标 |
 
 # 十交易日永久回归测试集
 
@@ -86,5 +101,39 @@
 | 8 | 04-13 | 平铺新股 | 待补 | 待填 | 待评 |
 | 9 | 04-15 | 冲高全卖+反T | 待补 | 待填 | 待评 |
 | 10 | 04-20 | 待补 | 待补 | 待填 | 待评 |
+
+---
+
+# 实盘工程审计裁定与修复（2026-08-15）
+
+外部审计"两套引擎、一套外壳"经 3 路代码核查逐条裁定，并完成 P0/P1/P2 修复。
+
+## 审计断言裁定（属实性）
+
+| 断言 | 裁定 | 要点 |
+|---|---|---|
+| 实盘走 market_scorer 六维 | 不属实（方向反） | 实盘主路径 market_mode_adaptive 五维；六维 score() 生产未调用 |
+| Step0 调度器只在回测层 | 不属实（方向反） | live_scheduler 实现在实盘层，orchestrator 调用；回测无该类 |
+| defend 0.5 但无总仓位闸门→可满仓 | 部分属实 | 缺 position_limit×总资产 的总闸 → 已修（P0-2） |
+| 期望+2.92% 渲染为个股收益 | 属实 | 类型历史期望按个股渲染 → 已改标签（P1-3） |
+| 股东户数脏数据参与投票 | 属实 | 上市前后户数跳变误判筹码分散 → 已加守卫（P1-4） |
+| market_scorer 卡死 5.0/defend | 部分属实 | 兜底/硬编码映射属实，DB 大量记录不可证实 → 已用真实分数（P2-6） |
+| trade_logger 343 条全 pending | 部分属实且更严重 | engine 调不存在的方法被静默吞→空持仓幻觉 → 已修（P0-1） |
+| 机构/主力无重试退避 | 部分属实 | adapter 已有重试；机构/主力路径绕开 → 已接入（P2-5） |
+
+## 已完成修复
+
+- **P0-1 实盘持仓来源**：TradeLogger 补 get_current_holdings()（add_plans 已执行计划）/get_account_summary()，消除 engine 调不存在方法的 AttributeError；持仓为空时明确告警并说明闸门兜底。
+- **P0-2 总仓位闸门**：schedule_live_signals 加 position_limit 参数，买入合计（含已有持仓成本）≤ position_limit×total_asset，新增 buy_position_limit 跳过类别；engine 传入 env 的真实 position_limit。
+- **P1-3 期望标签**：调度文案改"入场类型历史期望X%（非个股收益预测）"。
+- **P1-4 股东户数守卫**：数量级（<100 户）与单期跳变（+300%/-80%）异常 → 投 0 票，不再误判筹码分散。
+- **P2-5 重试退避**：akshare_safe 新增 call_ak_with_retry（超时+指数退避），机构 3 个 akshare 调用点（融资余额/龙虎榜/股东户数）接入。
+- **P2-6 评分真实化**：aggregator 改用 score_dimensions 的 raw_score 真实连续分，移除 attack8/defend5/retreat2 硬编码；market_scorer.score() 标注"非实盘主路径"澄清架构。
+- **P1-3 交易反馈闭环（推送后等待回执）**：db 迁移 trade_logs.shares 列 + 连接自愈（历史 close() 后重建）；engine 推送后落库 pending（当日同股同类型去重）；新增 scripts/trade_feedback.py 回执 CLI（list/execute/ignore/modified/holdings）；get_current_holdings 优先从 executed 记录聚合（buy 加仓/sell 减仓、成交价作成本），add_plans 降级为回退口径。
+
+## 遗留（未改，需后续决策）
+
+- 六维 market_scorer.score() 为保留死代码：接活需重新验证，未做。
+- "91.3% 资金不足跳过" 为审计推算，代码与日志均无法证实（最接近官方口径 88%）。
 
 ---

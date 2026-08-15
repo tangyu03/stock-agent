@@ -196,11 +196,9 @@ def render_entry_signal(data):
     env_parts = []
     if market_mode: env_parts.append(f"市场:{'进攻' if market_mode=='attack' else '防守' if market_mode=='defend' else '撤退'}")
 
-    # 板块显示：名称(状态)，概念有独立状态时追加
+    # 板块显示：名称(状态)
     sector_name = data.get("sector_name","") or data.get("sw_level2","")
     sw2 = data.get("sw_level2","")
-    concepts = data.get("concepts","")
-    concept_status = data.get("concept_status","")
 
     if sector_name:
         # 区分显示：如果 sw_level2 与 sector_name 不同，说明 sector_name 是 Level1，补充显示 Level2
@@ -210,11 +208,6 @@ def render_entry_signal(data):
             sector_display = f"{sector_name}({_sector_label(sector_status)})"
     else:
         sector_display = f"{_sector_label(sector_status)}"
-
-    if concepts and concept_status:
-        sector_display += f" | 概念:{concepts}({concept_status})"
-    elif concepts:
-        sector_display += f" | 概念:{concepts}"
 
     env_parts.append(f"板块:{sector_display}")
     content += f"<b>环境</b><br/>&nbsp;&nbsp;{' | '.join(env_parts)}<br/><br/>"
@@ -300,13 +293,9 @@ def render_exit_signal(data):
     sn = f"{sector_name}:" if sector_name else ""
     sw2 = data.get("sw_level2","")
     sw3 = data.get("sw_level3","")
-    concepts = data.get("concepts","")
     extra = ""
-    if sw2: extra += f" | 2级:{sw2}"
-    if sw3: extra += f" | 3级:{sw3}"
-    if concepts: extra += f" | 概念:{concepts}"
-    concept_status = data.get("concept_status","")
-    if concept_status: extra += f"({concept_status})"
+    if sw2 and sw2 != sector_name: extra += f" | 2级:{sw2}"
+    if sw3 and sw3 != sw2 and sw3 != sector_name: extra += f" | 3级:{sw3}"
     env_parts.append(f"板块:{sn}{_sector_label(sector_status)}{extra}")
     if holding_rating:
         rd = data.get("rating_detail", "")
@@ -434,13 +423,9 @@ def render_holding_health(data):
     sn = f"{sector_name}:" if sector_name else ""
     sw2 = data.get("sw_level2","")
     sw3 = data.get("sw_level3","")
-    concepts = data.get("concepts","")
     extra = ""
-    if sw2: extra += f" | 2级:{sw2}"
-    if sw3: extra += f" | 3级:{sw3}"
-    if concepts: extra += f" | 概念:{concepts}"
-    concept_status = data.get("concept_status","")
-    if concept_status: extra += f"({concept_status})"
+    if sw2 and sw2 != sector_name: extra += f" | 2级:{sw2}"
+    if sw3 and sw3 != sw2 and sw3 != sector_name: extra += f" | 3级:{sw3}"
     content += f"<b>综合评级:{rating}{rd_str}</b><br/>&nbsp;&nbsp;趋势:{trend} | 板块:{sn}{_sector_label(sector)}{extra}<br/>&nbsp;&nbsp;资金:{fund_display} | 事件:{event}<br/>&nbsp;&nbsp;浮盈:{_pct(pnl)}<br/><br/>"
     ma5, ma10, ma20 = data.get("ma5"), data.get("ma10"), data.get("ma20")
     if any(v is not None for v in [ma5,ma10,ma20]):

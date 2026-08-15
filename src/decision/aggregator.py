@@ -125,15 +125,24 @@ class Aggregator:
                 if index_kline:
                     mode_adaptive = get_market_mode_adaptive()
                     today_str = index_kline[-1]["date"]
-                    mode = mode_adaptive.get_mode_for_date(today_str, index_kline)
-                    summary.market_mode = mode
-                    # 获取模式判定原因（真实数据驱动）
+                    # P2-6: 一次评分同时取模式与真实连续分数（score_dimensions 含 raw_score 0-10，
+                    # 与主路径 assess_daily 同源），不再硬编码 attack8/defend5/retreat2 近似，
+                    # 消除"评分卡死 5.0"的表象（defend 只表示档位，分数反映真实 5 维推导）
                     dim_result = mode_adaptive.score_dimensions(today_str, index_kline)
-                    if dim_result:
+                    if not dim_result:
+                        mode = "defend"
+                        summary.market_mode = mode
+                        summary.mode_reason = ""
+                        summary.position_limit = 0.5
+                        summary.market_score = 5.0
+                    else:
+                        mode = dim_result.get("mode", "defend")
+                        summary.market_mode = mode
                         summary.mode_reason = dim_result.get("mode_reason", "")
-                    summary.position_limit = {"attack": 0.8, "defend": 0.5, "retreat": 0.1}.get(mode, 0.5)
-                    summary.market_score = {"attack": 8.0, "defend": 5.0, "retreat": 2.0}.get(mode, 5.0)
-                    logger.info("自适应模式: %s（上证指数 %s 收盘 %s）", mode, today_str, index_kline[-1]["close"])
+                        summary.position_limit = {"attack": 0.8, "defend": 0.5, "retreat": 0.1}.get(mode, 0.5)
+                        summary.market_score = dim_result.get("raw_score", 5.0)
+                    logger.info("自适应模式: %s（上证指数 %s 收盘 %s，评分 %.1f）",
+                                mode, today_str, index_kline[-1]["close"], summary.market_score)
                     self._save_market_score(today_str, summary.market_score, mode)
 
                     # 大小盘风格轮动
@@ -356,7 +365,7 @@ class Aggregator:
         # 生成摘要
         summary.pre_market_summary = self._generate_pre_market_summary(summary)
 
-        # 注入个股板块/概念/三级行业字段到所有信号
+        # 注入个股板块/三级行业字段到所有信号（概念模块已移除）
         code_lookup: Dict[str, Dict] = {}
         for h in (stocks or []):
             if isinstance(h, dict) and h.get("code"):
@@ -366,23 +375,11 @@ class Aggregator:
             h = code_lookup.get(sig.stock_code, {})
             sig.sw_level2 = h.get("sw_level2", "")
             sig.sw_level3 = h.get("sw_level3", "")
-            sig.concepts = h.get("concepts", "")
-            sig.concept_status = h.get("concept_status", "")
-            cs = h.get("concept_status", "")
-            if cs:
-                _cs_map = {"主线": "main_trend", "轮动": "rotational", "退潮": "retreating"}
-                sig.sector_status = _cs_map.get(cs, sig.sector_status)
 
         for sig in summary.exit_signals:
             h = code_lookup.get(sig.stock_code, {})
             sig.sw_level2 = h.get("sw_level2", "")
             sig.sw_level3 = h.get("sw_level3", "")
-            sig.concepts = h.get("concepts", "")
-            sig.concept_status = h.get("concept_status", "")
-            cs = h.get("concept_status", "")
-            if cs:
-                _cs_map = {"主线": "main_trend", "轮动": "rotational", "退潮": "retreating"}
-                sig.sector_status = _cs_map.get(cs, sig.sector_status)
 
         logger.info("====== v3 每日分析完成 ======")
         return summary
@@ -552,8 +549,8 @@ class Aggregator:
             conn.close()
 
     def _auto_fill_sectors(self, holdings: List[Dict], watchlist: List):
-        """自动检测并填充持仓的板块 + SW 三级行业 + 概念板块"""
-        from ..data_layer.sw_industry import fetch_stock_sector, fetch_stock_sw_industry_full, fetch_stock_concepts
+        """自动检测并填充持仓的板块 + SW 三级行业（概念模块已移除）"""
+        from ..data_layer.sw_industry import fetch_stock_sector, fetch_stock_sw_industry_full
 
         for h in (holdings or []):
             if not isinstance(h, dict):
@@ -575,25 +572,6 @@ class Aggregator:
                         h["sw_level3"] = full["level3"]
                 except Exception:
                     pass
-            if not h.get("concepts"):
-                try:
-                    cons = fetch_stock_concepts(code)
-                    if cons:
-                        h["concepts"] = ",".join(cons)
-                except Exception:
-                    pass
-            if not h.get("concept_status") and h.get("concepts"):
-                try:
-                    from ..data_layer.sw_industry import fetch_concept_status, classify_concept_status
-                    first_concept = h["concepts"].split(",")[0].strip()
-                    cs = fetch_concept_status(first_concept)
-                    if cs:
-                        h["concept_status"] = classify_concept_status(
-                            cs.get("ma_alignment", ""),
-                            cs.get("above_ma20", False)
-                        )
-                except Exception:
-                    pass
 
     def _build_sector_classification_map(
         self,
@@ -601,12 +579,10 @@ class Aggregator:
         holdings: List[Dict],
         watchlist: List,
     ) -> Dict[str, str]:
-        """构建 股票代码→板块状态 映射，概念板块状态优先覆盖 SW 一级判定"""
+        """构建 股票代码→板块状态 映射（只按板块判定，概念模块已移除）"""
         sector_class = {}
         for sr in sector_result.sectors:
             sector_class[sr.name] = sr.classification.value
-
-        _concept_to_sw = {"主线": "main_trend", "轮动": "rotational", "退潮": "retreating"}
 
         code_to_sector_status: Dict[str, str] = {}
 
@@ -615,20 +591,13 @@ class Aggregator:
             if not h or not isinstance(h, dict):
                 continue
             code = h.get("code", "")
-            concept_status = h.get("concept_status", "")
-            if concept_status and concept_status in _concept_to_sw:
-                code_to_sector_status[code] = _concept_to_sw[concept_status]
-            else:
-                sector_name = h.get("sector", "")
-                if sector_name in sector_class:
-                    code_to_sector_status[code] = sector_class[sector_name]
+            sector_name = h.get("sector", "")
+            if sector_name in sector_class:
+                code_to_sector_status[code] = sector_class[sector_name]
 
         for item in (watchlist or []):
             code = item.code if hasattr(item, 'code') else item.get("code", "")
-            cs = item.concept_status if hasattr(item, 'concept_status') else item.get("concept_status", "")
-            if cs and cs in _concept_to_sw:
-                code_to_sector_status[code] = _concept_to_sw[cs]
-            elif hasattr(item, 'sector') and hasattr(item, 'code'):
+            if hasattr(item, 'sector') and hasattr(item, 'code'):
                 if item.sector and item.sector in sector_class:
                     code_to_sector_status[item.code] = sector_class[item.sector]
             elif isinstance(item, dict):

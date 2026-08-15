@@ -7,7 +7,7 @@ import json
 from typing import Dict, Any, Optional, List
 from datetime import datetime, date
 
-from ..db import get_connection
+from ..db import get_connection, get_conn
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,8 @@ class TradeLogger:
         actual_price: float = 0,
         actual_position: float = 0,
         note: str = "",
-    ):
+        shares: float = 0,
+    ) -> Optional[int]:
         """
         记录信号日志
 
@@ -38,59 +39,173 @@ class TradeLogger:
             actual_price: 实际成交价
             actual_position: 实际仓位
             note: 备注
+            shares: 建议/实际股数（P1-3 反馈闭环，executed 后用于聚合持仓）
+
+        Returns:
+            新记录 id（供回执脚本 update_action 定位）；失败返回 None
         """
-        conn = get_connection()
         try:
-            cursor = conn.cursor()
-            now = datetime.now()
-            cursor.execute(
-                """INSERT INTO trade_logs
-                (date, time, stock_code, stock_name, signal_type, entry_type, exit_type,
-                 trigger_price, stop_loss, target_price, suggested_position,
-                 mode_at_signal, sector_status, market_score,
-                 user_action, actual_price, actual_position, note)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    now.strftime("%Y-%m-%d"),
-                    now.strftime("%H:%M:%S"),
-                    stock_code,
-                    stock_name,
-                    signal_type,
-                    signal_data.get("entry_type", ""),
-                    signal_data.get("exit_type", ""),
-                    signal_data.get("trigger_price", 0),
-                    signal_data.get("stop_loss", 0),
-                    signal_data.get("target_price", 0),
-                    signal_data.get("suggested_position", 0),
-                    signal_data.get("mode_at_signal", ""),
-                    signal_data.get("sector_status", ""),
-                    signal_data.get("market_score", 0),
-                    user_action,
-                    actual_price,
-                    actual_position,
-                    note,
-                ),
-            )
-            conn.commit()
+            with get_conn() as conn:
+                cursor = conn.cursor()
+                now = datetime.now()
+                cursor.execute(
+                    """INSERT INTO trade_logs
+                    (date, time, stock_code, stock_name, signal_type, entry_type, exit_type,
+                     trigger_price, shares, stop_loss, target_price, suggested_position,
+                     mode_at_signal, sector_status, market_score,
+                     user_action, actual_price, actual_position, note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        now.strftime("%Y-%m-%d"),
+                        now.strftime("%H:%M:%S"),
+                        stock_code,
+                        stock_name,
+                        signal_type,
+                        signal_data.get("entry_type", ""),
+                        signal_data.get("exit_type", ""),
+                        signal_data.get("trigger_price", 0),
+                        shares,
+                        signal_data.get("stop_loss", 0),
+                        signal_data.get("target_price", 0),
+                        signal_data.get("suggested_position", 0),
+                        signal_data.get("mode_at_signal", ""),
+                        signal_data.get("sector_status", ""),
+                        signal_data.get("market_score", 0),
+                        user_action,
+                        actual_price,
+                        actual_position,
+                        note,
+                    ),
+                )
+                conn.commit()
+                return cursor.lastrowid
         except Exception as e:
             logger.error("记录交易日志失败: %s", e)
-        finally:
-            conn.close()
+            return None
 
-    def update_action(self, log_id: int, user_action: str, actual_price: float = 0, actual_position: float = 0):
-        """更新用户操作"""
-        conn = get_connection()
+    def update_action(self, log_id: int, user_action: str, actual_price: float = 0, actual_position: float = 0) -> bool:
+        """更新用户操作（回执脚本调用）"""
         try:
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE trade_logs SET user_action = ?, actual_price = ?, actual_position = ? WHERE id = ?",
-                (user_action, actual_price, actual_position, log_id),
-            )
-            conn.commit()
+            with get_conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE trade_logs SET user_action = ?, actual_price = ?, actual_position = ? WHERE id = ?",
+                    (user_action, actual_price, actual_position, log_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
         except Exception as e:
             logger.error("更新交易日志失败: %s", e)
-        finally:
-            conn.close()
+            return False
+
+    def get_current_holdings(self) -> List[Dict]:
+        """获取当前持仓（P1-3 反馈闭环：优先 trade_logs 已执行记录聚合，无则回退 add_plans）
+
+        口径 1（首选）：trade_logs 中 user_action='executed' 的 buy/t0_buy 累加股数、
+            sell/t0_sell 扣减股数；cost_price 取最近一次 executed 买入的 actual_price
+            （未回填时用 trigger_price）。净持仓 >0 才返回。
+        口径 2（回退）：portfolio.yaml add_plans 中 status='active' 且任一 level.executed=True。
+        两口径都为空时返回空列表 —— 调度器按空仓运行，买入上限由
+        live_scheduler 的 position_limit 总仓位闸门兜底。
+        """
+        holdings = self._aggregate_executed_holdings()
+        if holdings:
+            return holdings
+        # 回退：add_plans 已执行计划（legacy 口径）
+        try:
+            from ..config_models import load_config
+            portfolio = load_config("portfolio.yaml")
+        except Exception as e:
+            logger.error("读取 portfolio.yaml 失败: %s", e)
+            return []
+        result = []
+        for plan in portfolio.get("add_plans", []) or []:
+            if not isinstance(plan, dict) or plan.get("status") != "active":
+                continue
+            levels = plan.get("levels", []) or []
+            if not any(lev.get("executed") for lev in levels):
+                continue
+            code = plan.get("stock_code", "")
+            entry_price = plan.get("entry_price", 0) or 0
+            if not code or entry_price <= 0:
+                continue
+            shares = int((250_000 / entry_price) // 100) * 100
+            result.append({
+                "code": code,
+                "stock_name": plan.get("stock_name", code),
+                "shares": shares,
+                "cost_price": entry_price,
+            })
+        return result
+
+    def _aggregate_executed_holdings(self) -> List[Dict]:
+        """从 trade_logs 已执行记录聚合净持仓（P1-3）"""
+        try:
+            with get_conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT stock_code, stock_name, signal_type, shares FROM trade_logs "
+                    "WHERE user_action='executed' AND shares > 0 "
+                    "AND signal_type IN ('buy','sell','t0_buy','t0_sell') "
+                    "ORDER BY date, time"
+                )
+                rows = cursor.fetchall()
+        except Exception as e:
+            logger.error("读取已执行交易失败: %s", e)
+            return []
+        net: Dict[str, Dict] = {}
+        for r in rows:
+            code = r["stock_code"]
+            d = net.setdefault(code, {"code": code, "stock_name": r["stock_name"], "shares": 0})
+            sign = 1 if r["signal_type"] in ("buy", "t0_buy") else -1
+            d["shares"] += sign * int(r["shares"] or 0)
+        for code in net:
+            net[code]["cost_price"] = self._last_executed_buy_price(code)
+        return [v for v in net.values() if v["shares"] > 0]
+
+    def _last_executed_buy_price(self, code: str) -> float:
+        """每只取最近一次 executed 买入的 actual_price（未回填用 trigger_price）"""
+        try:
+            with get_conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT actual_price, trigger_price FROM trade_logs "
+                    "WHERE stock_code=? AND user_action='executed' "
+                    "AND signal_type IN ('buy','t0_buy') "
+                    "ORDER BY date DESC, time DESC, id DESC LIMIT 1",
+                    (code,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    return float((row["actual_price"] or 0) or (row["trigger_price"] or 0))
+        except Exception as e:
+            logger.error("读取买入均价失败 %s: %s", code, e)
+        return 0.0
+
+    def get_pending_signals(self, target_date: Optional[str] = None) -> List[Dict]:
+        """获取待回执信号（user_action='pending'），供回执脚本列出（P1-3）"""
+        try:
+            with get_conn() as conn:
+                cursor = conn.cursor()
+                if target_date:
+                    cursor.execute(
+                        "SELECT * FROM trade_logs WHERE user_action='pending' AND date=? ORDER BY time",
+                        (target_date,),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT * FROM trade_logs WHERE user_action='pending' ORDER BY date DESC, time")
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error("获取待回执信号失败: %s", e)
+            return []
+
+    def get_account_summary(self) -> Dict:
+        """获取账户摘要（P0-1）。当前无现金流水表，返回默认总资产 1,000,000。
+
+        后续接入真实账户接口后替换该实现。
+        """
+        return {"total_asset": 1_000_000}
 
     def get_today_logs(self) -> List[Dict]:
         """获取今日日志"""

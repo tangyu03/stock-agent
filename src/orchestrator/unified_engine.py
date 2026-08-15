@@ -85,7 +85,7 @@ def run_unified_analysis(
     sector_map = sector_map or {}
     all_codes = [s.get("code", "") for s in stocks if s.get("code")]
 
-    # sector_ranker 统一提供：板块分类 + 行业名 + 概念名（不依赖单独的 SW/概念反查索引）
+    # sector_ranker 统一提供：板块分类 + 行业名（概念模块已移除，分类只按行业）
     stock_sector: Dict[str, str] = {}           # code → 板块名称
     stock_sector_status: Dict[str, str] = {}    # code → main_trend/rotational/retreating/unknown
     ranker_result: Dict[str, dict] = {}         # code → {classification, sectors, best_sector}
@@ -96,7 +96,12 @@ def run_unified_analysis(
             stock_sector_status[code] = info.get("classification", "unknown")
             sectors = info.get("sectors", [])
             if sectors:
-                best_sector = max(sectors, key=lambda x: abs(x.get("change_pct", 0)))
+                # sectors 只含行业类型（东财行业/新浪行业/同花顺行业/THS行业-计算/默认兜底），
+                # 取涨跌幅绝对值最大的作为"板块"名。
+                industry_types = ("东财行业", "行业", "同花顺行业", "THS行业-计算")
+                industry_pool = [s for s in sectors if s.get("type") in industry_types]
+                pool = industry_pool or sectors
+                best_sector = max(pool, key=lambda x: abs(x.get("change_pct", 0)))
                 stock_sector[code] = best_sector.get("name", "")
         logger.info("sector_ranker 板块状态: %s",
                      {c: v for c, v in stock_sector_status.items() if v != "unknown"})
@@ -157,17 +162,12 @@ def run_unified_analysis(
         )
         batch.exits.extend(exit_sigs)
 
-    # -------- 3. 注入板块/概念信息到信号 --------
+    # -------- 3. 注入板块信息到信号 --------
     # 复用 sector_ranker 已有数据（stock_sector + ranker_result），不触发额外 API 调用
     def _get_sector_info(code: str) -> Dict:
-        info = {"sector_name": "", "sw_level2": "", "concepts": ""}
+        info = {"sector_name": "", "sw_level2": ""}
         info["sector_name"] = stock_sector.get(code, "")
         info["sw_level2"] = stock_sector.get(code, "")
-        # 概念名从 ranker 的 sectors 中提取（type="概念"）
-        rd = ranker_result.get(code, {})
-        rd_sectors = rd.get("sectors", [])
-        concepts = [s["name"] for s in rd_sectors if s.get("type") == "概念"]
-        info["concepts"] = ",".join(concepts[:3])
         return info
 
     for sig in batch.entries:
@@ -176,8 +176,6 @@ def run_unified_analysis(
             sig.sector_name = info["sector_name"]
         if not getattr(sig, "sw_level2", "") and info["sw_level2"]:
             sig.sw_level2 = info["sw_level2"]
-        if not getattr(sig, "concepts", "") and info["concepts"]:
-            sig.concepts = info["concepts"]
 
     for sig in batch.exits:
         if isinstance(sig, dict):
@@ -185,8 +183,6 @@ def run_unified_analysis(
         info = _get_sector_info(sig.stock_code)
         if not getattr(sig, "sector_name", "") and info["sector_name"]:
             sig.sector_name = info["sector_name"]
-        if not getattr(sig, "concepts", "") and info["concepts"]:
-            sig.concepts = info["concepts"]
 
     logger.info("统一引擎完成: 进场=%d 出场=%d",
                 len(batch.entries), len(batch.exits))

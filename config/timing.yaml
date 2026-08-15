@@ -102,7 +102,7 @@ timing:
     ma120_window: 120                    # MA120 窗口
     volume_ma60_window: 60               # 60 日均量线
     recent_extreme_window: 20            # 近 N 日最高/最低
-    volume_ratio_avg_window: 21          # 量比均量窗口（21 条算，剔除当日）
+    volume_ratio_avg_window: 6           # 收盘量比均量窗口（6 条算，剔除当日 = 前5日均量；标准量比收盘时=当日量/前5日均量）
     shrinking_volume_ratio: 1.0          # 设计问题5: 量比 < 1.0 → 缩量回踩候选（原 0.8）
     pullback_ma5_bias_tolerance: 0.03    # 设计问题5: MA5 乖离 ±3% → 视为回踩（原 ±1%）
     pullback_ma10_bias_tolerance: 0.03   # 设计问题5: MA10 乖离 ±3% → 视为回踩（原 ±1%）

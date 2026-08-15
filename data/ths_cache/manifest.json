@@ -1,0 +1,770 @@
+{
+ "IT服务": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "专用设备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "中药": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "互联网电商": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "保险": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "元件": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "光伏设备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "光学光电子": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "公路铁路运输": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "其他电子": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "其他电源设备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "其他社会服务": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:30"
+ },
+ "养殖业": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "军工电子": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "军工装备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "农产品加工": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "农化制品": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "包装印刷": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "化学制品": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "化学制药": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "化学原料": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "化学纤维": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "医疗器械": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "医疗服务": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "医药商业": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "半导体": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "厨卫电器": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "塑料制品": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "多元金融": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "家居用品": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "小家电": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "小金属": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "工业金属": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "工程机械": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "建筑材料": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "建筑装饰": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "影视院线": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "房地产": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "教育": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "文化传媒": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "旅游及酒店": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "服装家纺": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "机场航运": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "橡胶制品": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "汽车整车": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:31"
+ },
+ "汽车服务及其他": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "汽车零部件": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "油气开采及服务": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "消费电子": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "港口航运": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "游戏": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "煤炭开采加工": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "燃气": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "物流": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "环保设备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "环境治理": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "生物制品": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "电力": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "电子化学品": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "电机": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "电池": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "电网设备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "白色家电": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "白酒": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "石油加工贸易": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "种植业与林业": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "纺织制造": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "综合": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "美容护理": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "能源金属": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "自动化设备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "计算机设备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "证券": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "贵金属": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "贸易": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "轨交设备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "软件开发": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "通信服务": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "通信设备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "通用设备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "造纸": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:32"
+ },
+ "金属新材料": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "钢铁": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "银行": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "零售": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "非金属材料": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "风电设备": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "食品加工制造": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "饮料制造": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "黑色家电": {
+  "type": "industry",
+  "rows": 1604,
+  "first_date": "2020-01-02",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "MLCC概念": {
+  "type": "concept",
+  "rows": 10,
+  "first_date": "2026-08-03",
+  "last_date": "2026-08-14",
+  "history_limited": true,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "PCB概念": {
+  "type": "concept",
+  "rows": 1100,
+  "first_date": "2022-01-28",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "共封装光学(CPO)": {
+  "type": "concept",
+  "rows": 853,
+  "first_date": "2023-02-10",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "存储芯片": {
+  "type": "concept",
+  "rows": 810,
+  "first_date": "2023-04-13",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "液冷服务器": {
+  "type": "concept",
+  "rows": 800,
+  "first_date": "2023-04-27",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ },
+ "算力租赁": {
+  "type": "concept",
+  "rows": 771,
+  "first_date": "2023-06-12",
+  "last_date": "2026-08-14",
+  "history_limited": false,
+  "updated_at": "2026-08-15 15:44:33"
+ }
+}

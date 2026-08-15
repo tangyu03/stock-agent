@@ -154,8 +154,6 @@ class Orchestrator:
                 "sector_status": sig.sector_status,
                 "sector_name": getattr(sig, "sector_name", "") or "",
                 "sw_level2": getattr(sig, "sw_level2", "") or "",
-                "concepts": getattr(sig, "concepts", "") or "",
-                "concept_status": getattr(sig, "concept_status", "") or "",
                 "note": sig.trigger_reason or "",
                 "confidence": getattr(sig, "confidence", "中"),
                 "market_mode": market_mode,
@@ -185,8 +183,6 @@ class Orchestrator:
                     "sector_status": getattr(sig, "sector_status", ""),
                     "sector_name": getattr(sig, "sector_name", ""),
                     "sw_level2": getattr(sig, "sw_level2", "") or "",
-                    "concepts": getattr(sig, "concepts", "") or "",
-                    "concept_status": getattr(sig, "concept_status", "") or "",
                     "sector_rank": (sector_ranks.get(getattr(sig, "sector_name", ""), {}).get("rank") if sector_ranks else None),
                     "sector_rank_total": (sector_ranks.get(getattr(sig, "sector_name", ""), {}).get("total") if sector_ranks else None),
                     "current_price": td.get("current_price", getattr(sig, "trigger_price", 0)),
@@ -239,19 +235,26 @@ class Orchestrator:
         # ---- 4.5 P3: 实盘信号调度器（Step0 逻辑移植）----
         # 卖出优先 + 买入按期望排序 + 预算约束 + 主动放弃
         from ..decision.live_scheduler import schedule_live_signals, format_scheduled_summary
-        # 从 trade_logger 读取真实持仓
+        # 从 trade_logger 读取真实持仓（P0-1：无已执行记录时按空仓运行，不再静默）
         holdings = []
         try:
             holdings = self._trade_logger.get_current_holdings() or []
         except Exception as e:
-            logger.warning("读取持仓失败，按空持仓处理: %s", e)
+            logger.error("读取持仓失败，按空持仓处理: %s", e, exc_info=True)
             holdings = []
+        if not holdings:
+            logger.warning(
+                "未读到任何已执行持仓（trade_logger 闭环未建立/add_plans 均未执行）——调度按空仓运行。"
+                "买入合计已由 P0-2 总仓位闸门（position_limit=%.2f, 上限 %.0f 万）兜底，防止信号满载打到满仓。",
+                env.get("position_limit", 0.5),
+                env.get("position_limit", 0.5) * 1_000_000 / 10_000,
+            )
         total_asset = 1_000_000  # 默认，后续可从 trade_logger 读
         try:
             account = self._trade_logger.get_account_summary() or {}
             total_asset = account.get('total_asset', 1_000_000)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("读取账户摘要失败，按默认总资产: %s", e)
 
         scheduled = schedule_live_signals(
             entry_signals=entry_batch,
@@ -259,6 +262,7 @@ class Orchestrator:
             holdings=holdings,
             total_asset=total_asset,
             market_mode=market_mode,
+            position_limit=env.get("position_limit", 0.5),
         )
 
         # 用调度后的信号替换原始信号推送
@@ -304,6 +308,53 @@ class Orchestrator:
                 self._pushplus.send("信号调度摘要", f"<pre>{schedule_summary}</pre>", level="常规")
             except Exception:
                 pass
+
+        # ---- 5.5 P1-3: 推送后落库（user_action=pending，等待回执脚本确认执行）----
+        # 去重：当日同股同类型 pending 已存在则跳过（盘中多次运行不重复落库）
+        today = datetime.now().strftime("%Y-%m-%d")
+        existing_pending = self._trade_logger.get_pending_signals(today)
+        pending_keys = {(p["stock_code"], p["signal_type"], p["entry_type"] or p["exit_type"]) for p in existing_pending}
+        logged = {"buy": 0, "sell": 0}
+        for s in scheduled['buy']:
+            key = (s.stock_code, "buy", s.entry_type or "")
+            if key in pending_keys:
+                continue
+            self._trade_logger.log_signal(
+                signal_type="buy",
+                stock_code=s.stock_code,
+                stock_name=s.stock_name,
+                signal_data={
+                    "entry_type": s.entry_type,
+                    "trigger_price": s.trigger_price,
+                    "mode_at_signal": s.market_mode,
+                    "market_score": env.get("market_score", 0),
+                    "suggested_position": min(s.shares * s.trigger_price / max(total_asset, 1), 0.25),
+                },
+                shares=s.shares,
+                note=s.schedule_note,
+            )
+            logged["buy"] += 1
+        for s in scheduled['sell']:
+            key = (s.stock_code, "sell", s.exit_type or "")
+            if key in pending_keys:
+                continue
+            sell_hold = next((h for h in holdings if h.get("code") == s.stock_code), {})
+            self._trade_logger.log_signal(
+                signal_type="sell",
+                stock_code=s.stock_code,
+                stock_name=s.stock_name,
+                signal_data={
+                    "exit_type": s.exit_type,
+                    "trigger_price": s.trigger_price,
+                    "mode_at_signal": s.market_mode,
+                    "market_score": env.get("market_score", 0),
+                },
+                shares=sell_hold.get("shares", 0),
+                note=s.reason or s.schedule_note,
+            )
+            logged["sell"] += 1
+        if logged["buy"] or logged["sell"]:
+            logger.info("信号已落库待回执: 买%d 卖%d", logged["buy"], logged["sell"])
 
         stats = scheduled['stats']
         logger.info("盘中检查完成 (模式=%s 调度后: 进场%d 出场%d, 跳过 买%d 卖%d)",

@@ -28,15 +28,29 @@ def get_connection() -> sqlite3.Connection:
 
     P1-13: thread-local 复用连接
     同一线程多次调用返回同一连接，避免重复创建/关闭
+
+    P1-13 补充：若线程缓存连接已被历史方法显式 close()，自动重建，避免返回已关闭连接。
     """
     conn = getattr(_thread_local, 'conn', None)
     if conn is None:
-        conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA foreign_keys=ON")
+        conn = _open_connection()
         _thread_local.conn = conn
+        return conn
+    try:
+        conn.execute("SELECT 1")
+    except (sqlite3.ProgrammingError, sqlite3.OperationalError):
+        conn = _open_connection()
+        _thread_local.conn = conn
+    return conn
+
+
+def _open_connection() -> sqlite3.Connection:
+    """新建一条 WAL 连接（线程内唯一）"""
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -154,6 +168,7 @@ def init_db():
         entry_type TEXT,
         exit_type TEXT,
         trigger_price REAL,
+        shares REAL,
         stop_loss REAL,
         target_price REAL,
         suggested_position REAL,
@@ -204,7 +219,23 @@ def init_db():
     """)
 
     conn.commit()
+    _migrate()
     logger.info("Database initialized successfully at %s", DB_PATH)
+
+
+def _migrate():
+    """增量迁移：为已存在的表补充新增列（SQLite 不支持 ADD COLUMN IF NOT EXISTS）"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    # trade_logs.shares（P1-3 反馈闭环：记录建议股数，供 executed 后聚合持仓）
+    try:
+        cols = {r[1] for r in cursor.execute("PRAGMA table_info(trade_logs)")}
+        if "shares" not in cols:
+            cursor.execute("ALTER TABLE trade_logs ADD COLUMN shares REAL")
+            conn.commit()
+            logger.info("迁移: trade_logs 新增 shares 列")
+    except Exception as e:
+        logger.error("迁移 trade_logs.shares 失败: %s", e)
 
 
 if __name__ == "__main__":

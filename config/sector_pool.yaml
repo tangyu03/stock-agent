@@ -1,0 +1,72 @@
+version: "1.0"
+
+# ============================================================
+# S系列 板块层配置（bankuai.md v2）
+# 数据源：同花顺 THS（本环境实测可用，2026-08-15 验证）
+# 消费端启用前，全部阈值为初值，待回测标定后转正
+# （每个参数在 docs/GOVERNANCE.md 推断参数登记册有对应条目）
+# ============================================================
+
+sector_pool:
+
+  # ---- 概念跟踪子集（A1，博主流水板块，以 THS 实测名称为准）----
+  # 实测映射（2026-08-15）：CPO→共封装光学(CPO)、MLCC→MLCC概念、PCB→PCB概念。
+  # 已知缺口：CXO、AI智能营销 在 THS 375 概念库无对应（医药外包/营销类缺失），
+  # 不静默替换为近义词（避免测量语义漂移），先搁置待博主口径或数据源变化。
+  concept_tracklist:
+    - "共封装光学(CPO)"
+    - "液冷服务器"
+    - "存储芯片"
+    - "MLCC概念"
+    - "算力租赁"
+    - "PCB概念"
+  max_tracked_concepts: 30          # 概念指数日拉取上限（跟踪子集 + 动态池当前龙头概念）
+
+  # ---- 锚点判定（B1）----
+  anchor:
+    big_move_pct: 2.0               # |单日涨跌幅| >= 2.0% 记为锚点候选
+    new_high_low_window: 20         # 收盘创20日新高/新低
+    volume_pctile: 70               # 成交量250日分位 >= 70（与 D1 共用参数源）
+    volume_pctile_window: 250
+
+  # ---- RS 计算（B2）----
+  rs:
+    windows: [5, 10]                # rs_n 窗口
+    bench: "上证指数"               # 已有数据，零新增调用
+
+  # ---- 虹吸度（B3）----
+  suction:
+    rising: 0.30                    # 5日变化率 > +30% → siphoning（冻结对立面进场）
+    falling: -0.20                  # 5日变化率 < -20% → releasing（D1 置信+1）
+    lookback_days: 5
+
+  # ---- S3 预期验证（B4）----
+  expectation_divergence:
+    median_chg: 0.0                 # 主线板块中位数涨幅 < 0 触发
+    ad_ratio: 0.8                   # 涨跌比 < 0.8 触发
+    consecutive_days: 2             # 连续2日触发才输出 force_downgrade
+
+  # ---- S3 主线代理（Week-1 临时，B5 mainline 上线后替换调用方，GOVERNANCE #26）----
+  mainline_proxy:
+    k: 5                            # 主线 = 当日成交额 Top K 行业（"资金所在即主线"朴素代理）
+    by: "总成交额"
+
+  # ---- 板块池入围（B5）----
+  pool:
+    entry_amount_top_k: 60          # R1: 成交额前60（第1周仅开，GOVERNANCE #27）
+    entry_momentum_top_k: 20        # R2: 5日动量前20（第2周加，GOVERNANCE #28）
+    momentum_enabled: false         # 第1周关闭，第2周打开
+
+  # ---- 消费端（D，关卡全过前一律 false = 测量态）----
+  consumption:
+    enabled: false                  # 关卡未过，写死测量态
+    w_mainline: 1.20                # 主线行业加权乘数，初值待回测标定
+    siphon_freeze_expectancy: -0.5  # 复用 Step0 "期望<-0.5%主动放弃"通道
+
+  # ---- 数据层（A）----
+  data:
+    min_history_days: 120           # 历史不足120交易日 → history_limited
+    snapshot_times: ["16:00", "17:00"]   # 盘后固定时点（热点榜盘中变化，时点钉死防串）
+    snapshot_dir: "data/sector_snapshots"
+    ths_cache_dir: "data/ths_cache"
+    freshness_max_staleness_days: 5 # 守卫第二道网：latest >= today-5

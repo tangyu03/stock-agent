@@ -1,0 +1,1334 @@
+{
+ "date": "2026-08-14",
+ "as_of": "2026-08-14",
+ "pool": [
+  {
+   "name": "IT服务",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-13",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1602,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0031,
+    "rs_10": 0.0386,
+    "anchored_excess": 0.0007,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0328,
+    "change_5d": 0.3025,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "专用设备",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0183,
+    "rs_10": 0.0697,
+    "anchored_excess": -0.0042,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0195,
+    "change_5d": 0.039,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "中药",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0197,
+    "rs_10": 0.0244,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0081,
+    "change_5d": 0.3336,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "互联网电商",
+   "stage": "confirm",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0087,
+    "rs_10": 0.034,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0044,
+    "change_5d": 0.055,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "元件",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "big_move+new_high",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0235,
+    "rs_10": 0.2196,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0519,
+    "change_5d": -0.1618,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "光伏设备",
+   "stage": "confirm",
+   "anchor": {
+    "anchor_date": "2026-08-13",
+    "anchor_condition": "big_move",
+    "anchor_index": 1602,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0077,
+    "rs_10": 0.0427,
+    "anchored_excess": -0.0008,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0106,
+    "change_5d": -0.2339,
+    "suction_state": "releasing"
+   }
+  },
+  {
+   "name": "光学光电子",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "new_high",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0227,
+    "rs_10": 0.1097,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0192,
+    "change_5d": -0.1497,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "其他电子",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "new_high",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0321,
+    "rs_10": 0.1326,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.009,
+    "change_5d": 0.0631,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "其他电源设备",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "new_high",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0359,
+    "rs_10": 0.1068,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0072,
+    "change_5d": 0.1215,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "军工电子",
+   "stage": "confirm",
+   "anchor": {
+    "anchor_date": "2026-08-05",
+    "anchor_condition": "big_move",
+    "anchor_index": 1596,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0011,
+    "rs_10": 0.0664,
+    "anchored_excess": 0.0061,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0085,
+    "change_5d": -0.21,
+    "suction_state": "releasing"
+   }
+  },
+  {
+   "name": "军工装备",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-11",
+    "anchor_condition": "big_move",
+    "anchor_index": 1600,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0097,
+    "rs_10": 0.0306,
+    "anchored_excess": 0.0074,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0129,
+    "change_5d": -0.0065,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "农化制品",
+   "stage": "decline",
+   "anchor": {
+    "anchor_date": "2026-08-13",
+    "anchor_condition": "big_move",
+    "anchor_index": 1602,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0116,
+    "rs_10": -0.0222,
+    "anchored_excess": -0.0031,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.005,
+    "change_5d": -0.1772,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "化学制品",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0097,
+    "rs_10": 0.0602,
+    "anchored_excess": -0.01,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0188,
+    "change_5d": -0.0599,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "化学制药",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0332,
+    "rs_10": 0.0858,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0269,
+    "change_5d": 0.0675,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "化学原料",
+   "stage": "confirm",
+   "anchor": {
+    "anchor_date": "2026-08-10",
+    "anchor_condition": "big_move+new_high",
+    "anchor_index": 1599,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0018,
+    "rs_10": 0.0101,
+    "anchored_excess": -0.0198,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.005,
+    "change_5d": -0.1687,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "医疗器械",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0222,
+    "rs_10": 0.0541,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0112,
+    "change_5d": 0.1066,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "医疗服务",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.1035,
+    "rs_10": 0.2392,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.021,
+    "change_5d": 0.1558,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "医药商业",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "new_high+volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.07,
+    "rs_10": 0.0832,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0041,
+    "change_5d": 0.434,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "半导体",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-13",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1602,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0211,
+    "rs_10": 0.137,
+    "anchored_excess": 0.0186,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.1307,
+    "change_5d": -0.0996,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "塑料制品",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0278,
+    "rs_10": 0.1093,
+    "anchored_excess": 0.0048,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0091,
+    "change_5d": -0.058,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "家居用品",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0226,
+    "rs_10": 0.0469,
+    "anchored_excess": -0.0072,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0032,
+    "change_5d": -0.0079,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "小金属",
+   "stage": "confirm",
+   "anchor": {
+    "anchor_date": "2026-08-13",
+    "anchor_condition": "big_move",
+    "anchor_index": 1602,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0014,
+    "rs_10": 0.1376,
+    "anchored_excess": 0.0199,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0212,
+    "change_5d": -0.1354,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "工业金属",
+   "stage": "confirm",
+   "anchor": {
+    "anchor_date": "2026-08-13",
+    "anchor_condition": "big_move",
+    "anchor_index": 1602,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0188,
+    "rs_10": 0.0312,
+    "anchored_excess": 0.0094,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.014,
+    "change_5d": -0.3072,
+    "suction_state": "releasing"
+   }
+  },
+  {
+   "name": "建筑材料",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0044,
+    "rs_10": 0.0371,
+    "anchored_excess": -0.0115,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0137,
+    "change_5d": -0.1641,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "建筑装饰",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0157,
+    "rs_10": 0.0326,
+    "anchored_excess": -0.0087,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0134,
+    "change_5d": 0.304,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "影视院线",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "big_move+volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0285,
+    "rs_10": 0.0348,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.004,
+    "change_5d": 0.9136,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "房地产",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-13",
+    "anchor_condition": "big_move",
+    "anchor_index": 1602,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0264,
+    "rs_10": 0.0244,
+    "anchored_excess": -0.0122,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.007,
+    "change_5d": 0.4199,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "文化传媒",
+   "stage": "decline",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0031,
+    "rs_10": -0.0016,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0161,
+    "change_5d": 0.1094,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "汽车整车",
+   "stage": "decline",
+   "anchor": {
+    "anchor_date": "2026-08-03",
+    "anchor_condition": "new_high",
+    "anchor_index": 1594,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0167,
+    "rs_10": -0.0833,
+    "anchored_excess": -0.0909,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0038,
+    "change_5d": -0.1503,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "汽车零部件",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0167,
+    "rs_10": 0.0381,
+    "anchored_excess": -0.006,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0196,
+    "change_5d": 0.1608,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "消费电子",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0184,
+    "rs_10": 0.1004,
+    "anchored_excess": 0.0006,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.024,
+    "change_5d": -0.1051,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "港口航运",
+   "stage": "decline",
+   "anchor": {
+    "anchor_date": "2026-08-03",
+    "anchor_condition": "new_high",
+    "anchor_index": 1594,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0112,
+    "rs_10": -0.0421,
+    "anchored_excess": -0.0621,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0031,
+    "change_5d": 0.0868,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "游戏",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-06",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1597,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0101,
+    "rs_10": 0.0308,
+    "anchored_excess": -0.012,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0082,
+    "change_5d": 0.378,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "煤炭开采加工",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-10",
+    "anchor_condition": "big_move+new_high",
+    "anchor_index": 1599,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0136,
+    "rs_10": 0.0248,
+    "anchored_excess": 0.0003,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0062,
+    "change_5d": -0.0515,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "环保设备",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "new_high+volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0649,
+    "rs_10": 0.1217,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0034,
+    "change_5d": 1.1565,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "环境治理",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.023,
+    "rs_10": 0.0491,
+    "anchored_excess": -0.0082,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0064,
+    "change_5d": 0.2202,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "生物制品",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "new_high+volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0511,
+    "rs_10": 0.1279,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0089,
+    "change_5d": 0.1872,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "电力",
+   "stage": "decline",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "big_move",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0082,
+    "rs_10": -0.0184,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0236,
+    "change_5d": 0.5848,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "电子化学品",
+   "stage": "confirm",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "big_move+new_high",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0202,
+    "rs_10": 0.1987,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.022,
+    "change_5d": -0.2105,
+    "suction_state": "releasing"
+   }
+  },
+  {
+   "name": "电池",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0132,
+    "rs_10": 0.0483,
+    "anchored_excess": -0.0009,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0272,
+    "change_5d": 0.0511,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "电网设备",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0097,
+    "rs_10": 0.0405,
+    "anchored_excess": -0.0111,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0185,
+    "change_5d": 0.2434,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "白色家电",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0091,
+    "rs_10": 0.0338,
+    "anchored_excess": -0.0083,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0046,
+    "change_5d": -0.0663,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "白酒",
+   "stage": "decline",
+   "anchor": {
+    "anchor_date": "2026-08-13",
+    "anchor_condition": "new_high+volume_pctile",
+    "anchor_index": 1602,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0165,
+    "rs_10": -0.0362,
+    "anchored_excess": -0.0195,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0055,
+    "change_5d": 0.1551,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "能源金属",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-11",
+    "anchor_condition": "big_move",
+    "anchor_index": 1600,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0076,
+    "rs_10": 0.0853,
+    "anchored_excess": -0.001,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0067,
+    "change_5d": -0.1895,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "自动化设备",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0115,
+    "rs_10": 0.1096,
+    "anchored_excess": 0.0011,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0181,
+    "change_5d": -0.148,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "计算机设备",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-06",
+    "anchor_condition": "new_high",
+    "anchor_index": 1597,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0046,
+    "rs_10": 0.0518,
+    "anchored_excess": -0.0117,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0183,
+    "change_5d": 0.1432,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "证券",
+   "stage": "decline",
+   "anchor": {
+    "anchor_date": "2026-07-29",
+    "anchor_condition": "big_move",
+    "anchor_index": 1591,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0029,
+    "rs_10": -0.0371,
+    "anchored_excess": -0.0321,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0117,
+    "change_5d": 0.2922,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "贵金属",
+   "stage": "confirm",
+   "anchor": {
+    "anchor_date": "2026-08-13",
+    "anchor_condition": "big_move+volume_pctile",
+    "anchor_index": 1602,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.033,
+    "rs_10": 0.0829,
+    "anchored_excess": 0.0041,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.011,
+    "change_5d": -0.2045,
+    "suction_state": "releasing"
+   }
+  },
+  {
+   "name": "软件开发",
+   "stage": "confirm",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0001,
+    "rs_10": 0.0231,
+    "anchored_excess": -0.0124,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0214,
+    "change_5d": -0.0366,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "通信服务",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "new_high+volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.035,
+    "rs_10": 0.0895,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0142,
+    "change_5d": 0.785,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "通信设备",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "big_move+new_high+volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0422,
+    "rs_10": 0.172,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0836,
+    "change_5d": 0.0024,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "通用设备",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-13",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1602,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0195,
+    "rs_10": 0.0938,
+    "anchored_excess": 0.0068,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0263,
+    "change_5d": -0.0386,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "金属新材料",
+   "stage": "confirm",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "big_move",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0013,
+    "rs_10": 0.0948,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.004,
+    "change_5d": -0.1938,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "钢铁",
+   "stage": "decline",
+   "anchor": {
+    "anchor_date": "2026-08-03",
+    "anchor_condition": "new_high",
+    "anchor_index": 1594,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0089,
+    "rs_10": -0.0377,
+    "anchored_excess": -0.0593,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0034,
+    "change_5d": 0.094,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "银行",
+   "stage": "decline",
+   "anchor": {
+    "anchor_date": "2026-08-05",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1596,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0031,
+    "rs_10": -0.0644,
+    "anchored_excess": -0.022,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.01,
+    "change_5d": -0.0005,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "零售",
+   "stage": "decline",
+   "anchor": {
+    "anchor_date": "2026-08-12",
+    "anchor_condition": "new_high",
+    "anchor_index": 1601,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0131,
+    "rs_10": -0.0052,
+    "anchored_excess": -0.0221,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0055,
+    "change_5d": 0.3091,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "非金属材料",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "big_move+new_high",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0335,
+    "rs_10": 0.1376,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0033,
+    "change_5d": -0.0204,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "风电设备",
+   "stage": "confirm",
+   "anchor": {
+    "anchor_date": "2026-08-10",
+    "anchor_condition": "new_high",
+    "anchor_index": 1599,
+    "anchor_shifted": false
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": -0.0051,
+    "rs_10": 0.0309,
+    "anchored_excess": -0.0061,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0034,
+    "change_5d": -0.1304,
+    "suction_state": "stable"
+   }
+  },
+  {
+   "name": "食品加工制造",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0324,
+    "rs_10": 0.0042,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0059,
+    "change_5d": 0.5887,
+    "suction_state": "siphoning"
+   }
+  },
+  {
+   "name": "饮料制造",
+   "stage": "lead",
+   "anchor": {
+    "anchor_date": "2026-08-14",
+    "anchor_condition": "volume_pctile",
+    "anchor_index": 1603,
+    "anchor_shifted": true
+   },
+   "rs": {
+    "as_of": "2026-08-14",
+    "rs_5": 0.0332,
+    "rs_10": 0.013,
+    "anchored_excess": null,
+    "_complete": true
+   },
+   "suction": {
+    "suction_level": 0.0048,
+    "change_5d": 0.4659,
+    "suction_state": "siphoning"
+   }
+  }
+ ],
+ "mainline_industry_top3": [
+  "元件"
+ ],
+ "mainline_industry_list": [
+  "元件"
+ ],
+ "pool_size": 60,
+ "generated_at": "2026-08-15 15:54:24"
+}

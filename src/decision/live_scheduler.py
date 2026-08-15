@@ -85,6 +85,7 @@ def schedule_live_signals(
     holdings: List[Dict],
     total_asset: float = 1_000_000,
     market_mode: str = 'defend',
+    position_limit: float = 0.5,
 ) -> Dict[str, Any]:
     """
     实盘信号调度器
@@ -98,6 +99,8 @@ def schedule_live_signals(
             [{code, shares, cost_price, ...}, ...]
         total_asset: 总资产（用于计算可用资金）
         market_mode: 当前市场模式
+        position_limit: 总仓位上限（占总资产比例）。买入合计（含已有持仓成本）
+            不得超过 position_limit × total_asset —— 防止信号满载把仓位打到满仓。
 
     Returns:
         {
@@ -108,6 +111,7 @@ def schedule_live_signals(
                 'buy_already_holding': [...],
                 'buy_low_expectancy': [...],
                 'buy_no_budget': [...],
+                'buy_position_limit': [...],   # 总仓位闸门：超 position_limit×total_asset
             },
             'stats': {
                 'entry_in': int, 'sell_in': int,
@@ -116,6 +120,7 @@ def schedule_live_signals(
                 'buy_skipped_already_holding': int,
                 'buy_skipped_low_expectancy': int,
                 'buy_skipped_no_budget': int,
+                'buy_skipped_position_limit': int,
             }
         }
     """
@@ -127,6 +132,8 @@ def schedule_live_signals(
         for h in current_holdings.values()
     )
     available_cash = max(0, total_asset - used_cash)
+    # 已有持仓成本（用于总仓位闸门；卖出后相应扣减）
+    existing_position = used_cash
 
     stats = {
         'entry_in': len(entry_signals),
@@ -136,12 +143,14 @@ def schedule_live_signals(
         'buy_skipped_already_holding': 0,
         'buy_skipped_low_expectancy': 0,
         'buy_skipped_no_budget': 0,
+        'buy_skipped_position_limit': 0,
     }
     skipped = {
         'buy_max_concurrent': [],
         'buy_already_holding': [],
         'buy_low_expectancy': [],
         'buy_no_budget': [],
+        'buy_position_limit': [],
     }
 
     # ---- 第1步：卖出优先（释放资金）----
@@ -170,6 +179,7 @@ def schedule_live_signals(
         # 从持仓中移除（仅本次调度内）
         del current_holdings[code]
         n_holding -= 1
+        existing_position -= h.get('shares', 0) * h.get('cost_price', 0)
 
     # ---- 第2步：买入按期望排序 ----
     buy_with_exp = []
@@ -183,6 +193,7 @@ def schedule_live_signals(
     buy_with_exp.sort(key=lambda x: -x[2])
 
     scheduled_buys = []
+    allocated_total = 0.0  # 本次调度已分配的买入金额（含佣金）
     for sig, entry_type, exp in buy_with_exp:
         code = sig.get('stock_code', '')
 
@@ -243,6 +254,23 @@ def schedule_live_signals(
                 continue
             total_deduction = trigger_price * shares * (1 + 0.00025)
 
+        # P0-2 总仓位闸门：买入合计（已有持仓成本 + 本次已分配）不得超过 position_limit × total_asset
+        buy_cap = position_limit * total_asset
+        if existing_position + allocated_total + total_deduction > buy_cap:
+            remaining = max(0.0, buy_cap - existing_position - allocated_total)
+            affordable = int((remaining / (trigger_price * (1 + 0.00025))) // 100) * 100
+            if affordable <= 0:
+                skipped['buy_position_limit'].append({
+                    'stock_code': code, 'entry_type': entry_type,
+                    'need': total_deduction, 'cap': buy_cap,
+                    'existing_position': existing_position, 'allocated': allocated_total,
+                })
+                stats['buy_skipped_position_limit'] += 1
+                continue
+            max_by_budget = int((BUDGET_PER_STOCK / trigger_price) // 100) * 100
+            shares = min(affordable, max_by_budget)
+            total_deduction = trigger_price * shares * (1 + 0.00025)
+
         # 执行买入
         scheduled_buys.append(ScheduledSignal(
             stock_code=code,
@@ -255,19 +283,21 @@ def schedule_live_signals(
             confidence=sig.get('confidence', '中'),
             expectancy=exp,
             market_mode=market_mode,
-            schedule_note=f'期望{exp:+.2f}%，分配{shares}股',
+            schedule_note=f'入场类型历史期望{exp:+.2f}%（非个股收益预测），分配{shares}股',
         ))
         stats['buy_executed'] += 1
+        allocated_total += total_deduction
         available_cash -= total_deduction
         # 模拟加入持仓
         current_holdings[code] = {'shares': shares, 'cost_price': trigger_price}
         n_holding += 1
 
     logger.info(
-        "实盘信号调度: 买入 %d/%d (跳过: 并发%d/已持仓%d/低期望%d/无资金%d), 卖出 %d/%d",
+        "实盘信号调度: 买入 %d/%d (跳过: 并发%d/已持仓%d/低期望%d/无资金%d/仓位闸门%d), 卖出 %d/%d",
         stats['buy_executed'], stats['entry_in'],
         stats['buy_skipped_max_concurrent'], stats['buy_skipped_already_holding'],
         stats['buy_skipped_low_expectancy'], stats['buy_skipped_no_budget'],
+        stats['buy_skipped_position_limit'],
         stats['sell_executed'], stats['sell_in'],
     )
 
@@ -298,7 +328,7 @@ def format_scheduled_summary(scheduled: Dict[str, Any]) -> str:
     if scheduled['buy']:
         lines.append("🟢 买入信号（按期望排序，预算约束）:")
         for s in scheduled['buy']:
-            lines.append(f"  {s.stock_code} {s.stock_name} | {s.entry_type} @ {s.trigger_price:.2f} | {s.shares}股 | 期望{s.expectancy:+.2f}%")
+            lines.append(f"  {s.stock_code} {s.stock_name} | {s.entry_type} @ {s.trigger_price:.2f} | {s.shares}股 | 类型历史期望{s.expectancy:+.2f}%")
             lines.append(f"    {s.schedule_note}")
         lines.append("")
 
@@ -313,5 +343,7 @@ def format_scheduled_summary(scheduled: Dict[str, Any]) -> str:
             lines.append(f"  低期望: {[(s['stock_code'], s['entry_type']) for s in skipped['buy_low_expectancy']]}")
         if skipped['buy_no_budget']:
             lines.append(f"  无资金: {[s['stock_code'] for s in skipped['buy_no_budget']]}")
+        if skipped['buy_position_limit']:
+            lines.append(f"  总仓位闸门: {[(s['stock_code'], s['entry_type']) for s in skipped['buy_position_limit']]}")
 
     return '\n'.join(lines)

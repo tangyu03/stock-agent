@@ -38,7 +38,8 @@ def batch_get_realtime_quotes(codes: List[str]) -> Dict[str, Dict]:
     Returns:
         {code: {"current_price": float, "change_pct": float, "volume": float,
                 "amount": float, "name": str, "today_high": float, "today_low": float,
-                "today_open": float, "prev_close": float, "is_st": bool, "is_suspended": bool}}
+                "today_open": float, "prev_close": float, "volume_ratio": float,
+                "is_st": bool, "is_suspended": bool}}
     """
     if not codes:
         return {}
@@ -115,6 +116,7 @@ def _fetch_qq_quotes(codes: List[str]) -> int:
                     "today_low": _f(parts[34]),
                     "today_open": _f(parts[5]),
                     "prev_close": _f(parts[4]),
+                    "volume_ratio": _f(parts[49]),        # 量比（与同花顺一致，实测 300843=0.93）
                     "name": name,
                     "is_st": "ST" in name or "*ST" in name,
                     "is_suspended": volume_hand == 0,
@@ -158,7 +160,7 @@ def _fetch_em_ulist(codes: List[str]) -> None:
         secids = ",".join(_em_secid(c) for c in chunk)
         params = {
             "fltt": "2", "invt": "2",
-            "fields": "f12,f14,f2,f3,f5,f6,f15,f16,f17,f18",
+            "fields": "f12,f14,f2,f3,f5,f6,f10,f15,f16,f17,f18",
             "secids": secids,
             "ut": "bd1d9ddb04089700cf9c27f6f7426281",
         }
@@ -188,6 +190,7 @@ def _fetch_em_ulist(codes: List[str]) -> None:
                     "today_low": _f(row.get("f16", 0)),
                     "today_open": _f(row.get("f17", 0)),
                     "prev_close": _f(row.get("f18", 0)),
+                    "volume_ratio": _f(row.get("f10", 0)),   # 量比（东财 f10）
                     "name": name,
                     "is_st": "ST" in name or "*ST" in name,
                     "is_suspended": volume == 0,

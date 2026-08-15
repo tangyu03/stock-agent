@@ -57,7 +57,8 @@ def _cache_get(key: str):
             (key,),
         )
         row = cursor.fetchone()
-        conn.close()
+        # 注意：不能 conn.close()。db.py 是线程本地连接池（P1-13），
+        # close 会关掉共享连接，导致本线程后续操作报 "closed database"。
         if row:
             return json.loads(row["cache_value"])
     except Exception as e:
@@ -76,7 +77,7 @@ def _cache_set(key: str, data: dict, days: int = 30):
             (key, json.dumps(data, ensure_ascii=False), expiry),
         )
         conn.commit()
-        conn.close()
+        # 不能 conn.close()（线程本地连接池，见 _cache_get 注释）
         logger.info("缓存已写入: %s (%d 条, 有效期 %d 天)", key, len(data) if isinstance(data, (list, dict)) else 1, days)
     except Exception as e:
         logger.error("写缓存失败 %s: %s", key, e)
@@ -491,7 +492,7 @@ def check():
             logger.info("    状态: %s", "✓ 有效" if valid else "✗ 已过期")
         else:
             logger.info("  %s: 未构建", key)
-    conn.close()
+    # 不能 conn.close()（线程本地连接池，见 _cache_get 注释）
 
 
 if __name__ == "__main__":

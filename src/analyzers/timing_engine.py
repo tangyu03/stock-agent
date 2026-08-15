@@ -46,8 +46,6 @@ class EntrySignal:
     sector_name: str = ""         # 板块名称
     sw_level2: str = ""           # 同花顺行业（原名申万二级，字段名保留兼容）
     sw_level3: str = ""           # 行业三级（字段名保留兼容）
-    concepts: str = ""            # 概念板块（逗号分隔）
-    concept_status: str = ""      # 概念板块状态（主线/轮动/退潮）
     trigger_reason: str = ""       # 触发原因描述
     strategy_summary: str = ""     # 策略逻辑透传
     confidence: str = "中"         # 信号置信度
@@ -69,7 +67,6 @@ class ExitSignal:
     sector_status: str = ""
     sector_name: str = ""
     sw_level3: str = ""
-    concepts: str = ""
     tech_data: Dict = field(default_factory=dict)
 
 @dataclass
@@ -168,7 +165,7 @@ DEFAULT_TIMING_CONFIG = {
         "ma120_window": 120,
         "volume_ma60_window": 60,
         "recent_extreme_window": 20,
-        "volume_ratio_avg_window": 21,
+        "volume_ratio_avg_window": 6,  # 6 条算、剔除当日 = 前5日均量；标准量比收盘时=当日量/前5日均量
         "shrinking_volume_ratio": 1.0,  # 设计问题5: 从 0.8 放宽到 1.0
         "pullback_ma5_bias_tolerance": 0.03,  # 设计问题5: 从 0.01 放宽到 0.03
         "pullback_ma10_bias_tolerance": 0.03,
@@ -1709,7 +1706,8 @@ class TimingEngine:
             fresh = batch_get_realtime_quotes([stock_code])
             if stock_code in fresh and fresh.get(stock_code):
                 q = fresh[stock_code]
-                return {"price": q.get("current_price", 0), "change_pct": q.get("change_pct", 0)}
+                return {"price": q.get("current_price", 0), "change_pct": q.get("change_pct", 0),
+                        "volume_ratio": q.get("volume_ratio", 0)}
         except Exception as e:
             logger.debug("非关键异常: %s", e)
         return None
@@ -1723,6 +1721,10 @@ class TimingEngine:
         if realtime:
             data["current_price"] = realtime.get("price", 0)
             data["change_pct"] = realtime.get("change_pct", 0)
+            # 量比：优先用行情接口返回字段（与同花顺/腾讯一致），
+            # 不用 K 线均量近似值；无接口数据（回测/停牌/接口缺失）时才用 K 线兜底
+            if realtime.get("volume_ratio"):
+                data["volume_ratio"] = realtime["volume_ratio"]
 
         # 获取 K 线
         kline = None
@@ -1789,8 +1791,10 @@ class TimingEngine:
                     data["prev_high"] = highs[-1] if len(highs) >= 1 else None
                     data["recent_high"] = max(highs[-extreme_window:]) if len(highs) >= extreme_window else max(highs)
 
-                    vol_ratio_window = self._cfg("tech_data", "volume_ratio_avg_window", default=21)
-                    if len(volumes) >= vol_ratio_window:
+                    # 收盘量比（当日量/前5日均量）：历史K线无"量比"字段，但收盘时标准量比数学上
+                    # 就等于当日量/前5日均量（实测 300843: 0.9325 vs 实时量比 0.93，误差可忽略）
+                    vol_ratio_window = self._cfg("tech_data", "volume_ratio_avg_window", default=6)
+                    if "volume_ratio" not in data and len(volumes) >= vol_ratio_window:
                         avg_vol = sum(volumes[-vol_ratio_window:-1]) / (vol_ratio_window - 1)
                         data["volume_ratio"] = volumes[-1] / avg_vol if avg_vol > 0 else 1.0
 

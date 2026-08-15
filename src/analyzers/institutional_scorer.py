@@ -32,6 +32,8 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+from ..data_layer.akshare_safe import call_ak_with_retry  # P2-5: akshare 调用带超时+重试
+
 
 # ---------------------------------------------------------------------------
 # Session 内存缓存
@@ -165,7 +167,7 @@ def _fetch_margin_balance(code: str) -> Dict[str, Any]:
             _margin_market_cache[fetch_date] = {}
             # 沪市
             try:
-                df_sse = ak.stock_margin_detail_sse(date=fetch_date)
+                df_sse = call_ak_with_retry(ak.stock_margin_detail_sse, date=fetch_date)
                 if df_sse is not None and not df_sse.empty:
                     code_col = "标的证券代码" if "标的证券代码" in df_sse.columns else df_sse.columns[1]
                     bal_col = "融资余额" if "融资余额" in df_sse.columns else None
@@ -179,7 +181,7 @@ def _fetch_margin_balance(code: str) -> Dict[str, Any]:
                 pass
             # 深市（不稳定，失败不影响沪市数据）
             try:
-                df_szse = ak.stock_margin_detail_szse(date=fetch_date)
+                df_szse = call_ak_with_retry(ak.stock_margin_detail_szse, date=fetch_date)
                 if df_szse is not None and not df_szse.empty:
                     code_col = "证券代码" if "证券代码" in df_szse.columns else df_szse.columns[1]
                     bal_col = "融资余额" if "融资余额" in df_szse.columns else None
@@ -261,7 +263,7 @@ def _get_lhb_market_data():
         import akshare as ak
         # ⚠️ stock_lhb_detail_em 不接受 symbol 参数，只接受 start_date/end_date
         # 返回全市场龙虎榜明细，包含 BILLBOARD_NET_AMT（净额）等字段
-        df = ak.stock_lhb_detail_em(start_date=start_date, end_date=today)
+        df = call_ak_with_retry(ak.stock_lhb_detail_em, start_date=start_date, end_date=today)
         _lhb_market_cache = df
         _lhb_market_cache_date = today
         if df is not None and not df.empty:
@@ -460,7 +462,7 @@ def _fetch_shareholder_count(code: str) -> Dict[str, Any]:
     try:
         import akshare as ak
         # 单股查询（注意是 stock_zh_a_gdhs_detail_em，不是 stock_zh_a_gdhs）
-        df = ak.stock_zh_a_gdhs_detail_em(symbol=code)
+        df = call_ak_with_retry(ak.stock_zh_a_gdhs_detail_em, symbol=code)
         if df is None or df.empty:
             _mark_api_success("shareholder")
             return {"vote": 0, "detail": "无股东户数数据", "raw": {}}
@@ -505,6 +507,23 @@ def _fetch_shareholder_count(code: str) -> Dict[str, Any]:
 
         change_pct = (latest_count - prev_count) / prev_count
         _mark_api_success("shareholder")
+
+        # P1-4 数据异常守卫：新股上市前后户数跳变（如 20→724313）、拆股转增、定增等
+        # 会产生异常巨幅跳变，若按正常增减判"筹码分散"会投出误导性 -1 票 → 一律投中性 0。
+        # ① 数量级异常：A股上市公司股东户数不可能 <100
+        if latest_count < 100 or prev_count < 100:
+            return {
+                "vote": 0,
+                "detail": f"股东户数数量级异常（{prev_count:.0f}→{latest_count:.0f}，疑似上市前基准/缺数，不参与投票）",
+                "raw": {"latest": latest_count, "prev": prev_count, "change_pct": change_pct, "anomaly": True},
+            }
+        # ② 单期跳变上限：单期增幅 >300% 或降幅 >80% 判为数据/结构性变化
+        if change_pct > 3.0 or change_pct < -0.8:
+            return {
+                "vote": 0,
+                "detail": f"股东户数跳变异常 {change_pct*100:+.1f}%（{prev_count:.0f}→{latest_count:.0f}，数据/结构性变化，不参与投票）",
+                "raw": {"latest": latest_count, "prev": prev_count, "change_pct": change_pct, "anomaly": True},
+            }
 
         if change_pct < -0.02:  # 户数减少 >2%（筹码集中）
             return {

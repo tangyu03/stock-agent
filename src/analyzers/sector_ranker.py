@@ -3,8 +3,10 @@
 
 分类体系：
 1. 同花顺行业（90个）— 用行业指数K线算涨跌幅
-2. 新浪行业概念（~145个）— 真正的行业概念（光伏/锂矿/创新药等），用实时涨跌幅
+2. 新浪行业（49个）— 用实时涨跌幅
 3. 过滤掉风格标签（科创50/含H股/专精特新/次新股等）— 这些不是行业板块
+
+（概念板块已移除：板块分类与信号只按行业，不再参考概念）
 
 板块分类：
 - 前 20% = 主线（main_trend）
@@ -45,13 +47,13 @@ def fetch_sector_rankings() -> List[dict]:
     拉取行业板块涨跌幅排名
 
     数据源：
-    1. 新浪行业（49 个）— 全部保留
-    2. 新浪概念（175 个）— 过滤掉风格标签，只保留行业概念（~145 个）
+    1. 新浪行业（49 个）— 过滤风格标签后全部保留
+    （概念板块已移除，板块分类只按行业）
 
     Returns:
         [
             {
-                "type": "行业"/"概念",
+                "type": "行业",
                 "name": 板块名,
                 "label": 新浪标签,
                 "change_pct": 涨跌幅%,
@@ -85,24 +87,6 @@ def fetch_sector_rankings() -> List[dict]:
     except Exception as e:
         logger.warning("新浪行业板块拉取失败: %s", e)
 
-    # 2. 新浪概念（175 个，过滤风格标签）
-    try:
-        df = ak.stock_sector_spot(indicator="概念")
-        if df is not None and not df.empty:
-            for _, row in df.iterrows():
-                name = str(row.get("板块", ""))
-                if _is_style_tag(name):
-                    continue  # 跳过风格标签
-                all_sectors.append({
-                    "type": "概念",
-                    "name": name,
-                    "label": str(row.get("label", "")),
-                    "change_pct": float(row.get("涨跌幅", 0)),
-                    "stock_count": int(row.get("公司家数", 0)),
-                })
-    except Exception as e:
-        logger.warning("新浪概念板块拉取失败: %s", e)
-
     # 按涨跌幅降序排序
     all_sectors.sort(key=lambda x: x["change_pct"], reverse=True)
 
@@ -124,7 +108,7 @@ def fetch_sector_rankings() -> List[dict]:
         else:
             s["classification"] = "rotational"
 
-    logger.info("板块排名: %d 个板块(行业+概念,已过滤风格标签), 前20%%=%d主线, 后20%%=%d退潮",
+    logger.info("板块排名: %d 个行业板块(已过滤风格标签), 前20%%=%d主线, 后20%%=%d退潮",
                 n, top_n, bottom_n)
 
     return all_sectors
@@ -138,7 +122,7 @@ def build_stock_sector_index(
     查持仓股在哪些板块里
 
     扫描全部板块（按涨跌幅从高到低），为每只股票收集其所属的**所有**板块信息。
-    一只股票可能同时属于多个行业/概念，全部保留，由调用方按"退潮 > 主线 > 轮动"
+    一只股票可能同时属于多个行业板块，全部保留，由调用方按"退潮 > 主线 > 轮动"
     的优先级选取最严格标签。
 
     注意：之前的实现存在两个 Bug 已修复：
@@ -285,7 +269,7 @@ def _lookup_from_cache_table(stock_codes: List[str]) -> Optional[Dict[str, dict]
             ("stock_sector_classification",),
         )
         row = cursor.fetchone()
-        conn.close()
+        # 不能 conn.close()（线程本地连接池 P1-13，close 会毒化共享连接）
         if not row:
             return None
 
@@ -384,7 +368,7 @@ def _refresh_daily_ranking() -> Optional[Dict[str, dict]]:
             ("daily_industry_ranking",),
         )
         row = cursor.fetchone()
-        conn.close()
+        # 不能 conn.close()（线程本地连接池 P1-13，close 会毒化共享连接）
         if row:
             _daily_ranking_cache = json.loads(row["cache_value"])
             _daily_ranking_cache_date = today
@@ -482,7 +466,7 @@ def _refresh_daily_ranking() -> Optional[Dict[str, dict]]:
                 ("daily_industry_ranking", json.dumps(result, ensure_ascii=False), expiry),
             )
             conn.commit()
-            conn.close()
+            # 不能 conn.close()（线程本地连接池 P1-13，close 会毒化共享连接）
         except Exception:
             pass
 
@@ -1055,7 +1039,7 @@ def print_rankings(rankings: List[dict], top_n: int = 10):
     """打印板块排名"""
     print()
     print("=" * 70)
-    print(f"  板块涨跌幅排名（共 {len(rankings)} 个：行业+概念，已过滤风格标签）")
+    print(f"  板块涨跌幅排名（共 {len(rankings)} 个：行业板块，已过滤风格标签）")
     print("=" * 70)
     print(f"  {'排名':<4} {'类型':<4} {'板块':<14} {'涨跌幅%':>8} {'分类':<8}")
     print("  " + "-" * 50)

@@ -315,13 +315,109 @@ numpy>=1.24          # 数值计算
 python-docx>=0.8.11  # 报告生成
 ```
 
-## 🗂️ 整改历史
 
-- **2026-07-22**：阶段一完成（A1-A8证据链修复）
-- **2026-07-23**：阶段二完成（Step0+B1+C1+C2+D1+F9，6项P0）
-- **2026-07-25**：阶段二扩展完成（C2-C5+D2-D7，10项出场+进场体系）
-- **2026-07-25**：阶段三部分完成（F2+F5+F10，3项新模式）
-- **2026-07-25**：P1+P3+P4验证体系建立
-- **2026-07-25**：工程缺陷修复（12项P0/P1缺陷）
+     
+  今天跑(默认今天,周六非交易日会跳过):
+  python scripts/s_daily_run.py
 
-详见 `worklog.md` 多Agent工作日志。
+  指定日期(回补,比如 08-14):
+  python scripts/s_daily_run.py --date 2026-08-14
+  
+  只评估已有快照、不重新拉取(重放):
+  python scripts/s_daily_run.py --date 2026-08-14 --skip-snapshot
+
+  挂任务计划的话,在命令里直接写 python scripts/s_daily_run.py
+  即可,脚本自己会判非交易日跳过;一天挂两次(16:00/17:00)对应 config 里 snapshot_times 的固定时点。
+
+
+  
+     
+  一次性准备
+     
+  cd C:\Users\15831\Documents\code\stock-agent
+  pip install -r requirements.txt
+     
+  # 环境变量（凭证已从 config 移到环境变量）
+  export DEEPSEEK_API_KEY="..."
+  export TOKEN_PUSH="..."
+  export IWENCAI_API_KEY="..."   # 可选
+
+  # 初始化数据库（幂等，已建好会跳过）
+  python -m src.main init
+
+  Windows 控制台是 GBK,跑任何带中文输出的命令前先加 PYTHONIOENCODING=utf-8,否则会撞到 emoji 编码错误:
+
+  export PYTHONIOENCODING=utf-8
+
+  每个交易日,按时间走
+
+  盘中统一检查(盘前 8:50 或盘中)——实盘信号推送
+
+  python -m src.main run --phase intraday
+
+  做一件事:环境评估(自适应模式)→ 全量自选池信号 → 调度器按期望排序、套预算和总仓位闸门(P0-2,defend
+  时买入合计 ≤ 50 万)→ 一条推送。pre_market 已合并进来,不用单独跑。
+
+  推送后——等待回执(P1-3 闭环,这套工程刚修好的部分)
+
+  推送的信号此刻在 trade_logs 里是 pending,不会影响持仓。收盘后你看实际成交,回执:
+
+  # 看今天推了什么、还没回执
+  python scripts/trade_feedback.py --list
+
+  # 真买了 → 成交价(实际成交价没填就用 --price 补)
+  python scripts/trade_feedback.py --execute <id> --price 127.5
+
+  # 没执行 → 忽略
+  python scripts/trade_feedback.py --ignore <id>
+
+  # 改了执行(比如减半仓) → 标记修改
+  python scripts/trade_feedback.py --modified <id> --price 127.5
+
+  # 随时看聚合持仓(executed 记录 buy加仓/sell减仓,成本取最近买入价)
+  python scripts/trade_feedback.py --holdings
+
+  关键点:你回执的 executed 记录就是下一轮调度的真实持仓来源(P0-1 修的),不再是 add_plans
+  占位。所以回执不能偷懒——不执行,系统就永远当空仓跑。
+
+  收盘后——板块管道(16:00/17:00)
+
+  python scripts/s_daily_run.py            # 快照 + 新鲜度守卫 + S3 评估 + 板块池
+  python scripts/s_daily_run.py --date 2026-08-14   # 补某天
+  python scripts/s_daily_run.py --skip-snapshot     # 只重放评估,不拉新数据
+
+  周末自动跳过(今天是周六,直接跑会打印"周末非交易日,跳过")。这步喂给 B5 板块池和 S3
+  主线预期,是盘前判断的输入。
+
+  盘后复盘 + 周报
+
+  python -m src.main run --phase post_market    # 15:30
+  python -m src.main run --phase weekly         # 周五收摊
+
+  自动化(建议)
+
+  Windows 任务计划按这个表挂,命令里直接写 python scripts/xxx.py,用绝对路径:
+
+  ┌────────────────┬────────────────────────────────────────────┐
+  │      时点      │                    命令                    │
+  ├────────────────┼────────────────────────────────────────────┤
+  │ 8:50 盘中检查  │ python -m src.main run --phase intraday    │
+  ├────────────────┼────────────────────────────────────────────┤
+  │ 15:30 盘后复盘 │ python -m src.main run --phase post_market │
+  ├────────────────┼────────────────────────────────────────────┤
+  │ 16:00 板块管道 │ python scripts/s_daily_run.py              │
+  ├────────────────┼────────────────────────────────────────────┤
+  │ 周五           │ python -m src.main run --phase weekly      │
+  └────────────────┴────────────────────────────────────────────┘
+
+  回执 --list 也可以在推送后挂一个提醒(不是自动执行——成交只有你知道,系统不能替你判断)。
+
+  当前要注意的两件事
+
+  1. 持仓现在是空的。闭环刚建,还没有任何 executed 回执,--holdings
+  会显示空。第一笔回执后它才开始聚合。在此之前,调度按空仓跑,买入受 position_limit 总闸门兜底(defend 50
+  万),不会冲满仓。
+  2. 回执要当天做。--list 按日期过滤,跨天不去清,后面的持仓聚合会被陈旧 pending 干扰。
+
+  一句话总结每天闭环:盘中推 → 收盘回执 → 盘后跑板块 →
+  明天盘中读真实持仓再调度。你只需管"回执"这一环,其余都自动化了。

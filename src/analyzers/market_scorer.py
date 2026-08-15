@@ -61,6 +61,11 @@ class MarketScorer:
         """
         执行大盘评分
 
+        ⚠️ 架构定位（P2-6 澄清）：本方法是六维实时评分器，当前**不在实盘主路径上**。
+        实盘主路径用 market_mode_adaptive.assess_daily（5 维，历史指数K线+简化规则）；
+        orchestrator 仅在 assess_daily 失败时回退到本类的 get_current_mode()（读缓存/默认值）。
+        因此 score() 的六维实时计算在实盘生产中是"保留实现"，改动前请先确认调用方。
+
         Args:
             target_date: 目标日期 YYYY-MM-DD，默认今天
 
