@@ -220,7 +220,18 @@ def classify_stocks(
             "best_sector": 最严格的板块,
         }}
     """
-    # 0. 优先查预构建的映射表（scripts/build_sector_mapping.py 构建，30 天有效）
+    # 0. 快照路径（Step2）：读按天 BoardSnapshot + 当日实时排名合并，0 成分股 API、0 K线分类
+    try:
+        from ..cache import get_sector_map_service
+        service = get_sector_map_service()
+        if service.cfg.get("enabled", True):
+            result = _classify_from_snapshot_path(service, stock_codes)
+            if result:
+                return result
+    except Exception as e:
+        logger.warning("sector_ranker 快照路径异常: %s", e)
+
+    # 1. 预构建的映射表（scripts/build_sector_mapping.py 构建，30 天有效）
     # 这是机构级数据源：东财行业板块涨跌幅排名 + 东财三级行业归属
     # 不反爬，盘中直接查表，0 API 调用
     table_result = _lookup_from_cache_table(stock_codes)
@@ -242,6 +253,35 @@ def classify_stocks(
 
     # 映射表未构建或读取失败，走实时 API
     return _classify_stocks_realtime(stock_codes)
+
+
+def _classify_from_snapshot_path(service, stock_codes: List[str]) -> Optional[Dict[str, dict]]:
+    """
+    快照路径：读快照分类；无快照 → 惰性重建一次；仍未命中走降级。
+
+    返回 None 表示快照路径不可用（交给降级链）。
+    """
+    result = service.classify_stocks(stock_codes)
+    if not result:
+        # 无快照 → 惰性重建（当天缺失时现场构建一次）
+        snap, lag = service.ensure_snapshot()
+        if snap is None:
+            logger.info("sector_ranker: 快照不可用且重建失败，走降级链")
+            return None
+        result = service.classify_stocks(stock_codes)
+        if not result:
+            return None
+
+    # 快照未覆盖的股票走实时补齐（保持与旧路径一致的全覆盖语义）
+    missing_codes = [c for c in stock_codes
+                     if c not in result or result[c].get("classification") == "unknown"]
+    if missing_codes:
+        logger.info("sector_ranker: 快照未命中 %d/%d 只，走实时补齐",
+                    len(missing_codes), len(stock_codes))
+        realtime_result = _classify_stocks_realtime(missing_codes)
+        for code, info in realtime_result.items():
+            result[code] = info
+    return result
 
 
 def _lookup_from_cache_table(stock_codes: List[str]) -> Optional[Dict[str, dict]]:
@@ -377,79 +417,12 @@ def _refresh_daily_ranking() -> Optional[Dict[str, dict]]:
     except Exception:
         pass
 
-    # 3. 实时拉取（东财 push2，带重试）
+    # 3. 实时拉取（东财 push2，复用 cache.builders.fetch_eastmoney_ranking 公共逻辑）
     try:
-        import requests
-        import time as _time
-        UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0"
-        url = "https://push2.eastmoney.com/api/qt/clist/get"
-        all_boards = []
-        page = 1
-        max_pages = 6  # 496 个 / 100 = 5 页
-
-        while page <= max_pages:
-            params = {
-                "pn": str(page), "pz": "100", "po": "1", "np": "1",
-                "fltt": "2", "invt": "2",
-                "fields": "f12,f14,f3",
-                "fs": "m:90+t:2",  # 行业板块（标准东财二级行业）
-                "ut": "f0ce0975da3f5d44e7b8e8b2e8a8a8a8",
-            }
-            success = False
-            for attempt in range(10):  # 10 次重试
-                try:
-                    r = requests.get(url, params=params, timeout=12,
-                                     headers={"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"})
-                    if r.status_code == 200:
-                        data = r.json()
-                        if data.get("data") and data["data"].get("diff"):
-                            diff = data["data"]["diff"]
-                            for b in diff:
-                                all_boards.append({
-                                    "name": b.get("f14", ""),
-                                    "change_pct": float(b.get("f3", 0)),
-                                })
-                            total = data["data"].get("total", 0)
-                            success = True
-                            break
-                    _time.sleep(3)
-                except Exception:
-                    _time.sleep(3)
-
-            if not success:
-                # 当前页失败，继续下一页（不中断，已获取的部分仍有用）
-                logger.warning("板块涨跌幅页 %d 失败，继续下一页，已获取 %d 个",
-                               page, len(all_boards))
-                page += 1
-                _time.sleep(2)
-                continue
-
-            if len(all_boards) >= total or len(diff) < 100:
-                break
-            page += 1
-            _time.sleep(1.5)
-
-        if not all_boards:
+        from ..cache.builders import fetch_eastmoney_ranking
+        result = fetch_eastmoney_ranking(retries=10)
+        if not result:
             return None
-
-        if len(all_boards) < 400:
-            logger.warning("板块涨跌幅部分失败：仅 %d/496 个（分类精度可能降低）", len(all_boards))
-
-        # 排序 + 分类
-        all_boards.sort(key=lambda x: x["change_pct"], reverse=True)
-        n = len(all_boards)
-        top_n = max(1, n // 5)
-        bottom_n = max(1, n // 5)
-        result = {}
-        for i, b in enumerate(all_boards):
-            if i < top_n:
-                b["classification"] = "main_trend"
-            elif i >= n - bottom_n:
-                b["classification"] = "retreating"
-            else:
-                b["classification"] = "rotational"
-            b["rank"] = i + 1
-            result[b["name"]] = b
 
         # 写缓存
         _daily_ranking_cache = result
@@ -470,8 +443,7 @@ def _refresh_daily_ranking() -> Optional[Dict[str, dict]]:
         except Exception:
             pass
 
-        logger.info("板块涨跌幅实时拉取(东财push2): %d 个板块, 前20%%=%d主线, 后20%%=%d退潮",
-                    n, top_n, bottom_n)
+        logger.info("板块涨跌幅当日排名已刷新: %d 个板块", len(result))
         return result
     except Exception as e:
         logger.warning("板块涨跌幅实时拉取失败: %s", str(e)[:80])

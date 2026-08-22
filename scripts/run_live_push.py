@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-os.environ.setdefault("TZ", "Asia/Shanghai")
+if sys.platform != "win32":
+    os.environ.setdefault("TZ", "Asia/Shanghai")  # Windows 不设（CRT 不识 Area/City 格式会回退 UTC）
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
 logging.getLogger("src.data_layer.akshare_adapter").setLevel(logging.WARNING)
 logging.getLogger("src.data_layer.skill_wrapper").setLevel(logging.WARNING)

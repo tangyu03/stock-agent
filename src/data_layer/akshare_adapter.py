@@ -550,35 +550,37 @@ class AKShareAdapter:
             return
 
         # 依次尝试东财 / 新浪小批量接口（用单只查询探活，不拉全市场）
+        # P2 审计（2026-08-18）：每源最多重试 2 次，避免单次瞬时失败误报"均不可达"
         ping_sources = [
             ("eastmoney", lambda: ak.stock_bid_ask_em(symbol="000001")),
             ("sina", lambda: ak.stock_zh_a_hist(symbol="000001", period="daily", adjust="")),
         ]
 
         for name, ping_fn in ping_sources:
-            try:
-                time.sleep(random.uniform(1.0, 2.0))  # 启动时随机等待
-                # 使用线程+超时保护，避免东方财富反爬导致无限挂起
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(ping_fn)
-                    df = future.result(timeout=15)  # 最多等15秒
-                if df is not None and not df.empty:
-                    self._health["akshare"] = True
-                    self._source_status["global"] = name
-                    logger.info("AKShare 初始化成功 (数据源=%s, spot_data=%d行)", name, len(df))
-                    return
-            except concurrent.futures.TimeoutError:
-                logger.warning("AKShare 数据源 %s ping 超时(15s)，跳过", name)
-                continue
-            except Exception as e:
-                logger.debug("AKShare 数据源 %s ping 失败: %s", name, str(e)[:150])
-                continue
+            for attempt in range(2):
+                try:
+                    time.sleep(random.uniform(1.0, 2.0))  # 启动时随机等待（同时充当重试间隔）
+                    # 使用线程+超时保护，避免东方财富反爬导致无限挂起
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(ping_fn)
+                        df = future.result(timeout=15)  # 最多等15秒
+                    if df is not None and not df.empty:
+                        self._health["akshare"] = True
+                        self._source_status["global"] = name
+                        logger.info("AKShare 初始化成功 (数据源=%s, spot_data=%d行)", name, len(df))
+                        return
+                except concurrent.futures.TimeoutError:
+                    logger.warning("AKShare 数据源 %s ping 超时(15s)（第%d/2次），%s",
+                                   name, attempt + 1, "重试" if attempt == 0 else "放弃该源")
+                except Exception as e:
+                    logger.debug("AKShare 数据源 %s ping 失败: %s", name, str(e)[:150])
+                # 失败后继续：同源重试或进入下一源
 
-        # 两个源都不通，但模块已加载——标记可用但标记东财不可达
+        # 两个源都尝试 2 次仍不通，才标记不可达（避免单次瞬时失败误报）
         self._health["akshare"] = True
         self._source_status["global"] = "unreachable"
-        logger.warning("AKShare 模块已加载但东财/新浪均不可达，将按需降级")
+        logger.warning("AKShare 模块已加载但东财/新浪均不可达（各重试2次），将按需降级")
 
     def is_available(self) -> bool:
         """检查 AKShare 是否可用"""
@@ -934,22 +936,24 @@ class AKShareAdapter:
 
         Returns:
             AKShareResult.data = {
-                "sp500_change_pct": float,   # 标普500涨跌幅(%)
-                "nasdaq_change_pct": float,  # 纳斯达克涨跌幅(%)
-                "dow_change_pct": float,     # 道琼斯涨跌幅(%)
-                "vix": float,                # VIX 恐慌指数
-                "vix_change_pct": float,     # VIX 涨跌幅(%)
+                "sp500_change_pct": float | None,   # 标普500涨跌幅(%); None=无数据
+                "nasdaq_change_pct": float | None,  # 纳斯达克涨跌幅(%)
+                "dow_change_pct": float | None,     # 道琼斯涨跌幅(%)
+                "vix": float | None,                # VIX 恐慌指数
+                "vix_change_pct": float | None,     # VIX 涨跌幅(%)
             }
         """
         if not self.is_available():
             return AKShareResult(success=False, error="AKShare not available", source="get_us_market_snapshot")
 
+        # P0-1 审计（2026-08-18）：无数据一律置 None，禁止用 0.0 当脏值兜底。
+        # 美股闭市或接口不可达时，外围评估按"无数据"处理，而不是误读为"平盘/VIX=0"。
         data = {
-            "sp500_change_pct": 0.0,
-            "nasdaq_change_pct": 0.0,
-            "dow_change_pct": 0.0,
-            "vix": 0.0,
-            "vix_change_pct": 0.0,
+            "sp500_change_pct": None,
+            "nasdaq_change_pct": None,
+            "dow_change_pct": None,
+            "vix": None,
+            "vix_change_pct": None,
         }
 
         try:
@@ -1006,11 +1010,22 @@ class AKShareAdapter:
             except Exception as e:
                 logger.debug("VIX 获取失败: %s", e)
 
-            logger.info(
-                "美股快照: SP500=%.2f%% Nasdaq=%.2f%% VIX=%.1f (%.1f%%)",
-                data["sp500_change_pct"], data["nasdaq_change_pct"],
-                data["vix"], data["vix_change_pct"],
-            )
+            def _fmt(v):
+                return f"{v:.2f}" if v is not None else "None"
+
+            populated = [k for k, v in data.items() if v is not None]
+            if not populated:
+                logger.warning(
+                    "美股快照无任何有效数据（美股闭市/接口不可达）：SP500/Nasdaq/VIX 置 None，外围评估按无数据处理"
+                )
+            else:
+                logger.info(
+                    "美股快照: SP500=%s%% Nasdaq=%s%% VIX=%s (%s%%)",
+                    _fmt(data["sp500_change_pct"]),
+                    _fmt(data["nasdaq_change_pct"]),
+                    _fmt(data["vix"]),
+                    _fmt(data["vix_change_pct"]),
+                )
             return AKShareResult(success=True, data=data, source="get_us_market_snapshot")
 
         except ImportError:
@@ -1025,18 +1040,19 @@ class AKShareAdapter:
 
         Returns:
             AKShareResult.data = {
-                "sp500_futures_change_pct": float,   # 标普500期货涨跌幅(%)
-                "nasdaq_futures_change_pct": float,  # 纳斯达克期货涨跌幅(%)
-                "dow_futures_change_pct": float,     # 道琼斯期货涨跌幅(%)
+                "sp500_futures_change_pct": float | None,   # 标普500期货涨跌幅(%); None=无数据
+                "nasdaq_futures_change_pct": float | None,  # 纳斯达克期货涨跌幅(%)
+                "dow_futures_change_pct": float | None,     # 道琼斯期货涨跌幅(%)
             }
         """
         if not self.is_available():
             return AKShareResult(success=False, error="AKShare not available", source="get_us_futures_snapshot")
 
+        # P0-1 审计（2026-08-18）：与 get_us_market_snapshot 一致，无数据置 None 而非 0.0。
         data = {
-            "sp500_futures_change_pct": 0.0,
-            "nasdaq_futures_change_pct": 0.0,
-            "dow_futures_change_pct": 0.0,
+            "sp500_futures_change_pct": None,
+            "nasdaq_futures_change_pct": None,
+            "dow_futures_change_pct": None,
         }
 
         try:
@@ -1060,11 +1076,19 @@ class AKShareAdapter:
                 except Exception as e:
                     logger.debug("美股期货 %s 获取失败: %s", symbol, e)
 
-            logger.info(
-                "美股期货: SP500=%.2f%% Nasdaq=%.2f%% Dow=%.2f%%",
-                data["sp500_futures_change_pct"], data["nasdaq_futures_change_pct"],
-                data["dow_futures_change_pct"],
-            )
+            def _fmt(v):
+                return f"{v:.2f}" if v is not None else "None"
+
+            populated = [k for k, v in data.items() if v is not None]
+            if not populated:
+                logger.warning("美股期货无任何有效数据（接口不可达）：SP500/Nasdaq/Dow 期货涨跌幅置 None")
+            else:
+                logger.info(
+                    "美股期货: SP500=%s%% Nasdaq=%s%% Dow=%s%%",
+                    _fmt(data["sp500_futures_change_pct"]),
+                    _fmt(data["nasdaq_futures_change_pct"]),
+                    _fmt(data["dow_futures_change_pct"]),
+                )
             return AKShareResult(success=True, data=data, source="get_us_futures_snapshot")
 
         except ImportError:

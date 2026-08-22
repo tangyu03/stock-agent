@@ -457,6 +457,12 @@ def render_environment_overview(data: Dict) -> str:
     content = "<b>📊 环境总览</b><br/>"
     content += f"&nbsp;&nbsp;模式:{mn}<br/>"
 
+    # P2-13 审计（2026-08-22）：非交易日复盘时标注数据参考日（上一交易日）
+    ref_date = data.get("ref_date")
+    if ref_date:
+        suffix = "（上一交易日）" if data.get("is_backfill") else ""
+        content += f"&nbsp;&nbsp;数据:{ref_date}{suffix}<br/>"
+
     # 大盘环境推导链（真实数据，不虚构评分）
     dimensions = data.get("dimensions") or []
     if dimensions:

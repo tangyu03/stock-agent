@@ -684,25 +684,38 @@ def _get_sector_stock_count(ths_code: str) -> int:
 _sector_memory_cache: Dict[str, Optional[str]] = {}
 _sector_index: Optional[Dict[str, str]] = None
 
-# session 级失败控制
+# session 级失败控制（P1-2 审计 2026-08-18：加指数退避，退避期内不重打接口）
 _index_build_disabled: bool = False
 _index_fail_count: int = 0
+_index_next_retry_ts: float = 0.0
 _INDEX_FAIL_THRESHOLD = 5
+_BACKOFF_BASE = 5.0      # 首次失败退避 5s
+_BACKOFF_MAX = 300.0     # 退避上限 5min
+
+
+def _backoff_seconds() -> float:
+    """指数退避：5s → 10s → 20s → 40s → ... 封顶 300s"""
+    return min(_BACKOFF_MAX, _BACKOFF_BASE * (2 ** max(0, _index_fail_count - 1)))
 
 
 def _mark_index_failure(reason: str):
-    global _index_build_disabled, _index_fail_count
+    global _index_build_disabled, _index_fail_count, _index_next_retry_ts
     _index_fail_count += 1
+    _index_next_retry_ts = time.time() + _backoff_seconds()
     if _index_fail_count >= _INDEX_FAIL_THRESHOLD and not _index_build_disabled:
         _index_build_disabled = True
         logger.warning("行业索引构建连续失败 %d 次，本 session 短路: %s",
                        _index_fail_count, reason[:80])
+    else:
+        logger.warning("行业索引构建失败(第 %d 次)，退避 %.0fs 后再试: %s",
+                       _index_fail_count, _backoff_seconds(), reason[:80])
 
 
 def _reset_index_state():
-    global _index_build_disabled, _index_fail_count, _sector_index
+    global _index_build_disabled, _index_fail_count, _index_next_retry_ts, _sector_index
     _index_build_disabled = False
     _index_fail_count = 0
+    _index_next_retry_ts = 0.0
     _sector_index = None
 
 
@@ -717,11 +730,16 @@ def _build_sector_index(target_codes: Optional[List[str]] = None) -> Dict[str, s
     Returns:
         {stock_code: ths_code} 映射
     """
-    global _sector_index, _index_build_disabled
+    global _sector_index, _index_build_disabled, _index_fail_count, _index_next_retry_ts
     if _sector_index is not None and _sector_index:
         return _sector_index
 
     if _index_build_disabled:
+        return _get_sector_index_from_db() or {}
+
+    # P1-2 退避期：上次失败后未到重试时间，用 DB 缓存兜底，不再打接口
+    if time.time() < _index_next_retry_ts:
+        logger.debug("行业索引退避中（剩余 %.0fs），使用 DB 缓存", _index_next_retry_ts - time.time())
         return _get_sector_index_from_db() or {}
 
     _load_ths_industries()
@@ -767,6 +785,11 @@ def _build_sector_index(target_codes: Optional[List[str]] = None) -> Dict[str, s
             return _sector_index
         _sector_index = None
         return {}
+
+    # P1-2 成功构建：重置失败计数与退避
+    if _index_fail_count:
+        _index_fail_count = 0
+        _index_next_retry_ts = 0.0
 
     return _sector_index
 

@@ -1,0 +1,40 @@
+version: "1.0"
+
+# ============================================================
+# 板块-个股映射（Step1 板块层面 / Step2 个股层面）配置
+#
+# 架构：Step1 每天构建一次按天快照（板块 K线分类 + 成分股每日快照合并 + 板块状态）
+#       → 落 SQLite（board_snapshot / board_component 表，snapshot_date 逻辑分片）
+#       Step2 个股分析只读快照（拿个股所属板块 + 板块状态），不重建映射、
+#       不拉成分股、不触发 K线分类。
+# 触发：主流程惰性重建（当天快照缺失→现场构建）+ scripts/rebuild_sector_map.py 手动/定时
+# ============================================================
+
+sector_map:
+  enabled: true
+
+  # ---- Step1 扫描范围 ----
+  scope: "all"                 # all | watchlist | [板块名1, 板块名2]
+                               # all=全扫 THS 90 行业（推荐：覆盖任意 watchlist 股票反查）
+  sector_source: "ths"         # THS 90 行业（881xxx）
+  max_workers: 8               # cons_em 补缺时的并发数
+  fetch_components: true       # 是否拉成分股/行业归属；false 则 component 表为空，Step2 走名称匹配
+  cons_em_fallback: true       # datacenter 未覆盖的板块用 stock_board_industry_cons_em 补缺
+  classify_by: "percentile"    # percentile(当日涨跌幅前20%/后20%) | metrics(K线均线规则)
+
+  # ---- 快照新鲜度与保留 ----
+  snapshot_retention_days: 10  # 清理边界：早于 N 天的快照删除
+  stale_max_days: 5            # 可用性边界：滞后 > N 天视为不可用（强制重建）
+  force_fresh: false           # true=当天无快照时阻塞重建；false=用最近一天+stale 不中断
+
+  # ---- 缓存 ----
+  cache:
+    memory_ttl_seconds: 300    # 快照/反查索引内存 TTL
+    ranking_ttl_minutes: 5     # 当日板块排名刷新间隔（盘中新鲜度）
+
+  # ---- 触发与锁 ----
+  lazy_rebuild: true           # 主流程快照缺失时现场构建
+  rebuild_lock_timeout: 120    # 跨进程构建锁超时（秒）
+  api:
+    cons_timeout: 30           # 单板块成分股 API 超时（秒）
+    ranking_retries: 10        # 东财 push2 排名重试次数

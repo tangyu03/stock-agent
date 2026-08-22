@@ -1,27 +1,23 @@
 """
-板块映射表预构建脚本（独立入口，不在 --phase intraday 里跑）
+板块映射预构建脚本（独立入口，不在 --phase intraday 里跑）
 
 用法：
-    python -m scripts.build_sector_mapping          # 全量构建
-    python -m scripts.build_sector_mapping --force   # 强制重建（忽略缓存）
+    python -m scripts.build_sector_mapping          # 构建今天快照（幂等）
+    python -m scripts.build_sector_mapping --force   # 强制重建（覆盖当天已有快照）
     python -m scripts.build_sector_mapping --check    # 仅检查缓存状态
 
-功能：
-  1. 拉取东财行业板块涨跌幅排名（push2 带重试，496 个板块）
-  2. 拉取所有 A 股的东财三级行业归属（datacenter，不反爬，24746 只）
-  3. 拉取同花顺一级行业指数 K 线（index_hist_sw，31 个，算涨跌幅）
-  4. 保存到 SQLite data_cache 表，30 天有效期
-  5. 盘中 sector_ranker 直接查表，不再实时调 API
+新架构（Step1）：薄封装委托 src.cache.SectorMapService.build_snapshot()，
+  每天构建一次按天 BoardSnapshot，落 board_snapshot / board_component 表。
+  数据流：东财 push2 排名 → datacenter 全量 A 股行业归属（不反爬）→ cons_em 补缺
+          → K线轻量指标（优先 ths_cache 历史）→ 落库。
+  盘中 sector_ranker（Step2）只读快照 + 当日排名合并，0 成分股 API、0 K线分类。
 
-数据源稳定性：
-  - 东财 datacenter RPT_F10_BASIC_ORGINFO: ✅ 不反爬（0.2s/页，全量 70s）
-  - 东财 push2 行业板块涨跌幅: ⚠️ 带重试可用（偶发 RemoteDisconnected）
-  - 同花顺 index_hist_sw: ✅ 稳定但慢（55s/个，共 31 个约 28 分钟，可降级跳过）
-
-输出：
-  data_cache 表写入两条记录：
-  - sector_industry_ranking: 东财行业板块涨跌幅排名 + 前20%/后20%分类
-  - stock_industry_map: {stock_code: {"industry": "半导体", "industry_pct": 3.2, "classification": "main_trend"}}
+遗留（legacy，保留为降级源，不再主动写入）：
+  - fetch_industry_board_ranking / fetch_all_stock_industry_map /
+    build_stock_sector_classification 及其 data_cache 键
+    （sector_industry_ranking / stock_sector_classification）作为 sector_ranker
+    降级链二级来源（_lookup_from_cache_table），builders.py 已复用其实现。
+  更推荐的入口：python -m scripts.rebuild_sector_map（--check/--prune/--scope）
 """
 import sys
 import os
@@ -403,72 +399,46 @@ def build_stock_sector_classification(
 # ---------------------------------------------------------------------------
 
 def build(force: bool = False):
-    """全量构建板块映射表"""
-    cache_key_ranking = "sector_industry_ranking"
-    cache_key_map = "stock_sector_classification"
+    """
+    板块映射预构建（薄封装，委托 src.cache.SectorMapService.build_snapshot）。
 
-    # 检查缓存
-    if not force:
-        cached_ranking = _cache_get(cache_key_ranking)
-        cached_map = _cache_get(cache_key_map)
-        if cached_ranking and cached_map:
-            logger.info("缓存有效，跳过构建（--force 强制重建）")
-            logger.info("  板块排名: %d 个", len(cached_ranking))
-            logger.info("  个股映射: %d 只", len(cached_map))
-            return
+    新架构（Step1）：每天构建一次按天 BoardSnapshot，落 board_snapshot/board_component 表。
+    数据流：东财 push2 排名 → datacenter 全量 A 股行业归属（复用本模块数据源，不反爬）
+            → cons_em 补缺 → K线轻量指标 → BoardSnapshot。
+    幂等：当天快照已存在且非 force → 跳过。
+    旧 data_cache 键（sector_industry_ranking / stock_sector_classification）不再写入，
+    保留为 sector_ranker 降级链二级来源（_lookup_from_cache_table）。
+    本模块 fetch_* / build_stock_sector_classification 保留为遗留降级源。
+    """
+    from src.cache import get_sector_map_service
+    service = get_sector_map_service()
+    d = datetime.now().strftime("%Y-%m-%d")
 
-    logger.info("="*60)
-    logger.info("开始构建板块映射表")
-    logger.info("="*60)
-
-    # 步骤 1: 东财行业板块涨跌幅排名
-    logger.info("\n--- 步骤 1: 东财行业板块涨跌幅排名 ---")
-    t0 = time.time()
-    ranking = fetch_industry_board_ranking()
-    logger.info("耗时: %.1fs, 板块数: %d", time.time() - t0, len(ranking))
-    if not ranking:
-        logger.error("板块排名拉取失败，终止")
-        return
-    _cache_set(cache_key_ranking, ranking, days=1)  # 排名每日更新，1 天有效期
-
-    # 步骤 2: 全量 A 股行业归属
-    logger.info("\n--- 步骤 2: 全量 A 股行业归属 ---")
-    t0 = time.time()
-    stock_map = fetch_all_stock_industry_map()
-    logger.info("耗时: %.1fs, 个股数: %d", time.time() - t0, len(stock_map))
-    if not stock_map:
-        logger.error("个股行业映射拉取失败，终止")
+    if not force and service.store.has(d):
+        logger.info("板块快照 %s 已存在，跳过构建（--force 强制重建）", d)
+        check()
         return
 
-    # 步骤 3: 合并
-    logger.info("\n--- 步骤 3: 合并排名 + 行业归属 ---")
-    classification = build_stock_sector_classification(ranking, stock_map)
-
-    # 保存
-    _cache_set(cache_key_map, classification, days=30)  # 行业归属 30 天有效
-
-    # 汇总
-    logger.info("\n" + "="*60)
-    logger.info("构建完成")
     logger.info("="*60)
+    logger.info("开始构建板块快照（Step1）")
+    logger.info("="*60)
+    t0 = time.time()
+    try:
+        snap = service.build_snapshot(d, force=force)
+    except Exception as e:
+        logger.error("板块快照构建失败: %s", e)
+        return
+
     from collections import Counter
-    cls_count = Counter(v["classification"] for v in classification.values())
-    logger.info("分类统计: %s", dict(cls_count))
-
-    # 打印测试股票
-    test_codes = ["688009", "688027", "920045", "001399", "000001", "600519", "002594"]
-    logger.info("\n测试股票:")
-    for code in test_codes:
-        info = classification.get(code, {})
-        logger.info("  %s: %s (%s, 涨跌%.2f%%, %s)",
-                    code, info.get("industry", "?"),
-                    info.get("classification", "?"),
-                    info.get("change_pct", 0),
-                    info.get("match_type", "?"))
+    cls_count = Counter(s.classification for s in snap.sectors.values())
+    logger.info("构建完成: %d 板块, %d 只成分股归属, 分类统计 %s, 耗时 %.1fs",
+                len(snap.sectors), len(snap.stock_to_sectors), dict(cls_count),
+                time.time() - t0)
+    check()
 
 
 def check():
-    """检查缓存状态"""
+    """检查缓存状态：旧 data_cache 键 + 新 board_snapshot 按天快照"""
     logger.info("="*60)
     logger.info("缓存状态检查")
     logger.info("="*60)
@@ -492,6 +462,18 @@ def check():
             logger.info("    状态: %s", "✓ 有效" if valid else "✗ 已过期")
         else:
             logger.info("  %s: 未构建", key)
+
+    # 新架构：按天快照
+    logger.info("  [新架构] board_snapshot 按天快照:")
+    rows = conn.execute(
+        "SELECT snapshot_date, COUNT(*) AS sector_count, SUM(stock_count) AS stock_total "
+        "FROM board_snapshot GROUP BY snapshot_date ORDER BY snapshot_date DESC LIMIT 10"
+    ).fetchall()
+    if not rows:
+        logger.info("    无快照（尚未构建）")
+    for r in rows:
+        logger.info("    %s: %d 板块, %d 只成分股归属",
+                    r["snapshot_date"], r["sector_count"], r["stock_total"])
     # 不能 conn.close()（线程本地连接池，见 _cache_get 注释）
 
 

@@ -18,12 +18,17 @@ import logging.handlers
 from pathlib import Path
 from datetime import datetime
 
-os.environ.setdefault("TZ", "Asia/Shanghai")
-try:
-    import time as _time
-    _time.tzset()
-except Exception:
-    pass
+if sys.platform != "win32":
+    # Linux/macOS：显式指定中国时区（POSIX TZ 格式需经 tzset 生效）
+    os.environ.setdefault("TZ", "Asia/Shanghai")
+    try:
+        import time as _time
+        _time.tzset()
+    except Exception:
+        pass
+# Windows：不设 TZ 环境变量——Windows CRT 无法识别 "Area/City" 格式，
+# 设置后 localtime 会回退到 UTC，导致日志/DB 时间戳整体偏慢 8 小时（P0-1 审计 2026-08-18）。
+# 直接用系统时区（中国市场机即为 UTC+8）。
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -73,6 +78,8 @@ def main():
     run_p = sub.add_parser("run", help="执行调度阶段")
     run_p.add_argument("--phase", type=str, required=True, choices=PHASES,
                        help="调度阶段: " + " | ".join(PHASES))
+    run_p.add_argument("--force", action="store_true",
+                       help="P0-1 审计：强制运行（忽略非交易日/非交易时段闸门，仍会推送）")
 
     args = parser.parse_args()
 
@@ -97,7 +104,7 @@ def main():
 
     elif args.command == "run":
         try:
-            get_orchestrator().run(args.phase)
+            get_orchestrator().run(args.phase, force=args.force)
         except Exception as e:
             logger.error("调度异常: %s", e, exc_info=True)
 

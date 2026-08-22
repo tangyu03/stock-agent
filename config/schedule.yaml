@@ -34,8 +34,8 @@ schedule:
 
   post_market:
     time: "15:30"
-    tasks: ["daily_review", "insight_track", "trade_log"]
-    description: "盘后复盘+观点追踪更新+交易日志"
+    tasks: ["daily_review", "insight_track", "trade_log", "sector_map_rebuild"]
+    description: "盘后复盘+观点追踪更新+交易日志+板块快照重建(Step1)"
 
   weekly_report:
     time: "20:00"

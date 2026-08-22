@@ -120,6 +120,12 @@ class SectorScannerConfig(BaseModel):
     cross_diagnosis: Dict[str, Any]
 
 
+# ============ 板块映射配置 ============
+class SectorMapConfig(BaseModel):
+    version: str
+    sector_map: Dict[str, Any]  # nested under 'sector_map' key
+
+
 # ============ 调度配置 ============
 class ScheduleTaskBlock(BaseModel):
     time: str
@@ -149,6 +155,7 @@ CONFIG_VALIDATORS = {
     "market_scoring.yaml": MarketScoringConfig,
     "sector_scanner.yaml": SectorScannerConfig,
     "schedule.yaml": ScheduleConfig,
+    "sector_map.yaml": SectorMapConfig,
 }
 
 

@@ -34,6 +34,32 @@ stocks:
   name: 罗博特科
 - code: '688521'
   name: 芯原股份
+- code: '002975'
+  name: 博杰股份
+- code: '300083'
+  name: 创世纪
+- code: '688392'
+  name: 骄成超声
+- code: '300480'
+  name: 光力科技
+- code: '301392'
+  name: 汇成真空
+- code: '300308'
+  name: 中际旭创
+- code: '688048'
+  name: 长光华芯
+- code: '603986'
+  name: 兆易创新
+- code: '688361'
+  name: 中科飞测
+- code: '688630'
+  name: 芯qi微装
+- code: '688328'
+  name: 深科达
+- code: '603061'
+  name: 金海通
+- code: '688627'
+  name: 精智达           
 add_plans:
 - plan_id: ap_688028_20260709_60219e
   stock_code: '688028'

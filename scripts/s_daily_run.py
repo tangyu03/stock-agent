@@ -87,6 +87,26 @@ def run(date=None, skip_snapshot: bool = False) -> dict:
         summary["pool"] = {"error": str(e)[:120]}
         logger.error("[daily] B5 池构建失败: %s", e)
 
+    # ---- 5) Step1 板块快照重建（板块-个股映射，每天一次；已存在则幂等跳过） ----
+    try:
+        from src.cache import get_sector_map_service
+        service = get_sector_map_service()
+        if not service.store.has(d):
+            snap = service.build_snapshot(d)
+            summary["sector_map"] = {
+                "snapshot_date": snap.snapshot_date,
+                "sectors": len(snap.sectors),
+                "stocks": len(snap.stock_to_sectors),
+            }
+            logger.info("[daily] Step1 板块快照构建完成: %d 板块, %d 只成分股归属",
+                        len(snap.sectors), len(snap.stock_to_sectors))
+        else:
+            summary["sector_map"] = {"snapshot_date": d, "skipped": True}
+            logger.info("[daily] Step1 板块快照 %s 已存在，跳过", d)
+    except Exception as e:
+        summary["sector_map"] = {"error": str(e)[:120]}
+        logger.error("[daily] Step1 板块快照构建失败: %s", e)
+
     logger.info("[daily] 完成: %s", {k: v for k, v in summary.items() if k != "date"})
     return summary
 

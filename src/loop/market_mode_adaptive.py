@@ -612,12 +612,17 @@ class MarketModeAdaptive:
             logger.warning("指数K线获取失败(akshare直调): %s", e)
         return []
 
-    def assess_daily(self, force_refresh: bool = False) -> Dict:
+    def assess_daily(self, force_refresh: bool = False, ref_date: Optional[str] = None) -> Dict:
         """
         综合环境评估 — 一次调用获取所有盘前/盘中所需环境数据。
 
         包含：自适应市场模式（含外盘降级+双创评分）、双创技术位详情、
         大小盘风格轮动、外围市场扰动、5维评分推导链。
+
+        Args:
+            force_refresh: 强制刷新（忽略缓存）
+            ref_date: 参考交易日 YYYY-MM-DD；默认今天。非交易日（周末）复盘时
+                传入上一交易日，评分/推导链显式对齐该日收盘数据（P2-13 审计 2026-08-22）。
 
         Returns:
             {
@@ -634,7 +639,7 @@ class MarketModeAdaptive:
             }
         """
         from datetime import datetime as dt
-        today = dt.now().strftime("%Y-%m-%d")
+        today = ref_date or dt.now().strftime("%Y-%m-%d")
 
         # 1. 获取指数K线 + 5维评分
         index_kline = self._fetch_index_kline()
@@ -713,6 +718,9 @@ class MarketModeAdaptive:
             "dim_sum": dim_sum,
             "mode_before_shock": mode_before_shock,
             "shock_downgraded": shock_downgraded,
+            # P0-3 审计：透出 S3 降级标志与模式判定依据，供 engine 可观测推导链
+            "s3_downgraded": (scoring.get("s3_downgraded", False) if scoring else False),
+            "mode_reason": (scoring.get("mode_reason", "") if scoring else ""),
             "gem_sci_tech": gem_sci_tech,
             "external_market": external_market,
             "style_spread": style_spread,

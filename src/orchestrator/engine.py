@@ -7,7 +7,8 @@ Orchestrator 调度引擎（v3 — pre_market 与 intraday 已合并）
   weekly                — 周报
 """
 import logging
-from typing import Dict, Any, Optional, List
+from pathlib import Path
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 
 from ..config_models import load_config
@@ -20,9 +21,61 @@ from ..feedback.daily_review import get_daily_review
 from ..feedback.weekly_report import get_weekly_report
 # P0 修复：引入结构化日志 + trace_id
 from ..utils.structured_logger import get_structured_logger, set_trace_id, clear_trace_id
+# P2-13 审计（2026-08-22）：非交易日（周末）回退上一交易日的统一交易日工具
+from ..loop.data_freshness import find_recent_trading_day
 
 # logger = logging.getLogger(__name__)  # 原代码
 logger = get_structured_logger(__name__)
+
+
+# ================================================================
+# P2 审计（2026-08-18）：代码版本戳 + 交易时段闸门
+# ================================================================
+_GIT_HEAD: Optional[str] = None
+
+
+def _get_git_head() -> str:
+    """缓存 git 短 commit，供日志/推送溯源代码版本"""
+    global _GIT_HEAD
+    if _GIT_HEAD is not None:
+        return _GIT_HEAD
+    import subprocess
+    try:
+        root = Path(__file__).resolve().parent.parent.parent
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, cwd=root, timeout=5,
+        )
+        _GIT_HEAD = out.stdout.strip() or "unknown"
+    except Exception:
+        _GIT_HEAD = "unknown"
+    return _GIT_HEAD
+
+
+_WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def _resolve_run_context() -> Tuple[bool, str, str]:
+    """P0-1 审计（2026-08-18 起，2026-08-22 修订）：盘中检查的运行上下文。
+
+    返回 (是否执行, 原因, 参考交易日 ref_date)：
+    - 交易日（周一~周五）07:00-16:00 窗口内 → 执行，ref_date=今天
+    - 交易日窗口外（深夜/清晨）→ 默认跳过推送，防误触发；force=True 覆盖
+    - 非交易日（周末）→ 照常执行，按上一交易日收盘数据复盘
+      （用户期望：非交易日就查上一个交易日的情况，而非整段跳过）
+
+    注：仅按周末判定非交易日（与 data_freshness 一致，不含法定假期）；
+    节假日落在工作日时仍会执行，数据层自然回退到最近真实交易日。
+    """
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    ref_date = find_recent_trading_day(today)  # 今天非交易日时回退到上一交易日
+    if now.weekday() >= 5:
+        return True, f"非交易日（{_WEEKDAY_CN[now.weekday()]}），按上一交易日 {ref_date} 收盘数据执行", ref_date
+    hhmm = now.hour * 60 + now.minute
+    if 7 * 60 <= hhmm <= 16 * 60:
+        return True, "", ref_date
+    return False, f"非交易时段（本地 {now.strftime('%H:%M')}，窗口 07:00-16:00）", ref_date
 
 
 class Orchestrator:
@@ -40,13 +93,14 @@ class Orchestrator:
     # 统一入口
     # ================================================================
 
-    def run(self, phase: str, **kwargs):
+    def run(self, phase: str, force: bool = False, **kwargs):
         """
         phase 取值:
           pre_market   — 盘前预案
           intraday     — 盘中统一信号检查
           post_market  — 盘后复盘
           weekly       — 周报
+        force: 交易时段闸门（P0-1 审计）——True 时忽略非交易日/非时段限制强制推送
         """
         # P0 修复：为每次调度生成 trace_id，串联整条调用链
         trace_id = set_trace_id()
@@ -54,11 +108,13 @@ class Orchestrator:
             "phase": phase,
             "trace_id": trace_id,
         })
+        # P2 审计：代码版本戳，推送/日志可溯源到 commit
+        logger.info("运行代码版本: %s", _get_git_head(), extra={"git_head": _get_git_head()})
         try:
             if phase == "pre_market":
-                self._do_pre_market_plan()
+                self._do_pre_market_plan(force=force)
             elif phase == "intraday":
-                self._do_intraday()
+                self._do_intraday(force=force)
             elif phase == "post_market":
                 self._do_post_market()
             elif phase == "weekly":
@@ -79,12 +135,12 @@ class Orchestrator:
     # 节点 1：盘前预案 / 盘中统一检查（已合并）
     # ================================================================
 
-    def _do_pre_market_plan(self):
+    def _do_pre_market_plan(self, force: bool = False):
         """盘前预案 → 已合并到盘中统一检查"""
         logger.info("====== 盘前预案 (委托盘中统一检查) ======")
-        self._do_intraday()
+        self._do_intraday(force=force)
 
-    def _do_intraday(self):
+    def _do_intraday(self, force: bool = False):
         """盘中统一检查：环境评估 + 全量自选池信号 + 合并推送
 
         P2-12 结构说明（217行，便于维护）：
@@ -93,7 +149,24 @@ class Orchestrator:
         - 步骤3: 构建信号列表（entry/exit/observation）
         - 步骤4: P3实盘信号调度器
         - 步骤5: 合并推送
+
+        P0-1 审计（2026-08-18 起，2026-08-22 修订）：运行闸门。交易日窗口外默认跳过
+        （防深夜误触发，日志记录但不再消费推送配额、不落库）；非交易日（周末）不跳过，
+        按上一交易日收盘数据照常执行复盘。force=True 可覆盖交易日窗口限制。
         """
+        run_ok, reason, ref_date = _resolve_run_context()
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        is_backfill = ref_date != today_str
+        if not run_ok and not force:
+            logger.warning(
+                "跳过盘中统一检查推送：%s。如需强制运行：python -m src.main run --phase intraday --force",
+                reason,
+            )
+            return
+        if is_backfill:
+            logger.warning("非交易日运行盘中检查：%s（推送仍会发出，数据为上一交易日）", reason)
+        elif not run_ok:
+            logger.warning("强制运行盘中检查：%s（推送仍会发出）", reason)
         logger.info("====== 盘中统一检查 ======")
 
         # ---- 1. 综合环境评估 ----
@@ -104,7 +177,7 @@ class Orchestrator:
         try:
             from ..loop.market_mode_adaptive import get_market_mode_adaptive
             adaptive = get_market_mode_adaptive()
-            env = adaptive.assess_daily(force_refresh=True)
+            env = adaptive.assess_daily(force_refresh=True, ref_date=ref_date)
         except Exception as e:
             logger.warning("自适应环境评估失败，回退到缓存模式: %s", e)
             ms = self._market_scorer.get_current_mode()
@@ -114,7 +187,33 @@ class Orchestrator:
                 "position_limit": ms.get("position_limit", 0.5),
             })
 
+        # P2-13 审计：透出数据参考日，非交易日复盘时推送/日志可明确"上一交易日"口径
+        env["ref_date"] = ref_date
+        env["is_backfill"] = is_backfill
+
         market_mode = env.get("market_mode", "defend")
+
+        # P0-3 审计：环境推导链全程可观测——模式/评分/仓位上限/降级原因一屏可见，
+        # 任一隐藏降级或参数覆盖都会在这里暴露，不再"日志无解释"。
+        _pl = env.get("position_limit", 0.5)
+        _canonical_pl = {"attack": 0.8, "defend": 0.5, "retreat": 0.1}.get(market_mode, 0.5)
+        logger.info(
+            "环境推导: 模式=%s 评分=%.1f position_limit=%.2f 外盘降级=%s S3降级=%s 降级前模式=%s",
+            market_mode,
+            float(env.get("market_score", 0) or 0),
+            _pl,
+            env.get("shock_downgraded", False),
+            env.get("s3_downgraded", False),
+            env.get("mode_before_shock", market_mode),
+        )
+        if abs(_pl - _canonical_pl) > 1e-9:
+            logger.warning(
+                "position_limit=%.2f 与模式 %s 的规范映射 %.2f 不一致（P0-3 审计）："
+                "环境推导链存在未记录覆盖，请核查 assess_daily/降级路径。",
+                _pl, market_mode, _canonical_pl,
+            )
+        if env.get("mode_reason"):
+            logger.info("模式判定依据: %s", env.get("mode_reason"))
 
         # ---- 2. 统一引擎（全量自选池） ----
         # 板块分类由 sector_ranker（涨跌幅百分位排名）统一完成，不再需要 scanner 预扫
@@ -245,7 +344,9 @@ class Orchestrator:
         if not holdings:
             logger.warning(
                 "未读到任何已执行持仓（trade_logger 闭环未建立/add_plans 均未执行）——调度按空仓运行。"
-                "买入合计已由 P0-2 总仓位闸门（position_limit=%.2f, 上限 %.0f 万）兜底，防止信号满载打到满仓。",
+                "买入合计已由 P0-2 总仓位闸门（position_limit=%.2f, 上限 %.0f 万）兜底，防止信号满载打到满仓。"
+                "P0-4 审计：若实际已有持仓，请先回执执行记录（scripts/trade_feedback.py --execute/--holdings），"
+                "否则防重复买入/T+1 检查基于虚构空仓。",
                 env.get("position_limit", 0.5),
                 env.get("position_limit", 0.5) * 1_000_000 / 10_000,
             )
@@ -305,7 +406,12 @@ class Orchestrator:
         # 额外推送调度摘要（让用户知道哪些信号被跳过及原因）
         if scheduled['skipped'] and any(scheduled['skipped'].values()):
             try:
-                self._pushplus.send("信号调度摘要", f"<pre>{schedule_summary}</pre>", level="常规")
+                # P2 审计：摘要带代码版本，推送可溯源到 commit
+                self._pushplus.send(
+                    "信号调度摘要",
+                    f"<pre>{schedule_summary}</pre><p>代码版本 {_get_git_head()}</p>",
+                    level="常规",
+                )
             except Exception:
                 pass
 

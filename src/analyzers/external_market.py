@@ -52,7 +52,7 @@ def assess_disturbance(
             "summary": str,      # 一句话摘要
         }
     """
-    # 合并数据源
+    # 合并数据源（字段为 None = 无数据，跳过对应判定；P0-1 审计 2026-08-18）
     if us_snapshot:
         vix = us_snapshot.get("vix", vix)
         sp500_change = us_snapshot.get("sp500_change_pct", sp500_change)
@@ -63,42 +63,42 @@ def assess_disturbance(
     reasons = []
     severity = 0  # 0=None, 1=Mild, 2=Moderate, 3=Severe
 
-    # VIX 判定（使用绝对值，因为接口可能返回 0）
-    if vix >= 30:
+    # VIX 判定（None = 无数据，跳过；不再用 0 当脏值兜底）
+    if vix is not None and vix >= 30:
         severity = max(severity, 3)
         reasons.append(f"VIX={vix:.1f}（恐慌区间>30）")
-    elif vix >= 25:
+    elif vix is not None and vix >= 25:
         severity = max(severity, 2)
         reasons.append(f"VIX={vix:.1f}（中度不安 25-30）")
-    elif vix >= 20:
+    elif vix is not None and vix >= 20:
         severity = max(severity, 1)
         reasons.append(f"VIX={vix:.1f}（轻度不安 20-25）")
 
-    # 美股跌幅判定（使用百分比值，与 AKShare 返回一致：-1.5 表示 -1.5%）
+    # 美股跌幅判定（百分比值，与 AKShare 返回一致：-1.5 表示 -1.5%）
     # 使用标普500为主，纳斯达克为辅
     us_decline = sp500_change  # 默认用标普500
     # 只有当纳斯达克数据存在且两者都跌时，取跌幅更大的那个
-    if nasdaq_change and sp500_change:
+    if nasdaq_change is not None and sp500_change is not None:
         if nasdaq_change < sp500_change:
             us_decline = nasdaq_change
         else:
             us_decline = sp500_change
 
-    if us_decline < -2.0:
+    if us_decline is not None and us_decline < -2.0:
         severity = max(severity, 3)
         reasons.append(f"美股跌{abs(us_decline):.1f}%（>2%）")
-    elif us_decline < -1.0:
+    elif us_decline is not None and us_decline < -1.0:
         severity = max(severity, 2)
         reasons.append(f"美股跌{abs(us_decline):.1f}%（1-2%）")
-    elif us_decline < 0:
+    elif us_decline is not None and us_decline < 0:
         severity = max(severity, 1)
         reasons.append(f"美股微跌{abs(us_decline):.1f}%")
 
     # 期货判定（盘前参考，百分比值）
-    if sp500_futures_change < -1.0:
+    if sp500_futures_change is not None and sp500_futures_change < -1.0:
         severity = max(severity, 2)
         reasons.append(f"期货跌{abs(sp500_futures_change):.1f}%")
-    elif sp500_futures_change < -0.5:
+    elif sp500_futures_change is not None and sp500_futures_change < -0.5:
         severity = max(severity, 1)
         reasons.append(f"期货微跌{abs(sp500_futures_change):.1f}%")
 
@@ -106,23 +106,26 @@ def assess_disturbance(
     level_map = {0: "无影响", 1: "轻度扰动", 2: "中度扰动", 3: "严重扰动"}
     level = level_map.get(severity, "无影响")
 
+    def _r(v):
+        return round(v, 2) if v is not None else None
+
     # 构建摘要
     parts = []
-    if sp500_change != 0:
+    if sp500_change not in (None, 0):
         parts.append(f"隔夜美股{sp500_change:+.1f}%")
-    if vix > 0:
+    if vix is not None and vix > 0:
         parts.append(f"VIX {vix:.1f}")
-    if sp500_futures_change != 0:
+    if sp500_futures_change not in (None, 0):
         parts.append(f"期货{sp500_futures_change:+.1f}%")
     summary = " / ".join(parts) + (f" → {level}" if parts else "无外围数据")
 
     return {
         "level": level,
         "level_code": severity,
-        "vix": round(vix, 2),
-        "sp500_change": round(sp500_change, 2),
-        "nasdaq_change": round(nasdaq_change, 2),
-        "sp500_futures_change": round(sp500_futures_change, 2),
+        "vix": _r(vix),
+        "sp500_change": _r(sp500_change),
+        "nasdaq_change": _r(nasdaq_change),
+        "sp500_futures_change": _r(sp500_futures_change),
         "reasons": reasons,
         "summary": summary,
     }

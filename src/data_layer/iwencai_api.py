@@ -31,6 +31,9 @@ SKILL_ID = "hithink-market-query"
 SKILL_VERSION = "1.0.0"
 DEFAULT_TIMEOUT = 15  # 秒
 
+# P1-2 审计（2026-08-18）：无 key 只告警一次，避免每次调用都刷屏
+_no_key_warned = False
+
 
 # ---------------------------------------------------------------------------
 # 底层 HTTP 调用
@@ -70,8 +73,11 @@ def _call_api(
     Returns:
         {"datas": [...], "code_count": int, ...} 或 None（失败时）
     """
+    global _no_key_warned
     if not IWENCAI_API_KEY:
-        logger.warning("IWENCAI_API_KEY 未设置，跳过问财 API 调用")
+        if not _no_key_warned:
+            _no_key_warned = True
+            logger.warning("IWENCAI_API_KEY 未设置，跳过问财 API 调用（仅提示一次）")
         return None
 
     payload = {

@@ -218,6 +218,39 @@ def init_db():
     )
     """)
 
+    # 板块状态快照（Step1 按天构建，每天每个板块一行）
+    # snapshot_date 为逻辑分片键：按天快照/按天读取/按天清理
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS board_snapshot (
+        snapshot_date  TEXT NOT NULL,          -- '2026-08-22' 分片键
+        sector_key     TEXT NOT NULL,          -- THS 代码 '881121'
+        sector_name    TEXT NOT NULL,
+        source         TEXT DEFAULT 'THS',
+        classification TEXT NOT NULL,          -- main_trend/rotational/retreating/unknown
+        change_pct     REAL DEFAULT 0,
+        rank           INTEGER DEFAULT 0,
+        total          INTEGER DEFAULT 0,
+        stock_count    INTEGER DEFAULT 0,
+        metrics_json   TEXT,                   -- calc_sector_metrics 快照（可空）
+        created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (snapshot_date, sector_key)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_board_snapshot_date ON board_snapshot(snapshot_date)")
+
+    # 成分股快照（Step1 每日全量重写当日行；Step2 反查个股所属板块）
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS board_component (
+        snapshot_date TEXT NOT NULL,
+        sector_key    TEXT NOT NULL,
+        sector_name   TEXT NOT NULL,
+        stock_code    TEXT NOT NULL,           -- 6 位代码（_extract_code 归一化）
+        PRIMARY KEY (snapshot_date, stock_code, sector_key)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_board_component_date_code "
+                   "ON board_component(snapshot_date, stock_code)")
+
     conn.commit()
     _migrate()
     logger.info("Database initialized successfully at %s", DB_PATH)
