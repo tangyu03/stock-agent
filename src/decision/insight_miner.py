@@ -483,7 +483,6 @@ class InsightMiner:
 
     def _generate_verify_config(self, judgment_data: Dict, targets: List[Dict]) -> Dict:
         """生成验证配置"""
-        direction = judgment_data.get("direction", "")
         tags = judgment_data.get("tags", [])
 
         # 简化：根据方向和标签生成基本的验证配置

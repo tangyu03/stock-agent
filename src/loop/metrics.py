@@ -31,7 +31,7 @@
 无风险利率默认 0（A 股短期国债利率可后续接入），可通过参数覆盖。
 """
 from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import math
 
 

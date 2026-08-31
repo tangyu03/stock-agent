@@ -10,7 +10,7 @@ bench 取上证指数（已有数据，零新增调用）。板块历史来自 t
 一致性：板块与上证须按 trade_date 对齐（join），不足 n 日返回 None。
 """
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import pandas as pd
 

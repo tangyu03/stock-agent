@@ -8,7 +8,7 @@ Step1 板块层面构建、Step2 个股层面读取的统一数据结构：
 成分股不内嵌在快照 JSON（90 行业约 5000+ 只，体量大），单独落 board_component 表；
 BoardSnapshot 只承载板块状态，反查索引 stock_to_sectors 加载时由 component 聚合生成。
 """
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 

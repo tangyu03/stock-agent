@@ -148,8 +148,6 @@ def apply_external_downgrade(
     if disturbance_level_code < 2:
         return current_mode  # 轻度或无影响，不降级
 
-    mode_order = {"attack": 3, "defend": 2, "retreat": 1}
-
     if disturbance_level_code == 3:  # 严重扰动
         # 强制降为 retreat（最低）
         if current_mode == "attack":

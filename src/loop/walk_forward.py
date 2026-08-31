@@ -51,7 +51,7 @@ from typing import Callable, Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .metrics import Metrics, calc_all_metrics
+from .metrics import Metrics
 
 logger = logging.getLogger(__name__)
 
@@ -294,7 +294,7 @@ class WalkForwardOptimizer:
         all_combos = list(itertools.product(*value_lists))
 
         for combo in all_combos:
-            params = dict(combo._asdict()) if hasattr(combo, "_asdict") else dict(zip(keys, combo))
+            params = dict(combo._asdict()) if hasattr(combo, "_asdict") else dict(zip(keys, combo, strict=False))  # 保持原宽松行为
 
             try:
                 metrics = self._evaluate(
@@ -515,5 +515,5 @@ def build_grid_combinations(grid: Dict[str, List]) -> List[Dict]:
     value_lists = [grid[k] for k in keys]
     combos = []
     for combo in itertools.product(*value_lists):
-        combos.append(dict(zip(keys, combo)))
+        combos.append(dict(zip(keys, combo, strict=False)))
     return combos

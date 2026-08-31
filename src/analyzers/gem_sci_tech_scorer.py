@@ -11,7 +11,7 @@
 纯本地计算，不消耗问财配额。
 """
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

@@ -3,10 +3,9 @@ PushPlus 微信推送
 免费版每日200条限制，有频率限制（约5 req/s）
 """
 import logging
-import json
 import time
 import threading
-from typing import Dict, Any, Optional, List
+from typing import Dict, Optional, List
 from datetime import datetime
 
 import requests

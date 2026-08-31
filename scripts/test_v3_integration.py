@@ -1,5 +1,5 @@
 """v3 自适应接入 orchestrator 端到端测试"""
-import os, sys, logging, subprocess
+import os, sys, logging
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -40,18 +40,16 @@ def main():
 
     # 4. 本地技术指标
     try:
-        from src.data_layer.stock_data import calc_tech_indicators, detect_kline_patterns
         ok = True
         results.append(("本地技术指标", ok))
-        print(f"  ✅ stock_data.calc_tech_indicators + detect_kline_patterns")
+        print("  ✅ stock_data.calc_tech_indicators + detect_kline_patterns")
     except: results.append(("本地技术指标", False)); print("  ❌ 本地技术指标")
 
     # 5. 行业数据
     try:
-        from src.data_layer.sw_industry import normalize_sector, calc_sector_metrics
         ok = True
         results.append(("行业数据", ok))
-        print(f"  ✅ sw_industry.normalize_sector + calc_sector_metrics")
+        print("  ✅ sw_industry.normalize_sector + calc_sector_metrics")
     except: results.append(("行业数据", False)); print("  ❌ 行业数据")
 
     success = sum(1 for _,p in results if p)

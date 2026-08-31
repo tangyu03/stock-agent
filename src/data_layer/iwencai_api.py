@@ -340,7 +340,6 @@ def batch_query_stock_fund_flow(
 
     for i in range(0, total, batch_size):
         batch = codes_and_names[i:i + batch_size]
-        codes_in_batch = [c for c, _ in batch]
 
         # 构建批量查询：列出股票代码
         if len(batch) == 1:

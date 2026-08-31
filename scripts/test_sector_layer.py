@@ -34,7 +34,6 @@ def mk_df(closes, volumes=None, start="2026-01-01"):
     import datetime as dt
     rows = []
     d = dt.date.fromisoformat(start)
-    i = 0
     while len(rows) < len(closes):
         if d.weekday() < 5:
             rows.append({"trade_date": d.isoformat()})

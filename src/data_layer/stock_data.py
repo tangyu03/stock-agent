@@ -11,8 +11,8 @@
 - 事件/财报体检/资金流：保留问财（独有能力）
 """
 import logging
-from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def batch_get_realtime_quotes(codes: List[str]) -> Dict[str, Dict]:
     to_fetch = [c for c in codes if c not in _spot_cache]
     if to_fetch:
         # 主源：腾讯（最稳定，不封）；备选：东财 ulist
-        n = _fetch_qq_quotes(to_fetch)
+        _fetch_qq_quotes(to_fetch)  # 返回命中数仅作日志用途，此处无需消费
         still_missing = [c for c in to_fetch if c not in _spot_cache]
         if still_missing:
             _fetch_em_ulist(still_missing)
@@ -71,8 +71,6 @@ def _fetch_qq_quotes(codes: List[str]) -> int:
     字段索引：[1]名称 [2]代码 [3]现价 [4]昨收 [5]今开 [6]成交量(手)
               [32]涨跌幅% [33]最高 [34]最低 [37]成交额(万)
     """
-    global _spot_cache
-
     import requests
     import random
 
@@ -142,7 +140,6 @@ def _fetch_em_ulist(codes: List[str]) -> None:
     """
     东财 ulist.np 小批量接口，分批拉取（每批 ≤ 50 只），写入 _spot_cache
     """
-    global _spot_cache
 
     import requests
     import json
@@ -822,13 +819,6 @@ def calc_tech_indicators(kline: List[Dict], market_mode: str = "defend") -> Dict
 
     # K 线形态（TA-Lib，含信号强度 ±100）
     kline_pats = detect_kline_patterns(kline)
-    bullish_pats = [p for p in kline_pats if "看涨" in p.get("signal", "")]
-    bearish_pats = [p for p in kline_pats if "看跌" in p.get("signal", "")]
-    # 用 TA-Lib 信号强度判断力度
-    max_bull_strength = max([abs(p.get("strength", 0)) for p in bullish_pats], default=0)
-    max_bear_strength = max([abs(p.get("strength", 0)) for p in bearish_pats], default=0)
-    strong_bullish = max_bull_strength >= 100
-    strong_bearish = max_bear_strength >= 100
 
 
     # 成交量
@@ -1264,7 +1254,6 @@ def detect_kline_patterns(kline: List[Dict]) -> List[Dict]:
     # ② 去掉低置信度形态（strength<80 且内置可靠度≠高）
     # ③ 去重 + 截断（最多保留 6 个）
     # ═══════════════════════════════════════════════════════
-    _noise_directions = {"趋势", "犹豫", "变盘"}
     filtered = []
     for d in detected:
         # 层①：纯形状描述，跳过
@@ -1436,8 +1425,7 @@ def prefetch_quotes(codes: List[str]) -> Dict[str, Optional[Dict]]:
 
 def get_prefetched_quote(code: str) -> Optional[Dict]:
     """获取单只股票实时行情（P2-13: 优先读prefetch缓存）"""
-    # P2-13: 优先读缓存
-    global _quote_prefetch_cache, _quote_prefetch_date
+    # P2-13: 优先读缓存（只读访问，无需 global 声明）
     today = datetime.now().strftime("%Y%m%d")
     if _quote_prefetch_cache and _quote_prefetch_date == today:
         return _quote_prefetch_cache.get(code)
@@ -1462,7 +1450,7 @@ if __name__ == "__main__":
     random.seed(42)
     mock_kline = []
     price = 100.0
-    for i in range(60):
+    for _i in range(60):
         open_p = price
         close_p = price * (1 + random.uniform(-0.03, 0.03))
         high = max(open_p, close_p) * (1 + random.uniform(0, 0.02))

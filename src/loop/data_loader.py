@@ -5,7 +5,7 @@
 关键：补充 prev_close 字段（用于涨跌停判断），并把字段名统一。
 """
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)

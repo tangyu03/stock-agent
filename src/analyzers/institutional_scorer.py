@@ -78,7 +78,7 @@ def _mark_api_success(api_name: str):
 
 def _reset_institutional_state():
     """重置所有状态（仅供测试用）"""
-    global _api_disabled, _api_fail_count, _institutional_session_cache
+    global _api_disabled, _api_fail_count  # cache 变量只做 .clear() 变异
     _api_disabled = {k: False for k in _api_disabled}
     _api_fail_count = {k: 0 for k in _api_fail_count}
     _institutional_session_cache.clear()

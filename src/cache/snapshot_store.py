@@ -11,7 +11,7 @@ board_snapshot（板块状态）/ board_component（成分股）两张表的读�
 """
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from .board_snapshot import BoardSnapshot, BoardSector

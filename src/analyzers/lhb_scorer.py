@@ -19,17 +19,14 @@ F10: 龙虎榜评分模型
   result = score_lhb("688008")
 """
 import logging
-import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from datetime import datetime, timedelta
 
-logger = logging.getLogger(__name__)
+# 修复 BUG-L1(2026-08-27): P2-3 迁移到统一 SessionCache 时漏掉了导入，
+# 原 get_session_cache() 调用会抛 NameError 且发生在 try 块之外 → score_lhb 直接崩溃。
+from ..utils.session_cache import get_session_cache
 
-# session 级缓存（当日全市场数据）
-_lhb_detail_cache: Optional[Any] = None
-_lhb_jgmmtj_cache: Optional[Any] = None
-_lhb_cache_date: str = ""
-_LHB_CACHE_TTL = 3600  # 1小时
+logger = logging.getLogger(__name__)
 
 # 席位黑名单关键词（解读字段含这些词则扣分）
 _SEAT_BLACKLIST_KEYWORDS = [

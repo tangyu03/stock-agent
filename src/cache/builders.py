@@ -49,7 +49,7 @@ def fetch_eastmoney_ranking(retries: int = 10, max_pages: int = 6) -> Optional[D
         }
         success = False
         diff = []
-        for attempt in range(retries):
+        for _attempt in range(retries):
             try:
                 r = requests.get(url, params=params, timeout=12,
                                  headers={"User-Agent": UA,

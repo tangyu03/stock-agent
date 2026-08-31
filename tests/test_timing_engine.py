@@ -98,7 +98,6 @@ class TestPairBottom:
     def test_pair_bottom_detection(self):
         """价格尾数两位相同=对子"""
         # 12.22 → "1222" → 尾数22相同
-        closes = [10.0] * 10 + [12.22]
         result = False
         price_str = f"{12.22:.2f}".replace(".", "")
         result = (price_str[-2:] == "99" or price_str[-2:] == "00" or

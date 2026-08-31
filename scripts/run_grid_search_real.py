@@ -60,7 +60,7 @@ def main():
     print("  实际持仓网格搜索（快速版）")
     print(f"  股票: {len(STOCKS)} 只")
     print(f"  时间: {START} ~ {END}")
-    print(f"  Walk-Forward: train=80d / test=30d / step=30d")
+    print("  Walk-Forward: train=80d / test=30d / step=30d")
     print(f"  搜索空间: {len(GRID)} 维, {eval('*'.join(str(len(v)) for v in GRID.values()))} 组合")
     print("=" * 70)
 
@@ -120,13 +120,13 @@ def main():
 
     # 打印结果
     print(f"\n{'='*70}")
-    print(f"  📊 Walk-Forward 搜索结果")
+    print("  📊 Walk-Forward 搜索结果")
     print(f"{'='*70}")
     print(f"  总 fold 数: {result.n_folds}")
     print(f"  每折组合数: {result.total_combinations}")
     print(f"  总搜索耗时: {result.search_seconds:.1f}s")
 
-    print(f"\n  📋 各 fold 明细:")
+    print("\n  📋 各 fold 明细:")
     print(f"  {'Fold':<6} {'训练区间':<26} {'测试区间':<26} {'IS Sharpe':>10} {'OOS Sharpe':>11} {'OOS 收益%':>11} {'OOS 交易':>8}")
     print("  " + "-" * 100)
     for f in result.folds:
@@ -138,7 +138,7 @@ def main():
         test_p = f"{f.test_start}~{f.test_end}"
         print(f"  {f.fold_idx+1:<6} {train_p:<26} {test_p:<26} {is_s:>10.4f} {oos_s:>11.4f} {oos_r:>+11.2f}% {oos_t:>8}")
 
-    print(f"\n  📊 OOS 聚合表现:")
+    print("\n  📊 OOS 聚合表现:")
     if result.oos_aggregated:
         m = result.oos_aggregated
         print(f"    平均 Sharpe:    {m.sharpe_ratio:.4f} (±{result.oos_sharpe_std:.4f})")
@@ -147,14 +147,14 @@ def main():
         print(f"    平均胜率:      {m.win_rate:.2f}%")
         print(f"    总交易次数:    {m.trade_count}")
 
-    print(f"\n  🏆 综合最优参数（按 OOS Sharpe 加权投票）:")
+    print("\n  🏆 综合最优参数（按 OOS Sharpe 加权投票）:")
     for k, v in result.best_params_overall.items():
         print(f"    • {k}: {v}")
 
     # 用最优参数跑全样本回测
     if result.best_params_overall:
         print(f"\n{'='*70}")
-        print(f"  📊 用最优参数跑全样本回测")
+        print("  📊 用最优参数跑全样本回测")
         print(f"{'='*70}")
         nested = _flatten_to_nested(result.best_params_overall)
         full_params = {**DEFAULT_BACKTEST_PARAMS, **nested}

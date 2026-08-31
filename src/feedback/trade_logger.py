@@ -3,8 +3,7 @@
 记录所有信号和用户操作
 """
 import logging
-import json
-from typing import Dict, Any, Optional, List
+from typing import Dict, Optional, List
 from datetime import datetime, date
 
 from ..db import get_connection, get_conn

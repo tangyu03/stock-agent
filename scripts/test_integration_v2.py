@@ -14,17 +14,15 @@
 使用合成 K 线数据，无需 AKShare API。
 """
 import sys
-import os
 from pathlib import Path
 from datetime import datetime, timedelta
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.loop.backtest_engine import BacktestEngine, Signal, print_result
+from src.loop.backtest_engine import BacktestEngine
 from src.loop.stockagent_tuned_v3_signals import StockAgentTunedV3Signals, DEFAULT_BACKTEST_PARAMS
 from src.loop.walk_forward import WalkForwardOptimizer
-from src.loop.metrics import Metrics
 from src.analyzers.timing_engine import (
     TimingEngine, get_backtest_timing_engine, get_timing_engine,
 )
@@ -34,7 +32,6 @@ def make_synthetic_kline(start_price=10.0, days=80, volatility=0.02, seed=42):
     """生成合成 K 线数据（一只股票）"""
     import random
     random.seed(seed)
-    kline = []
     price = start_price
     base_date = datetime(2025, 1, 5)
 

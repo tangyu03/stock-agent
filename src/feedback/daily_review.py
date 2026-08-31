@@ -3,7 +3,7 @@
 每日收盘后自动生成复盘报告
 """
 import logging
-from typing import Dict, Any, Optional
+from typing import Optional
 from datetime import datetime, date
 
 from ..db import get_connection

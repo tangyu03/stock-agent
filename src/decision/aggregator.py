@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from ..config_models import load_config
-from ..analyzers.market_scorer import get_market_scorer, MarketScoreResult
+from ..analyzers.market_scorer import get_market_scorer
 # P1-17: sector_scanner 已废弃，统一用 sector_ranker
 from ..analyzers.timing_engine import EntrySignal, ExitSignal
 from .holding_health import HoldingHealth, WatchlistAnalysisResult
@@ -51,11 +51,12 @@ class SignalSummary:
     # 做T信号（占位，由T0引擎填充）
     t0_signals: List[Dict] = field(default_factory=list)
 
-    # 交叉诊断
-    cross_diagnosis: List[CrossDiagnosisResult] = field(default_factory=list)
+    # 交叉诊断（P1-17 前 sector_scanner.CrossDiagnosisResult；scanner 废弃后该字段不再有生产者，
+    #         保留字段仅为兼容序列化/调试输出）
+    cross_diagnosis: List[Any] = field(default_factory=list)
 
-    # 板块扫描
-    sector_result: Optional[SectorScanResult] = None
+    # 板块扫描（P1-17 前 sector_scanner.SectorScanResult；现恒为 None，unified_engine 直接管板块分类）
+    sector_result: Optional[Any] = None
 
     # 盘前计划摘要
     pre_market_summary: str = ""
@@ -260,7 +261,7 @@ class Aggregator:
             if code in v3_exit_codes:
                 wa.should_push = True
                 if "v3卖出" not in (wa.push_reason or ""):
-                    wa.push_reason = f"v3卖出信号 | " + (wa.push_reason or "")
+                    wa.push_reason = "v3卖出信号 | " + (wa.push_reason or "")
 
         summary.watchlist_analyses = watchlist_analyses
 
@@ -311,7 +312,7 @@ class Aggregator:
         summary.exit_signals = list(merged_exit.values())
 
         # 任务④.5：为新的进场信号自动创建啄米加仓计划（P0 修复：方法已存在）
-        total_asset = self._portfolio_config.get("total_asset", 1_000_000)
+        # （total_asset 由 position_builder 内部读取配置获取，本函数无需自取）
         pb = get_position_builder()
         new_plans_created = 0
         for sig in summary.entry_signals:
@@ -337,22 +338,12 @@ class Aggregator:
         try:
             build_signals: List[PositionBuildSignal] = []
 
-            # 5a：检查啄米加仓计划是否触发（P0 修复：保留为占位，实际触发逻辑在 timing_engine 内）
-            sector_state_map_for_plans: Dict[str, str] = {}
-            plan_tech_cache: Dict[str, Dict] = {}
-            for h in holding_analyses:
-                if h.details:
-                    plan_tech_cache[h.stock_code] = h.details
+            # 5a：加仓计划触发检查由 timing_engine 统一负责（原占位缓存构建已清理为死代码）
 
             # 5b：对持仓标的检查加仓信号（套利加仓）
-            # P0 修复：原代码此处 pass，保留为占位
-            for h in holding_analyses:
-                code = h.stock_code
-                name = h.stock_name
-                sector = h.sector_status
-                td = h.details or {}
-                # 加仓信号生成由 timing_engine._check_arbitrage_entry 负责
-                # 此处仅收集已生成的信号（避免重复调用 API）
+            # 加仓信号生成由 timing_engine._check_arbitrage_entry 负责，
+            # unified_engine 全量扫已覆盖，这里不再有额外收集逻辑
+            # （原 no-op 循环体已清理：只赋值不消费的死代码）
 
             summary.position_build_signals = build_signals
             logger.info("加仓信号: %d 条（仅持仓股）", len(build_signals))
@@ -575,7 +566,7 @@ class Aggregator:
 
     def _build_sector_classification_map(
         self,
-        sector_result: SectorScanResult,
+        sector_result: Any,
         holdings: List[Dict],
         watchlist: List,
     ) -> Dict[str, str]:

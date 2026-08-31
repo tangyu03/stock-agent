@@ -10,7 +10,7 @@ AKShare 数据适配器
 import logging
 import random
 import time
-from typing import Optional, Dict, List, Any, Callable
+from typing import Optional, Dict, List, Any
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 
@@ -413,7 +413,7 @@ class AKShareAdapter:
         # 按优先级排序
         fallback_list = sorted(fallback_list, key=lambda x: x[0])
 
-        for priority, ds_name, func_name, param_adapter in fallback_list:
+        for _priority, ds_name, func_name, param_adapter in fallback_list:
             # 检查该数据源该接口是否被熔断
             ds_source_key = f"{source_key}__{ds_name}"
             if self._is_circuit_open(ds_source_key):
@@ -464,8 +464,7 @@ class AKShareAdapter:
             logger.debug("Circuit breaker open for %s, skipping", source)
             return None
 
-        last_error = None
-        for attempt in range(self.MAX_RETRIES + 1):
+        for attempt in range(self.MAX_RETRIES + 1):  # last_error 从未消费，移除
             # 策略1：降速 + 随机延时
             self._rate_limit()
             self._call_count += 1
@@ -485,7 +484,6 @@ class AKShareAdapter:
                 self._record_failure(source)
                 return None
             except Exception as e:
-                last_error = e
                 error_str = str(e)
                 error_type = type(e).__name__
 
@@ -894,7 +892,6 @@ class AKShareAdapter:
 
         try:
             import requests
-            import random
             _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
             r = requests.get("http://qt.gtimg.cn/q=sh000001,sz399001",
                              timeout=8, headers={"User-Agent": _UA})

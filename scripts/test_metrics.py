@@ -4,7 +4,6 @@
 验证主流量化指标计算的正确性，使用已知输入输出对照。
 """
 import sys
-import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -13,7 +12,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.loop.metrics import (
     calc_sharpe, calc_sortino, calc_max_drawdown,
     calc_annual_return_pct, calc_total_return_pct,
-    calc_alpha_beta, calc_volatility, calc_trade_stats,
+    calc_alpha_beta, calc_trade_stats,
     calc_all_metrics, build_benchmark_curve,
 )
 
@@ -133,7 +132,7 @@ def test_benchmark_curve():
     assert curve[0]["value"] == 100_000  # 首日净值 = initial
     assert abs(curve[1]["value"] - 101_000) < 1  # 3030/3000 * 100000 = 101000
     assert abs(curve[2]["value"] - 99_000) < 1
-    print(f"✅ test_benchmark_curve passed")
+    print("✅ test_benchmark_curve passed")
 
 
 def test_calc_all_metrics():
@@ -155,7 +154,7 @@ def test_calc_all_metrics():
     assert m.winning_trades == 2
     assert m.losing_trades == 1
     assert m.alpha != 0 or m.beta != 0  # 应有基准对比结果
-    print(f"✅ test_calc_all_metrics passed")
+    print("✅ test_calc_all_metrics passed")
     print(f"   total_return_pct={m.total_return_pct:.2f}%, sharpe={m.sharpe_ratio:.4f}, "
           f"mdd={m.max_drawdown_pct:.2f}%, alpha={m.alpha:.2f}%, beta={m.beta:.4f}")
 

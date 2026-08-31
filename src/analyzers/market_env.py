@@ -12,7 +12,7 @@
 - 板块退潮辅助判断
 """
 import logging
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -120,7 +120,6 @@ def get_market_environment(force_refresh: bool = False) -> Dict:
         # 贴水（基差 < 0）= 做空压力大，趋势性下跌信号
         try:
             # 找当月主力合约（IM + 年月）
-            from datetime import timedelta
             now = datetime.now()
             # 当月合约代码：IM + YYMM
             contract_month = now.strftime("%y%m")

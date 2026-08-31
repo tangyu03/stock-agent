@@ -37,7 +37,7 @@ def main():
 
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    print(f"\n📥 加载最近行情数据...")
+    print("\n📥 加载最近行情数据...")
     loader = DataLoader()
     codes = [s[0] for s in stocks]
     kline_data = loader.load_kline(codes, start_date, end_date)
@@ -59,7 +59,7 @@ def main():
     except Exception as e:
         print(f"   ⚠️ 上证指数失败：{e}")
 
-    print(f"\n📊 跑 v3 自适应策略...")
+    print("\n📊 跑 v3 自适应策略...")
     gen = StockAgentTunedV3Signals(market_mode="defend", adaptive_mode=True,
         index_kline=index_kline, params={"backtest_mode": True})
     signals = gen.generate_signals(kline_data)
@@ -71,7 +71,7 @@ def main():
     print(f"   生成信号：{len(signals)} 个，最近交易日：{len(today_signals)} 个")
 
     if args.dry_run:
-        print(f"\n⚠️ --dry-run：仅扫描不推送")
+        print("\n⚠️ --dry-run：仅扫描不推送")
         for s in today_signals:
             a = "🟢买" if s.action == "buy" else "🔴卖"
             print(f"   {s.date} {a} {s.code} {s.shares}股 @ {s.price:.2f} - {s.reason}")

@@ -28,7 +28,7 @@
   else         → 均衡
 """
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -394,7 +394,6 @@ class MarketModeAdaptive:
         above_ma5 = current > ma5
         below_ma5_buffer = current < ma5 * 0.99  # 1%缓冲
         ma_bullish = ma5 > ma10 > ma20
-        above_ma50 = current > ma50  # 仅作展示
 
         reasons = []
         if below_ma5_buffer:

@@ -1,7 +1,7 @@
 """
 数值工具函数
 """
-from typing import Any, Optional
+from typing import Any
 
 
 def safe_float(v: Any, default: float = 0.0) -> float:

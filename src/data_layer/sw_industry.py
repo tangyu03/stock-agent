@@ -14,10 +14,9 @@
 
 import logging
 import time
-from typing import Dict, Any, Optional, List, Set
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 
-from .akshare_adapter import get_akshare_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -313,7 +312,7 @@ def fetch_ths_kline(ths_code: str, days: int = 30) -> List[Dict[str, Any]]:
     Returns:
         K线列表，按日期升序，字段含 "date", "close", "open", "high", "low", "amount"
     """
-    global _kline_cache, _kline_cache_date
+    global _kline_cache_date  # _kline_cache 只做 clear() 变异，无需声明
 
     today = datetime.now().strftime("%Y-%m-%d")
     if _kline_cache_date != today:
@@ -730,7 +729,7 @@ def _build_sector_index(target_codes: Optional[List[str]] = None) -> Dict[str, s
     Returns:
         {stock_code: ths_code} 映射
     """
-    global _sector_index, _index_build_disabled, _index_fail_count, _index_next_retry_ts
+    global _sector_index, _index_fail_count, _index_next_retry_ts  # _index_build_disabled 在此只读，无需声明
     if _sector_index is not None and _sector_index:
         return _sector_index
 
@@ -896,7 +895,7 @@ def fetch_stock_sector(code: str) -> Optional[str]:
 
 def fetch_sectors_batch(codes: List[str]) -> Dict[str, Optional[str]]:
     """批量获取多只个股的 THS 行业"""
-    global _sector_index, _sector_memory_cache
+    global _sector_memory_cache  # _sector_index 由 _build_sector_index 内部重绑定
     if _sector_index is None:
         _build_sector_index(target_codes=codes)
     _sector_memory_cache = {}

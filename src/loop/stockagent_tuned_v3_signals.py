@@ -21,8 +21,7 @@ T 日收盘生成信号 → T+1 日开盘成交（由 BacktestEngine 处理）
 """
 
 import logging
-from typing import Dict, List, Optional
-from dataclasses import dataclass
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 

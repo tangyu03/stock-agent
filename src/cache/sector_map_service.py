@@ -171,8 +171,6 @@ class SectorMapService:
         for keys in stock_to_sectors.values():
             for k in keys:
                 sector_stock_count[k] = sector_stock_count.get(k, 0) + 1
-        percentile = builders.classify_by_percentile(ranking)
-
         for key, name in industries.items():
             # 排名（东财名）与 THS 名做匹配：精确 → 包含
             rank_info = None
@@ -350,7 +348,6 @@ class SectorMapService:
     def _classify_from_snapshot(self, codes: List[str], snap: BoardSnapshot,
                                 stale_days: int) -> Dict[str, dict]:
         """从快照分类：归属反查 × 当日实时排名合并（排名失败用快照内 rank/classification）"""
-        today = _today()
 
         # 1. 归属反查：内存 → SQLite 按需查
         stock_sectors = self.mem.get(_KEY_STOCK_SECTORS.format(date=snap.snapshot_date))

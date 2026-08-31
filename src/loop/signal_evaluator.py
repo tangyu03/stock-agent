@@ -21,9 +21,8 @@
   total = buy_score × 0.6 + sell_score × 0.4
 """
 import logging
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, field
-from collections import defaultdict
+from typing import Dict, List, Optional
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +234,7 @@ def print_signal_metrics(m: SignalQualityMetrics, title: str = "信号质量评�
     print("=" * 60)
     print(f"  {title}")
     print("=" * 60)
-    print(f"  📈 买入信号质量:")
+    print("  📈 买入信号质量:")
     print(f"     信号数:       {m.buy_signal_count}")
     print(f"     胜率:         {m.buy_win_rate:.2f}%")
     print(f"     平均收益:     {m.buy_avg_return:+.2f}%")
@@ -243,13 +242,13 @@ def print_signal_metrics(m: SignalQualityMetrics, title: str = "信号质量评�
     print(f"     平均亏损:     {m.buy_avg_loss:+.2f}%")
     print(f"     期望值:       {m.buy_expectancy:+.4f}")
     print()
-    print(f"  📉 卖出信号质量:")
+    print("  📉 卖出信号质量:")
     print(f"     信号数:       {m.sell_signal_count}")
     print(f"     避免亏损率:   {m.sell_avoid_loss_rate:.2f}%")
     print(f"     平均避免亏损: {m.sell_avg_avoided:+.2f}%")
     print(f"     期望值:       {m.sell_expectancy:+.4f}")
     print()
     print(f"  🏆 综合评分:     {m.total_score:+.4f}")
-    print(f"     (买入期望×0.6 + 卖出期望×0.4)")
+    print("     (买入期望×0.6 + 卖出期望×0.4)")
     print("=" * 60)
     print()

@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from ..config_models import load_config
+from ..analyzers.market_env import get_market_environment  # 修复 BUG-T1: D1 充分条件依赖此函数，原代码未导入导致恐慌抄底永不触发
 from ..data_layer.akshare_adapter import get_akshare_adapter
 from ..data_layer.skill_wrapper import get_skill_wrapper
 from ..analyzers.stock_filter import get_stock_filter, FilterResult
@@ -142,8 +143,11 @@ DEFAULT_TIMING_CONFIG = {
     },
     "stop_loss": {
         "multiplier": 0.97,
-        "fallback_support_ratio": 0.92,  # 修复 BUG-E1: 从 0.97 改为 0.92（支撑位过远时用）
-        "max_support_distance": 0.12,    # 修复 BUG-E1: 支撑位距离超过 12% 时回退
+        # 修复(2026-08-27): 默认表与 config/timing.yaml 漂移——yaml 在 C1 整改已定为
+        # 0.95/0.06，但本表仍留 BUG-E1 时期的 0.92/0.12，yaml 缺失时降级行为会倒退。
+        # 现对齐 yaml 真值（fallback 路径另有 ATR 自适应，见 calculate_stop_loss）。
+        "fallback_support_ratio": 0.95,
+        "max_support_distance": 0.06,
         "use_atr_buffer": False,
         "atr_min_klines": 15,
         "atr_period": 14,
@@ -562,7 +566,7 @@ class TimingEngine:
 
         # 独立检查四种进场策略
         raw_signals = []
-        for check_fn, etype in [
+        for check_fn, _etype in [
             (self._check_panic_bottom, "恐慌抄底"),
             (self._check_arbitrage_entry, "套利低吸"),
             (self._check_momentum_chase, "确认追强"),
@@ -623,7 +627,6 @@ class TimingEngine:
         # 上证收盘跌破 100整百点位（3000/3100/3200/.../4000）
         # 从 tech_data 获取上证收盘价
         index_close = 0
-        kline_raw = tech_data.get('kline', [])
         # 上证指数收盘价在 index_daily_drop 的计算源，这里用近似：
         # 如果有 index_kline 在 tech_data 里，取最后一日收盘
         # 否则用 current_price / (1 + index_drop/100) 反推
@@ -675,21 +678,6 @@ class TimingEngine:
                 panic_market.append(f"巨量换手(均量{vol_ratio:.1f}倍)")
             elif vol_ratio > sig_vol_ratio:
                 panic_market.append(f"显著放量(均量{vol_ratio:.1f}倍)")
-
-        # 新增：成交量 250 日分位（来自市场环境增强模块）
-        # 放量宣泄（分位 > 70%）= 恐慌集中释放，可能接近底部
-        # 缩量阴跌（分位 < 30%）= 持续阴跌，不宜抄底
-        try:
-            mkt_env = get_market_environment()
-            vol_pct = mkt_env.get("volume_percentile", 50)
-            if vol_pct >= 70:
-                panic_market.append(f"放量宣泄(分位{vol_pct:.0f}%)")
-            elif vol_pct < 30:
-                # 缩量阴跌不抄底 — 从 panic_market 中移除已有的放量信号
-                panic_market = [p for p in panic_market if "放量" not in p and "巨量" not in p]
-                panic_market.append(f"缩量阴跌(分位{vol_pct:.0f}%)不宜抄底")
-        except Exception as e:
-            logger.debug("非关键异常: %s", e)
 
         if not panic_market:
             return None
@@ -788,9 +776,6 @@ class TimingEngine:
             return None
 
         conditions = []
-        shrinking_ratio = self._cfg("arbitrage", "shrinking_volume_ratio", default=1.0)
-        is_shrinking = tech_data.get("volume_ratio", 1.0) < shrinking_ratio
-
         if tech_data.get("shrinking_pullback_ma5"):
             conditions.append("缩量回踩MA5")
         if tech_data.get("shrinking_pullback_ma10"):
@@ -902,7 +887,6 @@ class TimingEngine:
 
         current = tech_data.get("current_price", 0)
         ma25 = tech_data.get("ma25", 0)
-        ma25_prev = tech_data.get("ma25_prev", 0)
         prev_close = tech_data.get("prev_close", 0)
         today_volume = tech_data.get("today_volume", 0)
         volume_ma60 = tech_data.get("volume_ma60", 0)
@@ -999,7 +983,6 @@ class TimingEngine:
 
         _bearish_votes = {"强烈看空", "偏空", "温和偏空"}
         is_bearish = tech_vote in _bearish_votes
-        is_not_bearish = tech_vote not in _bearish_votes and tech_vote != "中性"
 
         # 1. 破位止损 — C1 整改（2026-07-22）：硬触发
         # ----------------------------------------------------------------
@@ -1010,8 +993,6 @@ class TimingEngine:
         # 帖43"先止损再说"：出场永远比进场果断，不讨价还价
         stop_triggered = current_price <= stop_loss_calc.stop_loss_price
         if stop_triggered:
-            kline_raw = tech_data.get('kline', [])
-            last_k = kline_raw[-1] if kline_raw else {}; last_close = float(last_k.get("收盘", last_k.get("close", current_price)))
             vol_ratio = tech_data.get('volume_ratio', 1.0)
             heavy_vol_thresh = self._cfg("exit", "breakdown", "heavy_volume_ratio", default=1.3)
 
@@ -1606,7 +1587,7 @@ class TimingEngine:
             else:
                 ma_dir = 0
             if vote_dir != 0 and ma_dir != 0 and (vote_dir > 0) != (ma_dir > 0):
-                contradictions.append(f"MA空头⚠️" if ma_dir < 0 else "MA多头(与投票反向)")
+                contradictions.append("MA空头⚠️" if ma_dir < 0 else "MA多头(与投票反向)")
 
         patterns = tech_data.get("kline_pattern", [])
         if patterns:
@@ -1666,13 +1647,13 @@ class TimingEngine:
 
             # 机构与技术面共振/矛盾判断
             if inst_score >= 2 and vote_dir > 0:
-                lines.append(f"   ↳ 机构与技术共振看多✅")
+                lines.append("   ↳ 机构与技术共振看多✅")
             elif inst_score <= -2 and vote_dir < 0:
-                lines.append(f"   ↳ 机构与技术共振看空⚠️")
+                lines.append("   ↳ 机构与技术共振看空⚠️")
             elif inst_score >= 2 and vote_dir < 0:
-                lines.append(f"   ↳ ⚠️机构看多但技术看空(分歧)")
+                lines.append("   ↳ ⚠️机构看多但技术看空(分歧)")
             elif inst_score <= -2 and vote_dir > 0:
-                lines.append(f"   ↳ ⚠️机构看空但技术看多(分歧)")
+                lines.append("   ↳ ⚠️机构看空但技术看多(分歧)")
 
         # ③ 信号触发
         if triggered_types:
@@ -1989,7 +1970,7 @@ class TimingEngine:
         """从日 K 线聚合为周 K 线（按自然周聚合，周一为周首）"""
         if not daily_kline:
             return []
-        from datetime import datetime, timedelta
+        from datetime import timedelta  # 修复 BUG-T2: datetime 已在模块顶层导入，此处重复导入遮蔽同名顶层符号
         weekly = []
         current_week = None
         week_rows = []

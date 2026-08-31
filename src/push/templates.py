@@ -2,7 +2,7 @@
 消息模板渲染 - 完整决策卡片版
 每个信号展示完整决策链：环境->技术->形态->过滤->信号逻辑->风控
 """
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict
 
 def _pct(v: float, digits: int = 1) -> str:
     return f"+{v*100:.{digits}f}%" if v >= 0 else f"{v*100:.{digits}f}%"
@@ -260,8 +260,6 @@ def render_exit_signal(data):
     market_mode = data.get("market_mode","")
     sector_status = data.get("sector_status","")
     holding_rating = data.get("holding_rating","")
-    trend_status = data.get("trend_status","")
-    fund_flow = data.get("fund_flow","")
     is_urgent = et == "破位止损" or urgency == "紧急"
     note = data.get("note","")
 
@@ -328,7 +326,7 @@ def render_exit_signal(data):
         content += f"<b>机构资金</b><br/>&nbsp;&nbsp;{inst_display}<br/><br/>"
     bear = [p for p in data.get("kline_pattern",[]) if "看跌" in p.get("signal","") or "压力" in p.get("signal","")]
     if bear:
-        content += f"<b>看跌形态</b><br/>&nbsp;&nbsp;"
+        content += "<b>看跌形态</b><br/>&nbsp;&nbsp;"
         content += " ".join(f"{p['pattern']}({p['confidence']})" for p in bear) + "<br/><br/>"
     # 退出逻辑
     content += f"<b>退出逻辑</b><br/>&nbsp;&nbsp;类型:{et}<br/>&nbsp;&nbsp;理由:{reason.replace(chr(10), '<br/>&nbsp;&nbsp;')}<br/><br/>"
@@ -371,7 +369,7 @@ def render_t0_signal(data):
     if reason: content += f"&nbsp;&nbsp;理由:{reason.replace(chr(10), '<br/>&nbsp;&nbsp;')}<br/>"
     if time_slot: content += f"&nbsp;&nbsp;时段:{time_slot}<br/>"
     content += f"&nbsp;&nbsp;T仓止损:{_val(stop_loss)}<br/><br/>"
-    content += f"<b>今日必须了结!</b>"
+    content += "<b>今日必须了结!</b>"
     return title, content
 
 def render_insight_signal(data):
@@ -434,7 +432,7 @@ def render_holding_health(data):
         ts = data.get("tech_signals",{})
         if ts: content += f"&nbsp;&nbsp;三维投票:{'看涨' if ts.get('vote')=='bullish' else '看跌' if ts.get('vote')=='bearish' else '中性'}({ts.get('vote_score',0):+d})<br/>"
         content += "<br/>"
-    content += f"<b>收益明细</b><br/>"
+    content += "<b>收益明细</b><br/>"
     if shares>0 and cost>0: content += f"&nbsp;&nbsp;持仓:{shares}股 x {_val(cost)}<br/>"
     content += f"&nbsp;&nbsp;浮盈:{_pct(pnl)}<br/><br/>"
     content += f"<b>建议</b><br/>&nbsp;&nbsp;{adjustment}<br/>"
@@ -538,13 +536,13 @@ def render_environment_overview(data: Dict) -> str:
 
 
 def render_pre_market_summary(data):
+    # 注：本模板尚未接入推送链路（全工程无调用点）；position_limit /
+    # pre_market_summary 字段在接线时应被渲染进 content（当前取了未用，已清理）。
     mode = data.get("market_mode","defend")
     score = data.get("market_score",5.0)
-    pl = data.get("position_limit",0.5)
-    text = data.get("pre_market_summary","")
     mn = {"attack":"进攻","defend":"防守","retreat":"撤退"}.get(mode,mode)
     title = f"盘前计划 {mn} {score:.1f}分"
-    content = f"<b>盘前计划</b><br/><br/>"
+    content = "<b>盘前计划</b><br/><br/>"
     content += f"<b>环境总览</b><br/>&nbsp;&nbsp;模式:{mn}<br/>"
 
     # 双创技术位

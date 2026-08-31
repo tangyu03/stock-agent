@@ -126,7 +126,7 @@ def test_macd_dead_cross_exhaustion_when_enabled():
             print(f"   ✅ 找到 MACD 衰竭信号: {s.reason[:80]}")
             break
     else:
-        print(f"   ℹ️ 本次 K 线未形成 MACD 死叉，但开关已生效")
+        print("   ℹ️ 本次 K 线未形成 MACD 死叉，但开关已生效")
     print("✅ 开关 macd_as_exhaustion 生效")
 
 

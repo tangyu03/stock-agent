@@ -12,7 +12,7 @@ import json
 import logging
 from datetime import datetime
 from collections import defaultdict, Counter
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import yaml
 
@@ -31,7 +31,6 @@ def _fast_score(stock_code):
 _inst.score_institutional_holding = _fast_score
 
 # 同时禁用 akshare 内部 tqdm
-import os
 os.environ["TQDM_DISABLE"] = "1"
 
 logging.basicConfig(level=logging.ERROR, format="%(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S")
@@ -131,7 +130,7 @@ def run_backtest_optimized(stocks: List[Dict], kline_data: Dict, index_kline: Li
                         "exit_type": "",
                         "reason": (sig.trigger_reason or "")[:80],
                     })
-            except Exception as e:
+            except Exception:  # 静默跳过（历史行为保持）
                 pass
 
             try:
@@ -149,7 +148,7 @@ def run_backtest_optimized(stocks: List[Dict], kline_data: Dict, index_kline: Li
                         "exit_type": sig.exit_type,
                         "reason": (sig.reason or "")[:80],
                     })
-            except Exception as e:
+            except Exception:  # 静默跳过（历史行为保持）
                 pass
 
         processed_days += 1
@@ -315,10 +314,10 @@ def analyze(pairs: List[Dict], total_signals: int):
 
 
 if __name__ == "__main__":
-    print(f"=== 基于当前 timing_engine 代码的回测（优化版）===")
+    print("=== 基于当前 timing_engine 代码的回测（优化版）===")
     print(f"策略代码: {FIXED_ROOT}/src/analyzers/timing_engine.py")
-    print(f"评估方式: 买入信号 → 同股下一次卖出信号，按 trigger_price 涨跌幅")
-    print(f"市场模式: defend (与实盘一致)")
+    print("评估方式: 买入信号 → 同股下一次卖出信号，按 trigger_price 涨跌幅")
+    print("市场模式: defend (与实盘一致)")
     print()
 
     stocks = load_portfolio()

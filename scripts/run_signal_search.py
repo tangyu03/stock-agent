@@ -14,7 +14,6 @@ import json
 import itertools
 from pathlib import Path
 from datetime import datetime
-from collections import Counter
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -64,8 +63,8 @@ def main():
     for v in GRID.values():
         total_combos *= len(v)
     print(f"  搜索空间: {len(GRID)} 维, {total_combos} 组合")
-    print(f"  评估窗口: 买入后 5 天收益")
-    print(f"  优化目标: 综合评分 = 买入期望×0.6 + 卖出期望×0.4")
+    print("  评估窗口: 买入后 5 天收益")
+    print("  优化目标: 综合评分 = 买入期望×0.6 + 卖出期望×0.4")
     print("=" * 70)
 
     # 加载数据
@@ -92,7 +91,7 @@ def main():
     start_time = datetime.now()
 
     for i, combo in enumerate(all_combos, 1):
-        flat_params = dict(zip(keys, combo))
+        flat_params = dict(zip(keys, combo, strict=False))
         nested = _flatten_to_nested(flat_params)
         full_params = {**DEFAULT_BACKTEST_PARAMS, **nested}
 
@@ -119,7 +118,7 @@ def main():
     results.sort(key=lambda x: x["total_score"], reverse=True)
 
     print(f"\n{'='*90}")
-    print(f"  🏆 Top 10 参数组合（按综合评分排序）")
+    print("  🏆 Top 10 参数组合（按综合评分排序）")
     print(f"{'='*90}")
     print(f"  {'排名':<4} {'score':>8} {'买入胜率%':>8} {'买入期望':>8} {'卖出避免%':>8} {'卖出期望':>8} "
           f"{'RSI超买':>6} {'strong':>6} {'MA5过热':>6} {'止损×':>5}")
@@ -136,10 +135,10 @@ def main():
 
     # 最优参数详细评估
     print(f"\n{'='*70}")
-    print(f"  🏆 最优参数详细评估")
+    print("  🏆 最优参数详细评估")
     print(f"{'='*70}")
     if best_combo:
-        print(f"  参数:")
+        print("  参数:")
         for k, v in best_combo["params"].items():
             print(f"    • {k}: {v}")
 
@@ -149,7 +148,7 @@ def main():
         gen = StockAgentTunedV3Signals(market_mode="defend", params=full_params)
         signals = gen.generate_signals(kline_data)
 
-        print(f"\n  信号统计:")
+        print("\n  信号统计:")
         print(f"    总信号数: {len(signals)}")
         print(f"    买入: {sum(1 for s in signals if s.action=='buy')}")
         print(f"    卖出: {sum(1 for s in signals if s.action=='sell')}")
@@ -159,7 +158,7 @@ def main():
 
     # 对比默认参数
     print(f"\n{'='*70}")
-    print(f"  📊 默认参数 vs 最优参数对比")
+    print("  📊 默认参数 vs 最优参数对比")
     print(f"{'='*70}")
     gen_default = StockAgentTunedV3Signals(market_mode="defend", params={**DEFAULT_BACKTEST_PARAMS})
     signals_default = gen_default.generate_signals(kline_data)
@@ -201,8 +200,8 @@ def main():
     print(f"\n💾 结果已保存: {out_file}")
 
     print(f"\n{'='*70}")
-    print(f"  ✅ 网格搜索完成！")
-    print(f"  📌 将最优参数写入 config/timing.yaml 即可让实盘生效")
+    print("  ✅ 网格搜索完成！")
+    print("  📌 将最优参数写入 config/timing.yaml 即可让实盘生效")
     print(f"{'='*70}")
 
 

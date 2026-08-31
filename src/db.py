@@ -7,10 +7,8 @@ P1-13: 连接池优化（thread-local 复用连接）
 新：thread-local 缓存连接，同一线程复用，避免重复创建
 """
 import sqlite3
-import os
 import threading
 from pathlib import Path
-from datetime import date
 from contextlib import contextmanager
 import logging
 
@@ -64,7 +62,7 @@ def get_conn():
     conn = get_connection()
     try:
         yield conn
-    except Exception as e:
+    except Exception:  # e 未使用，回滚后原样抛出
         conn.rollback()
         raise
     # 不 close（thread-local 复用）

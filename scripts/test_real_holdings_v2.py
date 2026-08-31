@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.WARNING)
 from src.loop.data_loader import DataLoader
 from src.loop.backtest_engine import BacktestEngine, print_result
 from src.loop.stockagent_tuned_v3_signals import StockAgentTunedV3Signals, DEFAULT_BACKTEST_PARAMS
-from src.analyzers.timing_engine import get_backtest_timing_engine, get_timing_engine
+from src.analyzers.timing_engine import get_backtest_timing_engine
 
 HOLDINGS = [
     ("688409", "富创精密"), ("688652", "京仪装备"), ("300843", "胜蓝股份"),
@@ -69,17 +69,17 @@ def main():
 
         stop_loss = engine.calculate_stop_loss(code, tech)
         entry = engine._check_arbitrage_entry(code, name, tech, stop_loss, "defend", "rotational")
-        status = f"✅ 触发" if entry else "❌ 未触发"
+        status = "✅ 触发" if entry else "❌ 未触发"
         reason = entry.trigger_reason[:40] if entry else "条件不满足"
         print(f"  {code} {name}: weekly_macd={weekly_up} | {status} | {reason}")
         if entry:
             arbitrage_triggered += 1
 
-    print(f"\n  汇总:")
+    print("\n  汇总:")
     print(f"    周线 MACD=True: {weekly_macd_true}/{len(kline_data)} 只")
     print(f"    套利低吸触发: {arbitrage_triggered}/{len(kline_data)} 只")
-    print(f"    ✅ BUG-A1 修复: 周线 MACD 不再恒为 False" if weekly_macd_true > 0 else "    ⚠️ 周线 MACD 仍为 False")
-    print(f"    ✅ BUG-A2 修复: entry_type 命名统一" if arbitrage_triggered > 0 else "")
+    print("    ✅ BUG-A1 修复: 周线 MACD 不再恒为 False" if weekly_macd_true > 0 else "    ⚠️ 周线 MACD 仍为 False")
+    print("    ✅ BUG-A2 修复: entry_type 命名统一" if arbitrage_triggered > 0 else "")
 
     # === 验证 MACD 死叉不再单独触发卖出 ===
     print(f"\n{'='*70}")
@@ -105,10 +105,10 @@ def main():
                     macd_only_exits += 1
                     print(f"  ⚠️ {code} {name}: 仅 MACD 死叉触发卖出")
 
-    print(f"\n  汇总:")
+    print("\n  汇总:")
     print(f"    总卖出信号: {total_exits} 条")
     print(f"    仅 MACD 死叉触发: {macd_only_exits} 条")
-    print(f"    ✅ MACD 死叉不再单独触发卖出" if macd_only_exits == 0 else "    ⚠️ 仍有 MACD 单独触发")
+    print("    ✅ MACD 死叉不再单独触发卖出" if macd_only_exits == 0 else "    ⚠️ 仍有 MACD 单独触发")
 
     # === 验证对子底检测 ===
     print(f"\n{'='*70}")
@@ -128,7 +128,7 @@ def main():
             print(f"  ✅ {code} {name}: 价格 {price} → 对子底")
 
     print(f"\n  汇总: 对子底触发 {pair_bottom_count}/{len(kline_data)} 只")
-    print(f"    ✅ BUG-B4 修复: 对子底检测正常工作" if pair_bottom_count > 0 else "    ℹ️ 当日无对子底")
+    print("    ✅ BUG-B4 修复: 对子底检测正常工作" if pair_bottom_count > 0 else "    ℹ️ 当日无对子底")
 
     # === 完整回测 ===
     print(f"\n{'='*70}")

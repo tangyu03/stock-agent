@@ -15,7 +15,7 @@ import os
 import sys
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from datetime import datetime
 
 # 项目根目录加入 sys.path
@@ -67,9 +67,14 @@ def position_analyzer(mock_skill, mock_akshare):
 
 @pytest.fixture
 def timing_engine(mock_skill, mock_akshare):
-    """构造 TimingEngine 实例"""
-    from src.analyzers.timing_engine import TimingEngine
+    """构造 TimingEngine 实例
+
+    测试资产同步(2026-08-27)：参数化重构后引擎经 self._cfg/self._tc 读取阈值，
+    __new__ 构造需补挂默认配置表，否则 stop_loss 系列用例 AttributeError。
+    """
+    from src.analyzers.timing_engine import TimingEngine, DEFAULT_TIMING_CONFIG
     te = TimingEngine.__new__(TimingEngine)
+    te._tc = dict(DEFAULT_TIMING_CONFIG)
     te._risk_config = {"stop_loss_multiplier": 0.97}
     te._stop_loss_multiplier = 0.97
     te._akshare = mock_akshare
@@ -77,10 +82,6 @@ def timing_engine(mock_skill, mock_akshare):
     te._stock_filter = MagicMock()
     return te
 
-
-@pytest.fixture
-
-@pytest.fixture
 
 class TestMarketScoring:
     """大盘评分模式映射测试（无需真实 API，仅测映射逻辑）"""
@@ -119,7 +120,6 @@ class TestStopLossCalc:
 
     def test_stop_loss_ma5_nearest(self, timing_engine):
         """UT-04: MA5 最近 → 取 MA5 × 0.97"""
-        from src.analyzers.timing_engine import StopLossCalc
         tech_data = {
             "current_price": 10.2,
             "ma5": 10.0,       # 距离 0.2
@@ -146,29 +146,37 @@ class TestStopLossCalc:
         assert result.stop_loss_price == 9.7
 
     def test_stop_loss_no_support_fallback(self, timing_engine):
-        """UT-05b: 无有效支撑位 → 当前价 × 0.95 兜底"""
+        """UT-05b(契约同步): 无有效支撑位 → 当前价 × fallback_ratio 兜底。
+
+        C1-v3 后 fallback 止损价改走 ATR 自适应：有足够 K 线时=现价−ATR，
+        无 K 线时直接取 chosen_support（不再乘 multiplier）。
+        本用例无 kline 字段，覆盖最简 fallback 分支。
+        """
         tech_data = {
             "current_price": 10.0,
             "ma5": 10.5,       # > 当前价，不入选
             "ma10": 10.8,
-            "prev_low": 10.2,
         }
         result = timing_engine.calculate_stop_loss("600001", tech_data)
         assert result.chosen_support == 10.0 * 0.95
-        assert result.stop_loss_price == round(10.0 * 0.95 * 0.97, 2)
+        assert result.stop_loss_price == 10.0 * 0.95
 
     def test_stop_loss_prev_low_nearest(self, timing_engine):
-        """UT-05c: 前日最低最近 → 取前日最低 × 0.97"""
+        """UT-05c(契约同步): 仅均线族参与候选 → 取最近的下方均线 × 0.97。
+
+        calculate_stop_loss 文档明确候选=MA5/MA10/MA20/布林下轨；
+        prev_low 自 C1 重构起不再是候选（如恢复需走 ladder 阶梯结构）。
+        """
         tech_data = {
             "current_price": 10.0,
-            "ma5": 9.7,        # 距离 0.3
+            "ma5": 9.7,        # 距离 0.3，最近的下方均线
             "ma10": 9.5,       # 距离 0.5
-            "prev_low": 9.9,   # 距离 0.1，最近
             "prev_high": 10.3,
         }
         result = timing_engine.calculate_stop_loss("600001", tech_data)
-        assert result.chosen_support == 9.9
-        assert result.stop_loss_price == round(9.9 * 0.97, 2)
+        assert result.chosen_support == 9.7
+        # 实现层在止损价上不做 round（round 仅用于展示），按浮点近似比较
+        assert result.stop_loss_price == pytest.approx(9.7 * 0.97)
 
 
 # ============================================================
@@ -182,7 +190,6 @@ class TestStockFilter:
 
     def test_filter_st_stock(self):
         """UT-12: ST 股 → 名称含 ST 被识别为风险标的"""
-        code = "600001"
         name = "ST测试"
         is_st = "ST" in name or "*ST" in name
         assert is_st is True
@@ -400,6 +407,8 @@ class TestPushTemplates:
 class TestPriority4Fixes:
     """Priority 4 修复回归测试"""
 
+    @pytest.mark.skip(reason="PositionAnalyzer v3 已精简为 analyze_all_holdings/_rate_health，"
+                            "_evaluate_fund_flow 细分类逻辑不再存在；待新版资金流评价落地后重写此回归")
     def test_RT01_fund_flow_not_always_balance(self, position_analyzer):
         """RT-01: 修复后 _evaluate_fund_flow 不再永远返回"平衡" """
         # 数据缺失时返回"未知"（修复前永远返回"平衡"）
@@ -410,6 +419,8 @@ class TestPriority4Fixes:
         assert position_analyzer._evaluate_fund_flow({"main_fund_flow": -60000000}) == "流出"
         assert position_analyzer._evaluate_fund_flow({"main_fund_flow": 1000000}) == "平衡"
 
+    @pytest.mark.skip(reason="RiskGuard/guard_t0_signal 已随信号服务模式重构移除"
+                            "（t0_signals 仅保留占位字段），无对应实现可测")
     def test_RT02_t0_rounds_block_third(self, risk_guard):
         """RT-02: 同股同日 3 次做T，第 3 次被阻断"""
         # 持仓 1000 股，做T 100 股
@@ -474,9 +485,14 @@ class TestPriority4Fixes:
         assert unclosed[0]["sell_count"] == 1
 
     def test_RT04_mid_afternoon_method_exists(self):
-        """RT-04: Orchestrator 有 run_mid_afternoon_check 方法"""
+        """RT-04(P2-12 后契约更新): 午后检查已并入 intraday 统一流程。
+
+        run_mid_afternoon_check 在四阶段合并（v3）中被 _do_intraday 吸收，
+        本回归改断言新入口存在且旧独立方法确已移除，防止接口复活造成双调度。
+        """
         from src.orchestrator.engine import Orchestrator
-        assert hasattr(Orchestrator, 'run_mid_afternoon_check')
+        assert hasattr(Orchestrator, '_do_intraday')
+        assert not hasattr(Orchestrator, 'run_mid_afternoon_check')
 
     def test_RT05_api_key_fallback_present(self):
         """RT-05: skill_wrapper.py 保留硬编码 API Key 作为调试默认值"""

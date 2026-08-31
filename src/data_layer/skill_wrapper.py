@@ -6,7 +6,7 @@
 import logging
 import json
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, List
 from datetime import datetime
 from .data_cache import get_data_cache
 
@@ -545,7 +545,7 @@ class SkillWrapper:
         ]
         batch_results = self.batch_query(queries)
 
-        for name, br in zip(sector_names, batch_results):
+        for name, br in zip(sector_names, batch_results, strict=False):  # 批量结果与名称数可能不等，保持原截断行为
             results[name] = br.get("result")
 
         return results

@@ -3,7 +3,7 @@ Pydantic 配置校验模型
 启动时校验所有YAML配置文件的格式正确性
 """
 import logging
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
@@ -195,5 +195,5 @@ def load_all_configs() -> Dict[str, Dict]:
 
 if __name__ == "__main__":
     configs = load_all_configs()
-    for name, cfg in configs.items():
+    for name, cfg_unused in configs.items():  # noqa: B007 — 仅需键名
         print(f"✅ {name} loaded successfully")

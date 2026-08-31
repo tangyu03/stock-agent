@@ -28,14 +28,13 @@ A股回测引擎 v2 — 主流计算逻辑对齐版
 使用示例见 scripts/run_grid_search.py
 """
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 from dataclasses import dataclass, field
-from datetime import datetime
 from collections import defaultdict
 
 from .metrics import (
     Metrics, calc_all_metrics, build_benchmark_curve,
-    daily_returns_from_values, print_metrics,
+    print_metrics,
 )
 
 logger = logging.getLogger(__name__)
@@ -497,7 +496,6 @@ class BacktestEngine:
             return
 
         prev_close = float(fill_kline.get("prev_close", 0) or fill_kline.get("open", 0))
-        current_close = float(fill_kline.get("close", fill_open))
 
         # T+1 检查：卖出时，买入必须是昨天或更早
         if sig.action == "sell":
@@ -653,7 +651,7 @@ def print_result(result: BacktestResult, title: str = "回测结果"):
     if result.benchmark_metrics:
         print()
         print("─" * 70)
-        print(f"  📊 基准对比")
+        print("  📊 基准对比")
         print("─" * 70)
         print(f"  {'指标':<14} {'策略':>14} {'基准':>14} {'超额':>14}")
         print("  " + "-" * 64)

@@ -3,8 +3,8 @@
 周度绩效复盘 + 观点挖掘汇总
 """
 import logging
-from typing import Dict, Any, Optional
-from datetime import datetime, date, timedelta
+from typing import Optional
+from datetime import datetime, timedelta
 
 from ..db import get_connection
 from ..feedback.trade_logger import get_trade_logger

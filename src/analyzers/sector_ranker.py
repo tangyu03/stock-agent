@@ -18,7 +18,7 @@
 - 退潮 > 主线 > 轮动
 """
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -893,7 +893,6 @@ def _fallback_sector_lookup(code: str, name_to_rank: Dict[str, dict]) -> List[di
         from ..data_layer.sw_industry import (
             fetch_stock_sw_industry_full,
             normalize_sector,
-            calc_sector_metrics,
         )
 
         full = fetch_stock_sw_industry_full(code)
@@ -1025,7 +1024,7 @@ def print_rankings(rankings: List[dict], top_n: int = 10):
     if len(rankings) > top_n:
         retreating = [s for s in rankings if s["classification"] == "retreating"]
         if retreating:
-            print(f"\n  退潮板块（后 20%）:")
+            print("\n  退潮板块（后 20%）:")
             for s in retreating[:10]:
                 print(f"  {s['rank']:<4} {s['type']:<4} {s['name']:<14} {s['change_pct']:>+8.2f} 退潮")
 

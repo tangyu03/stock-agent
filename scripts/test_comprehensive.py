@@ -133,7 +133,7 @@ def main():
 
         # 显示价差最大的 5 个
         price_diffs.sort(key=lambda x: abs(x[3]), reverse=True)
-        print(f"\n  价差最大的 5 个:")
+        print("\n  价差最大的 5 个:")
         for sig, nd, fo, diff in price_diffs[:5]:
             print(f"    {sig.date} {sig.action} {sig.code} 信号价 {sig.price:.2f} → {nd} 成交价 {fo:.2f} ({diff:+.2f}%)")
 
@@ -173,7 +173,7 @@ def main():
             elif d <= 15: buckets["8-15天"] += 1
             elif d <= 30: buckets["16-30天"] += 1
             else: buckets[">30天"] += 1
-        print(f"  分布:")
+        print("  分布:")
         for k, v in buckets.items():
             print(f"    {k}: {v} 笔")
 
@@ -193,7 +193,7 @@ def main():
         for reason, cnt in reasons.most_common():
             print(f"    {reason}: {cnt} 次")
     else:
-        print(f"  无跳过信号")
+        print("  无跳过信号")
 
     # ============================================================
     # 检查 5: 净值曲线异常点
@@ -218,7 +218,7 @@ def main():
             for d, ret, val in abnormal_days[:10]:
                 print(f"    {d}: {ret:+.2f}% (净值 {val:.0f})")
         else:
-            print(f"  无异常波动日")
+            print("  无异常波动日")
 
     # ============================================================
     # 检查 6: 同一只股票买卖信号冲突
@@ -245,7 +245,7 @@ def main():
         for d, code, sigs in conflicts[:5]:
             print(f"    {d} {code}: {[s.action for s in sigs]}")
     else:
-        print(f"  无同日买卖冲突")
+        print("  无同日买卖冲突")
 
     # ============================================================
     # 检查 7: 买入信号时该股是否当日涨停（无法成交）
@@ -254,7 +254,7 @@ def main():
     print("  检查 7: 买入信号当日是否涨停（无法成交）")
     print("━" * 70)
 
-    from src.loop.backtest_engine import is_limit_up, get_limit_ratio
+    from src.loop.backtest_engine import is_limit_up
     limit_up_buys = []
     for sig in signals:
         if sig.action != "buy":
@@ -277,7 +277,7 @@ def main():
             chg = (fo - pc) / pc * 100 if pc > 0 else 0
             print(f"    {sig.date} 买 {sig.code} → {nd} 开盘 {fo:.2f} (涨幅 {chg:.1f}%)")
     else:
-        print(f"  无涨停无法买入的情况")
+        print("  无涨停无法买入的情况")
 
     # ============================================================
     # 检查 8: 回测最终持仓（是否有未平仓）
@@ -293,7 +293,7 @@ def main():
                 name = next((n for c, n in HOLDINGS if c == code), code)
                 print(f"    {code} {name}: {pos.shares} 股, 成本价 {pos.cost_price:.2f}, 买入日 {pos.buy_date}")
     else:
-        print(f"  全部平仓")
+        print("  全部平仓")
 
     print(f"  最终现金: ¥{bt_engine.cash:,.2f}")
     print(f"  最终市值: ¥{result.final_value:,.2f}")
