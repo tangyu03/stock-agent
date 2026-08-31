@@ -229,7 +229,7 @@ class Orchestrator:
         sector_ranks = {}
         env["sectors"] = {}
 
-        # 收集所有持仓股代码（用于识别无信号的"观察"股）
+        # 自选池（portfolio.yaml stocks）——用于识别无信号的"观察"股；买卖信号由统一引擎全量扫
         from ..config_models import load_config
         portfolio = load_config("portfolio.yaml")
         all_holdings = portfolio.get("stocks") or []
@@ -327,43 +327,20 @@ class Orchestrator:
                 "note": "无买卖信号，持续观察",
             })
 
-        logger.info("信号汇总: 买入%d 卖出%d 观察%d (持仓%d, 有信号%d)",
+        logger.info("信号汇总: 买入%d 卖出%d 观察%d (自选%d, 有信号%d)",
                     len(entry_batch), len(exit_batch), len(observation_batch),
                     len(all_holdings), len(signaled_codes))
 
-        # ---- 4.5 P3: 实盘信号调度器（Step0 逻辑移植）----
-        # 卖出优先 + 买入按期望排序 + 预算约束 + 主动放弃
+        # ---- 4.5 P3: 实盘信号调度器（信号服务模式：纯信号输出，不维护持仓）----
+        # 卖出信号全量输出；买入按期望排序 + 质量过滤（期望下限/碎单/并发/预算）。
+        # 不再读取 trade_logger 持仓/账户——持仓回执闭环繁琐且非决策前提，持仓由用户自行管理。
         from ..decision.live_scheduler import schedule_live_signals, format_scheduled_summary
-        # 从 trade_logger 读取真实持仓（P0-1：无已执行记录时按空仓运行，不再静默）
-        holdings = []
-        try:
-            holdings = self._trade_logger.get_current_holdings() or []
-        except Exception as e:
-            logger.error("读取持仓失败，按空持仓处理: %s", e, exc_info=True)
-            holdings = []
-        if not holdings:
-            logger.warning(
-                "未读到任何已执行持仓（trade_logger 闭环未建立/add_plans 均未执行）——调度按空仓运行。"
-                "买入合计已由 P0-2 总仓位闸门（position_limit=%.2f, 上限 %.0f 万）兜底，防止信号满载打到满仓。"
-                "P0-4 审计：若实际已有持仓，请先回执执行记录（scripts/trade_feedback.py --execute/--holdings），"
-                "否则防重复买入/T+1 检查基于虚构空仓。",
-                env.get("position_limit", 0.5),
-                env.get("position_limit", 0.5) * 1_000_000 / 10_000,
-            )
-        total_asset = 1_000_000  # 默认，后续可从 trade_logger 读
-        try:
-            account = self._trade_logger.get_account_summary() or {}
-            total_asset = account.get('total_asset', 1_000_000)
-        except Exception as e:
-            logger.error("读取账户摘要失败，按默认总资产: %s", e)
-
+        total_asset = 1_000_000  # 信号服务模式：仅作单次建议买入总额上限
         scheduled = schedule_live_signals(
             entry_signals=entry_batch,
             exit_signals=exit_batch,
-            holdings=holdings,
             total_asset=total_asset,
             market_mode=market_mode,
-            position_limit=env.get("position_limit", 0.5),
         )
 
         # 用调度后的信号替换原始信号推送
@@ -380,7 +357,6 @@ class Orchestrator:
                 'note': s.reason + f' | 调度: {s.schedule_note}',
                 'confidence': s.confidence,
                 'shares': s.shares,
-                'expectancy': s.expectancy,
             })
         scheduled_exit_batch = []
         for s in scheduled['sell']:
@@ -415,7 +391,8 @@ class Orchestrator:
             except Exception:
                 pass
 
-        # ---- 5.5 P1-3: 推送后落库（user_action=pending，等待回执脚本确认执行）----
+        # ---- 5.5 P1-3: 推送后落库（user_action=pending，仅作信号记录供盘后/周报统计；
+        #      回执闭环为可选——scripts/trade_feedback.py 保留，不再参与调度）----
         # 去重：当日同股同类型 pending 已存在则跳过（盘中多次运行不重复落库）
         today = datetime.now().strftime("%Y-%m-%d")
         existing_pending = self._trade_logger.get_pending_signals(today)
@@ -444,7 +421,6 @@ class Orchestrator:
             key = (s.stock_code, "sell", s.exit_type or "")
             if key in pending_keys:
                 continue
-            sell_hold = next((h for h in holdings if h.get("code") == s.stock_code), {})
             self._trade_logger.log_signal(
                 signal_type="sell",
                 stock_code=s.stock_code,
@@ -455,7 +431,7 @@ class Orchestrator:
                     "mode_at_signal": s.market_mode,
                     "market_score": env.get("market_score", 0),
                 },
-                shares=sell_hold.get("shares", 0),
+                shares=0,  # 信号服务模式：不持有持仓数据，股数由用户自行决定
                 note=s.reason or s.schedule_note,
             )
             logged["sell"] += 1
