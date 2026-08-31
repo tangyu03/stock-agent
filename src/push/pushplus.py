@@ -24,6 +24,10 @@ class PushPlus:
     # 频率限制：两次推送之间至少间隔 1.2 秒
     MIN_INTERVAL = 1.2
 
+    # PushPlus 实名内容上限 2 万字（2026-08-31 实测超限触发 code 999「发送内容过大」）。
+    # 留余量截断，保证任何推送不因内容过长失败。
+    MAX_CONTENT_CHARS = 19_000
+
     def __init__(self, config_path: Optional[str] = None):
         config_file = config_path or str(CONFIG_DIR / "push.yaml")
         with open(config_file, "r", encoding="utf-8") as f:
@@ -78,6 +82,17 @@ class PushPlus:
             wait = self.MIN_INTERVAL - elapsed
             logger.debug("PushPlus rate limit: waiting %.2fs", wait)
             time.sleep(wait)
+
+        # 兜底：内容超 2 万字上限时在 <br/> 边界截断（2026-08-31 实测 code 999「发送内容过大」）。
+        # 调用方（如观察推送）已做预算裁剪，这里保证任何推送都不因超长而失败。
+        content = str(content)
+        if len(content) > self.MAX_CONTENT_CHARS:
+            cut = content.rfind("<br/>", 0, self.MAX_CONTENT_CHARS)
+            if cut <= 0:
+                cut = self.MAX_CONTENT_CHARS
+            logger.warning("内容 %d 字超 PushPlus 上限 %d，截断至 %d 字",
+                           len(content), self.MAX_CONTENT_CHARS, cut)
+            content = content[:cut] + "<br/>…(内容过长已截断)"
 
         payload = {
             "token": self._token,
@@ -173,12 +188,13 @@ class PushPlus:
     def send_intraday_report(self, environment: Dict, entries: List[Dict] = None,
                              exits: List[Dict] = None, observations: List[Dict] = None) -> bool:
         """
-        发送盘中统一报告：环境总览 + 买卖信号 + 观察（合并为一条推送）。
+        发送盘中报告（2026-08-31 拆分）：主推送 = 环境总览 + 买卖信号；
+        观察列表单独一条推送（send_observation_report），避免内容超 PushPlus 2 万字上限。
 
         展示逻辑：
           - 买入信号 → "买入" 板块
           - 卖出信号 → "卖出" 板块（不再按 urgency 拆分，卖出就是卖出）
-          - 无买卖信号的持仓股 → "观察" 板块
+          - 无买卖信号的持仓股 → 观察（单独推送）
 
         Args:
             environment: 环境评估数据
@@ -187,7 +203,7 @@ class PushPlus:
             observations: 无买卖信号的持仓股列表（这才是观察）
 
         Returns:
-            是否发送成功
+            主推送是否发送成功（观察推送结果记日志，不阻塞主报告）
         """
         entries = entries or []
         exits = exits or []
@@ -195,7 +211,7 @@ class PushPlus:
 
         from .templates import render_environment_overview, render_entry_signal, render_exit_signal
 
-        # 标题
+        # 标题（主推送不再带观察计数）
         mode = environment.get("market_mode", "defend")
         score = environment.get("market_score", 5.0)
         mn = {"attack": "进攻", "defend": "防守", "retreat": "撤退"}.get(mode, mode)
@@ -205,11 +221,9 @@ class PushPlus:
             title_parts.append(f"买{len(entries)}")
         if exits:
             title_parts.append(f"卖{len(exits)}")
-        if observations:
-            title_parts.append(f"观察{len(observations)}")
         title = " | ".join(title_parts)
 
-        # 内容：环境总览 + 信号
+        # 内容：环境总览 + 买卖信号
         content = render_environment_overview(environment)
 
         if entries:
@@ -230,20 +244,59 @@ class PushPlus:
                     content += "<br/>"
             content += "<br/>"
 
-        if observations:
-            content += f"<b>📋 观察 ({len(observations)}条)</b><br/><br/>"
-            for i, s in enumerate(observations):
-                _, card = render_exit_signal(s)
-                content += card
-                if i < len(observations) - 1:
-                    content += "<br/><hr/>"
-            content += "<br/>"
-
         # 级别
         has_urgent = any(s.get("urgency") == "紧急" for s in exits)
         level = "紧急" if has_urgent else ("重要" if (entries or exits) else "常规")
 
-        return self.send(title, content, level=level)
+        ok = self.send(title, content, level=level)
+
+        # 观察单独一条推送
+        if observations:
+            ok_obs = self.send_observation_report(observations)
+            if not ok_obs:
+                logger.warning("观察推送失败（主报告结果: %s）", ok)
+        return ok
+
+    def send_observation_report(self, observations: List[Dict]) -> bool:
+        """
+        观察列表单独推送。观察卡片体积大（技术面+机构资金+说明），
+        满仓 24+ 条可能超 PushPlus 2 万字上限，故按 |涨跌幅| 降序保留、超预算即截断。
+        """
+        if not observations:
+            return True
+        from .templates import render_exit_signal
+
+        # 波动最大的优先保留
+        def _abs_chg(o):
+            try:
+                return abs(float(o.get("change_pct") or 0) or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        obs_sorted = sorted(observations, key=_abs_chg, reverse=True)
+
+        # 预算：给标题/截断提示留 500 字余量
+        header = f"<b>📋 观察 ({len(observations)}只)</b><br/><br/>"
+        budget = self.MAX_CONTENT_CHARS - 500 - len(header)
+
+        content = header
+        shown = 0
+        for o in obs_sorted:
+            _, card = render_exit_signal(o)
+            sep = "" if shown == 0 else "<br/><hr/>"
+            if len(content) + len(sep) + len(card) > budget:
+                break
+            content += sep + card
+            shown += 1
+
+        if shown < len(observations):
+            content += (f"<br/><b>⚠️ 观察共 {len(observations)} 只，仅显示涨跌幅前 {shown} 只"
+                        f"（内容超 PushPlus 2 万字上限）</b><br/>")
+        else:
+            content += "<br/>"
+
+        title = f"📋 观察 {shown}/{len(observations)}只"
+        return self.send(title, content, level="常规")
 
     def send_daily_review(self, review: str) -> bool:
         """发送盘后复盘"""

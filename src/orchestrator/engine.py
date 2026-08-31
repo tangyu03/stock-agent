@@ -375,7 +375,7 @@ class Orchestrator:
         schedule_summary = format_scheduled_summary(scheduled)
         logger.info("信号调度完成:\n%s", schedule_summary)
 
-        # ---- 5. 合并推送（环境 + 调度后买卖信号 + 观察一条消息）----
+        # ---- 5. 推送（环境 + 调度后买卖信号主报告；观察单独一条，避免超 2 万字上限）----
         # 推送调度后的信号（而非原始全量信号）
         self._pushplus.send_intraday_report(env, scheduled_entry_batch, scheduled_exit_batch, observation_batch)
 
