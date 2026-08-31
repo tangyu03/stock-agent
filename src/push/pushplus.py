@@ -95,7 +95,24 @@ class PushPlus:
                 logger.info("Push sent: [%s] %s (count: %d/%d)", level, title, self._sent_count, self._daily_limit)
                 return True
             else:
-                logger.error("Push failed: %s", result.get("msg", "unknown error"))
+                # 完整落日志（含 data 字段），供定位 999 服务端验证错误的具体原因
+                logger.error("Push failed: code=%s msg=%s data=%s",
+                             result.get("code"), result.get("msg"), result.get("data"))
+                # P-修复（2026-08-31）：html 模板被服务端拒绝（畸形 HTML/内容校验触发 999/600/500）时，
+                # 降级为 txt 模板重试一次，保证信号详情仍能送达；仍失败则按失败处理
+                if template == "html" and str(result.get("code")) in ("999", "600", "500"):
+                    time.sleep(self.MIN_INTERVAL)
+                    payload["template"] = "txt"
+                    logger.warning("html 模板推送被拒(%s)，降级 txt 重试: %s", result.get("msg"), title)
+                    response = requests.post(self._api_url, json=payload, timeout=10)
+                    result2 = response.json()
+                    if result2.get("code") == 200:
+                        self._sent_count += 1
+                        self._last_send_time = time.time()
+                        logger.info("Push sent(txt fallback): [%s] %s (count: %d/%d)", level, title, self._sent_count, self._daily_limit)
+                        return True
+                    logger.error("Push txt fallback failed: code=%s msg=%s data=%s",
+                                 result2.get("code"), result2.get("msg"), result2.get("data"))
                 return False
 
         except Exception as e:

@@ -12,6 +12,13 @@ def _val(v, digits: int = 2) -> str:
     try: return f"{float(v):.{digits}f}"
     except (TypeError, ValueError): return str(v)
 
+def _esc(s) -> str:
+    """HTML 转义自由文本（信号理由/备注/API 详情等可能含原始 < > &）。
+    未转义的 < > 会形成畸形 HTML，导致 PushPlus 服务端校验拒绝（code 999，2026-08-31）。"""
+    if s is None:
+        return ""
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
 def _fund_amount(amount: float) -> str:
     """格式化资金流向金额（元→亿/万），如 1.50亿流入, -3200万流出"""
     if amount is None:
@@ -111,9 +118,9 @@ def _tech(data):
         elif ema_short is not None and ema_long is not None:
             # 无交叉时显示当前排列方向
             if ema_short > ema_long:
-                ema_label = f"多头({_val(ema_short)}>{_val(ema_long)})"
+                ema_label = f"多头({_val(ema_short)}&gt;{_val(ema_long)})"
             elif ema_short < ema_long:
-                ema_label = f"空头({_val(ema_short)}<{_val(ema_long)})"
+                ema_label = f"空头({_val(ema_short)}&lt;{_val(ema_long)})"
             else:
                 ema_label = "粘合"
         else:
@@ -134,7 +141,7 @@ def _tech(data):
         if vd:
             # 显示前 5 条投票明细，让推导过程透明
             top_details = " ".join(vd[:5])
-            parts.append(f"投票:{vote}({sc:+.1f}) ⓘ {top_details}")
+            parts.append(f"投票:{vote}({sc:+.1f}) ⓘ {_esc(top_details)}")
         else:
             parts.append(f"投票:{vote}({sc:+.1f})")
     ex = []
@@ -162,7 +169,7 @@ def _filter(data):
     for ck, cv in checks.items():
         p = cv.get("passed",True)
         d = cv.get("detail","")
-        lines.append("&nbsp;&nbsp;" + ("OK " if p else "X ") + ck + (f" ({d})" if d else ""))
+        lines.append("&nbsp;&nbsp;" + ("OK " if p else "X ") + ck + (f" ({_esc(d)})" if d else ""))
     return "<br/>".join(lines)
 
 def render_entry_signal(data):
@@ -223,14 +230,14 @@ def render_entry_signal(data):
         content += f"<b>前置过滤({passed}/{total})</b><br/>{_filter(data)}<br/><br/>"
     content += f"<b>信号逻辑</b><br/>&nbsp;&nbsp;类型:{et}<br/>"
     ssum = data.get("strategy_summary","")
-    if ssum: content += f"&nbsp;&nbsp;策略:{ssum}<br/>"
-    if note: content += f"&nbsp;&nbsp;理由:{note.replace(chr(10), '<br/>&nbsp;&nbsp;')}<br/>"
+    if ssum: content += f"&nbsp;&nbsp;策略:{_esc(ssum)}<br/>"
+    if note: content += f"&nbsp;&nbsp;理由:{_esc(note).replace(chr(10), '<br/>&nbsp;&nbsp;')}<br/>"
     content += f"&nbsp;&nbsp;置信度:{confidence}<br/>"
     tc = {"冲高止盈":"冲高即走","持有观察":"持有观察","主升持有":"中线持有"}.get(target_type,target_type)
     content += f"&nbsp;&nbsp;策略:{tc}<br/><br/>"
     content += f"<b>风控参数</b><br/>&nbsp;&nbsp;触发价:{_val(trigger)}<br/>"
     slr = data.get("stop_loss_reason","")
-    content += f"&nbsp;&nbsp;止损:{_val(stop_loss)}" + (f"({slr})" if slr else "") + "<br/>"
+    content += f"&nbsp;&nbsp;止损:{_val(stop_loss)}" + (f"({_esc(slr)})" if slr else "") + "<br/>"
     if len(target)>=2 and target[0]>0: content += f"&nbsp;&nbsp;止盈:{_val(target[0])}-{_val(target[1])}<br/>"
     content += f"&nbsp;&nbsp;仓位等级:{position}<br/>"
     if et=="套利低吸": content += "<br/><b>冲高即走不恋战</b>"
@@ -315,7 +322,7 @@ def render_exit_signal(data):
         inst_display = _institutional(data)
         if inst_display:
             content += f"<b>机构资金</b><br/>&nbsp;&nbsp;{inst_display}<br/><br/>"
-        content += f"<b>说明</b><br/>&nbsp;&nbsp;{note}<br/>"
+        content += f"<b>说明</b><br/>&nbsp;&nbsp;{_esc(note)}<br/>"
         return title, content
 
     # 以下仅卖出信号显示
@@ -329,7 +336,7 @@ def render_exit_signal(data):
         content += "<b>看跌形态</b><br/>&nbsp;&nbsp;"
         content += " ".join(f"{p['pattern']}({p['confidence']})" for p in bear) + "<br/><br/>"
     # 退出逻辑
-    content += f"<b>退出逻辑</b><br/>&nbsp;&nbsp;类型:{et}<br/>&nbsp;&nbsp;理由:{reason.replace(chr(10), '<br/>&nbsp;&nbsp;')}<br/><br/>"
+    content += f"<b>退出逻辑</b><br/>&nbsp;&nbsp;类型:{et}<br/>&nbsp;&nbsp;理由:{_esc(reason).replace(chr(10), '<br/>&nbsp;&nbsp;')}<br/><br/>"
     content += f"<b>风控参数</b><br/>&nbsp;&nbsp;触发价:{_val(trigger)}<br/>"
     if stop_loss>0: content += f"&nbsp;&nbsp;止损:{_val(stop_loss)}<br/>"
     if is_urgent: content += "<br/><b>请立即执行卖出!</b>"
@@ -469,12 +476,12 @@ def render_environment_overview(data: Dict) -> str:
             icon_map = {"bullish": "✅", "neutral": "➖", "bearish": "❌"}
             icon = icon_map.get(d.get("status"), "➖")
             condition = d.get("condition", "")
-            dim_parts.append(f"{icon}{d['name']}:{condition}")
+            dim_parts.append(f"{icon}{d['name']}:{_esc(condition)}")
         content += f"&nbsp;&nbsp;环境: {' | '.join(dim_parts)}<br/>"
         # 模式判定原因
         mode_reason = data.get("mode_reason", "")
         if mode_reason:
-            content += f"&nbsp;&nbsp;判定: {mode_reason} → {mn}<br/>"
+            content += f"&nbsp;&nbsp;判定: {_esc(mode_reason)} → {mn}<br/>"
         # 外盘降级提示
         if data.get("shock_downgraded"):
             before_cn = {"attack": "进攻", "defend": "防守", "retreat": "撤退"}.get(
@@ -506,7 +513,7 @@ def render_environment_overview(data: Dict) -> str:
         dist_level = disturbance.get("level", "")
         if dist_summary:
             level_icon = {"严重扰动": "🔴", "中度扰动": "🟡", "轻度扰动": "🟢", "无影响": "🟢"}.get(dist_level, "")
-            content += f"&nbsp;&nbsp;外围:{level_icon} {dist_summary}<br/>"
+            content += f"&nbsp;&nbsp;外围:{level_icon} {_esc(dist_summary)}<br/>"
 
     # 风格轮动
     style_spread = data.get("style_spread") or {}
@@ -570,7 +577,7 @@ def render_pre_market_summary(data):
         dist_level = disturbance.get("level", "")
         if dist_summary:
             level_icon = {"严重扰动": "🔴", "中度扰动": "🟡", "轻度扰动": "🟢", "无影响": "🟢"}.get(dist_level, "")
-            content += f"&nbsp;&nbsp;外围:{level_icon} {dist_summary}<br/>"
+            content += f"&nbsp;&nbsp;外围:{level_icon} {_esc(dist_summary)}<br/>"
     bd = data.get("score_breakdown",{})
     if bd:
         content += "<br/><b>评分构成</b><br/>"
