@@ -1106,11 +1106,13 @@ class AKShareAdapter:
         field_map = {
             "日期": "date", "开盘": "open", "最高": "high",
             "最低": "low", "收盘": "close", "成交量": "volume",
+            "换手率": "turnover_rate",
         }
         # 中文→英文别名映射（供调用方兼容写法）
         cn_aliases = {
             "date": "日期", "open": "开盘", "high": "最高",
             "low": "最低", "close": "收盘", "volume": "成交量",
+            "turnover_rate": "换手率",
         }
         normalized = []
         for rec in records:

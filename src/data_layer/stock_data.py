@@ -114,7 +114,9 @@ def _fetch_qq_quotes(codes: List[str]) -> int:
                     "today_low": _f(parts[34]),
                     "today_open": _f(parts[5]),
                     "prev_close": _f(parts[4]),
+                    "timestamp": parts[30] if len(parts) > 30 else "",
                     "volume_ratio": _f(parts[49]),        # 量比（与同花顺一致，实测 300843=0.93）
+                    "turnover_rate": _f(parts[38]) if len(parts) > 38 else 0.0,
                     "name": name,
                     "is_st": "ST" in name or "*ST" in name,
                     "is_suspended": volume_hand == 0,
@@ -157,7 +159,7 @@ def _fetch_em_ulist(codes: List[str]) -> None:
         secids = ",".join(_em_secid(c) for c in chunk)
         params = {
             "fltt": "2", "invt": "2",
-            "fields": "f12,f14,f2,f3,f5,f6,f10,f15,f16,f17,f18",
+            "fields": "f12,f14,f2,f3,f5,f6,f8,f10,f15,f16,f17,f18",
             "secids": secids,
             "ut": "bd1d9ddb04089700cf9c27f6f7426281",
         }
@@ -188,6 +190,7 @@ def _fetch_em_ulist(codes: List[str]) -> None:
                     "today_open": _f(row.get("f17", 0)),
                     "prev_close": _f(row.get("f18", 0)),
                     "volume_ratio": _f(row.get("f10", 0)),   # 量比（东财 f10）
+                    "turnover_rate": _f(row.get("f8", 0)),   # 换手率%（东财 f8）
                     "name": name,
                     "is_st": "ST" in name or "*ST" in name,
                     "is_suspended": volume == 0,
@@ -731,7 +734,11 @@ def _calc_volume_signal(volumes: List[float], period: int = 5,
     return "正常"
 
 
-def calc_tech_indicators(kline: List[Dict], market_mode: str = "defend") -> Dict:
+def calc_tech_indicators(
+    kline: List[Dict],
+    market_mode: str = "defend",
+    volume_ratio: Optional[float] = None,
+) -> Dict:
     """
     计算完整技术指标（替代问财 tech_signals）
 
@@ -823,14 +830,25 @@ def calc_tech_indicators(kline: List[Dict], market_mode: str = "defend") -> Dict
 
     # 成交量
     volumes = [float(k.get("volume", k.get("成交量", 0))) for k in kline]
-    vol_signal = _calc_volume_signal(
-        volumes,
-        period=vol_cfg.get("period", 5),
-        surge_ratio=vol_cfg.get("surge_ratio", 1.5),
-        shrink_ratio=vol_cfg.get("shrink_ratio", 0.7),
-    )
     avg_vol_5 = sum(volumes[-6:-1]) / 5 if len(volumes) >= 6 else 1
-    vol_ratio = volumes[-1] / avg_vol_5 if avg_vol_5 > 0 else 1.0
+    try:
+        realtime_ratio = float(volume_ratio) if volume_ratio is not None else None
+    except (TypeError, ValueError):
+        realtime_ratio = None
+    if realtime_ratio is not None and realtime_ratio != realtime_ratio:
+        realtime_ratio = None
+    vol_ratio = (
+        realtime_ratio
+        if realtime_ratio is not None
+        else (volumes[-1] / avg_vol_5 if avg_vol_5 > 0 else 1.0)
+    )
+    from ..analyzers.signal_plan import build_volume_snapshot
+    volume_snapshot = build_volume_snapshot({
+        "kline": kline,
+        "today_volume": volumes[-1] if volumes else None,
+        "volume_ratio": vol_ratio,
+    })
+    vol_signal = volume_snapshot.label
     vol_stagnation_pct = vol_cfg.get("stagnation_pct", 0.01)
 
     # 波动率
@@ -852,14 +870,9 @@ def calc_tech_indicators(kline: List[Dict], market_mode: str = "defend") -> Dict
 
     details_by_cat = {"trend": [], "momentum": [], "pattern": [], "volume": []}
 
-    # ── 趋势组：EMA + MACD + ADX ──
+    # ── 趋势组：MACD方向。EMA和ADX只展示/修正，不投票 ──
     trend_bull = 0
     trend_bear = 0
-    if ema_cross == "golden":
-        trend_bull += 1; details_by_cat["trend"].append("EMA金叉")
-    elif ema_cross == "dead":
-        trend_bear += 1; details_by_cat["trend"].append("EMA死叉")
-
     macd_state = macd.get("state", ""); macd_hist = macd.get("hist_direction", "")
     if macd_state == "金叉" or (macd_state == "金叉延续" and "红柱扩大" in macd_hist):
         trend_bull += 1; details_by_cat["trend"].append(f"MACD{macd_state}+{macd_hist}")
@@ -872,17 +885,9 @@ def calc_tech_indicators(kline: List[Dict], market_mode: str = "defend") -> Dict
     elif div_type == "底背驰" and div_conf != "低":
         trend_bull += 1; details_by_cat["trend"].append(f"MACD底背驰({div_conf})")
 
-    if adx_signal == "strong":
-        # 修复问题2.3: ADX 强势时给趋势组加票（放大趋势方向）
-        # ADX > 25 表示趋势强劲，应放大已有的趋势信号
-        if trend_bull > trend_bear:
-            trend_bull += 1; details_by_cat["trend"].append(f"ADX{adx:.0f}趋势强劲(偏多)")
-        elif trend_bear > trend_bull:
-            trend_bear += 1; details_by_cat["trend"].append(f"ADX{adx:.0f}趋势强劲(偏空)")
-
     trend_vote = 1 if trend_bull > trend_bear else (-1 if trend_bear > trend_bull else 0)
 
-    # ── 动量组：RSI + KDJ + 布林带 ──
+    # ── 动量组：RSI极端区。KDJ和布林只展示/辅助，不投票 ──
     mom_bull = 0
     mom_bear = 0
     if rsi_signal in ("极度超卖", "超卖"):
@@ -895,17 +900,6 @@ def calc_tech_indicators(kline: List[Dict], market_mode: str = "defend") -> Dict
         details_by_cat["momentum"].append(f"RSI强势({rsi:.0f})(中性不投票)")
     elif rsi_signal == "弱势":
         details_by_cat["momentum"].append(f"RSI弱势({rsi:.0f})(中性不投票)")
-
-    kdj_sig = kdj.get("signal", "")
-    if kdj_sig == "金叉" or kdj_sig == "超卖":
-        mom_bull += 1; details_by_cat["momentum"].append(f"KDJ{kdj_sig}")
-    elif kdj_sig == "死叉" or kdj_sig == "超买":
-        mom_bear += 1; details_by_cat["momentum"].append(f"KDJ{kdj_sig}")
-
-    if boll["position"] == "below":
-        mom_bull += 1; details_by_cat["momentum"].append("布林下轨")
-    elif boll["position"] == "above":
-        mom_bear += 1; details_by_cat["momentum"].append("布林上轨")
 
     mom_vote = 1 if mom_bull > mom_bear else (-1 if mom_bear > mom_bull else 0)
 
@@ -944,24 +938,51 @@ def calc_tech_indicators(kline: List[Dict], market_mode: str = "defend") -> Dict
     else:
         pat_vote = 0
 
-    # ── 量能组：量价关系 ──
+    # ── 量能组：统一量能快照 + 当日价格方向 ──
     vol_vote = 0
-    if vol_signal == "放量":
-        if len(closes) >= 2:
-            chg = (closes[-1] - closes[-2]) / closes[-2] if closes[-2] > 0 else 0
-            if chg > vol_stagnation_pct:
-                vol_vote = 1; details_by_cat["volume"].append(f"放量上涨+{chg*100:.1f}%")
-            elif chg < -vol_stagnation_pct:
-                vol_vote = -1; details_by_cat["volume"].append(f"放量下跌{chg*100:.1f}%")
-            else:
-                vol_vote = -1; details_by_cat["volume"].append("放量滞涨(警惕出货)")
-    elif vol_signal == "缩量":
-        # 修复问题2.2: 缩量下跌改为中性（可能是惜售，也可能是无人接盘，方向不确定）
-        # A 股验证过的逻辑：只有缩量上涨算看空（乏力），缩量下跌不投票
-        if len(closes) >= 2 and closes[-1] < closes[-2]:
-            details_by_cat["volume"].append("缩量下跌(中性)")
+    volume_active = (
+        volume_snapshot.volume_hot
+        or volume_snapshot.turnover_hot
+        or (
+            volume_snapshot.volume_ratio is not None
+            and volume_snapshot.volume_ratio_p75 is not None
+            and volume_snapshot.volume_ratio > volume_snapshot.volume_ratio_p75
+        )
+        or (
+            volume_snapshot.volume_vs_ma60 is not None
+            and volume_snapshot.volume_vs_ma60 > 1.0
+        )
+    )
+    if len(closes) >= 2 and closes[-2] > 0:
+        change_pct = (closes[-1] - closes[-2]) / closes[-2]
+    else:
+        change_pct = 0.0
+    if not volume_active:
+        if volume_snapshot.shrinking:
+            details_by_cat["volume"].append("缩量(中性不投票)")
         else:
-            vol_vote = -1; details_by_cat["volume"].append("缩量上涨(乏力)")
+            details_by_cat["volume"].append("量能正常(中性不投票)")
+    elif change_pct > vol_stagnation_pct:
+        vol_vote = 1
+        details_by_cat["volume"].append(
+            f"放量上涨{change_pct*100:+.1f}%"
+            f"(量比{volume_snapshot.volume_ratio or 0:.2f}x"
+            f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x)"
+        )
+    elif change_pct < -vol_stagnation_pct:
+        vol_vote = -1
+        details_by_cat["volume"].append(
+            f"放量下跌{change_pct*100:+.1f}%"
+            f"(量比{volume_snapshot.volume_ratio or 0:.2f}x"
+            f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x)"
+        )
+    else:
+        vol_vote = -1
+        details_by_cat["volume"].append(
+            f"放量滞涨{change_pct*100:+.1f}%"
+            f"(量比{volume_snapshot.volume_ratio or 0:.2f}x"
+            f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x)"
+        )
 
     # ════════════════════════════════════════════════════════
     # 类别间加权投票
@@ -1029,6 +1050,7 @@ def calc_tech_indicators(kline: List[Dict], market_mode: str = "defend") -> Dict
         "volume_ratio": round(vol_ratio, 1),
         # 波动率
         "volatility": round(volatility, 1),
+        "volume_snapshot": volume_snapshot.as_dict(),
         # 缠论背驰
         "chan_divergence": divergence,
     }

@@ -37,10 +37,84 @@ def _fund_amount(amount: float) -> str:
         return f"主力{direction}{abs_amt/10000:.0f}万"
 
 
+def _signed_amount(amount) -> str:
+    """Format a signed fund-flow amount without forcing a source label."""
+    if amount is None:
+        return ""
+    try:
+        amt = float(amount)
+    except (TypeError, ValueError):
+        return ""
+    direction = "流入" if amt > 0 else ("流出" if amt < 0 else "平衡")
+    abs_amt = abs(amt)
+    if abs_amt >= 100_000_000:
+        return f"{direction}{abs_amt/100_000_000:.2f}亿"
+    if abs_amt >= 10_000:
+        return f"{direction}{abs_amt/10000:.0f}万"
+    return f"{direction}{abs_amt:.0f}元"
+
+
 def _sector_label(s: str) -> str:
     """板块状态英文→中文"""
     return {"main_trend": "主线", "rotational": "轮动", "retreating": "退潮",
             "unknown": "未知", "主线": "主线", "支线": "支线", "退潮": "退潮"}.get(s, s or "N/A")
+
+
+def _execution_plan(data) -> str:
+    """Render the single-source execution plan for an entry signal."""
+    plan = data.get("execution_plan") or {}
+    if not plan:
+        return ""
+    parts = []
+    benchmark = plan.get("benchmark_price")
+    rrr = plan.get("rrr_low")
+    if benchmark:
+        rrr_text = f"RRR1:{rrr:.2f}" if rrr else "RRR:N/A"
+        parts.append(f"基准:{_val(benchmark)} | {rrr_text} | 风险:{_pct(plan.get('risk_pct') or 0)}")
+    volume = plan.get("volume_snapshot") or {}
+    turnover = volume.get("turnover_rate")
+    turnover_p90 = volume.get("turnover_p90")
+    if turnover is not None:
+        p90_text = f"P90={float(turnover_p90):.2f}%" if turnover_p90 is not None else "P90=N/A"
+        parts.append(f"换手:{float(turnover):.2f}%({p90_text},{volume.get('label', '数据不足')})")
+    fund = plan.get("fund_snapshot") or {}
+    if fund.get("main_flows"):
+        inflow_days = sum(1 for value in fund["main_flows"] if float(value) > 0)
+        strong_text = ",强节奏" if fund.get("main_strong") else ""
+        parts.append(
+            f"主力5日累计:{_signed_amount(sum(fund['main_flows']))}"
+            f"({inflow_days}/{len(fund['main_flows'])}日流入{strong_text})"
+        )
+    if fund.get("latest_super_large_net") is not None or fund.get("latest_large_net") is not None:
+        super_text = _signed_amount(fund.get("latest_super_large_net")) or "N/A"
+        large_text = _signed_amount(fund.get("latest_large_net")) or "N/A"
+        parts.append(f"订单结构:超大单{super_text}/大单{large_text}({fund.get('order_confirmation', '数据不足')})")
+    machine_tags = [str(tag) for tag in (fund.get("machine_tags") or []) if tag]
+    if machine_tags:
+        parts.append("机器标签:" + "/".join(_esc(tag) for tag in machine_tags))
+    details = plan.get("confidence_details") or []
+    if details:
+        parts.append(
+            f"置信:{plan.get('confidence_score', 0)}/{plan.get('applicable_score', 0)}"
+            f"({plan.get('confidence', '低')}) {_esc(' | '.join(details))}"
+        )
+    if float(plan.get("combined_risk_multiplier", 1.0) or 1.0) != 1.0:
+        parts.append(f"风险系数:{float(plan['combined_risk_multiplier']):.2f}")
+    if float(plan.get("industry_multiplier", 1.0) or 1.0) != 1.0:
+        parts.append(f"产业系数:{float(plan['industry_multiplier']):.2f}")
+    industry_tags = [str(tag) for tag in (plan.get("industry_tags") or []) if tag]
+    if industry_tags:
+        parts.append("产业标签:" + "/".join(_esc(tag) for tag in industry_tags))
+    for tier in plan.get("execution_tiers") or []:
+        name = _esc(str(tier.get("name", "")))
+        price = _val(tier.get("price"))
+        state = _esc(str(tier.get("state", "")))
+        trigger = _esc(str(tier.get("trigger", "")))
+        parts.append(f"{name}{price}【{state}】{trigger}")
+    notes = plan.get("hard_constraint_notes") or []
+    if notes:
+        parts.append("约束:" + "/".join(_esc(str(note)) for note in notes))
+    return "<br/>&nbsp;&nbsp;".join(parts)
 
 
 def _institutional(data) -> str:
@@ -73,13 +147,32 @@ def _institutional(data) -> str:
         for src_name, src_data in votes.items():
             if not isinstance(src_data, dict):
                 continue
+            # 简化数据源名称
             v = src_data.get("vote", 0)
             detail = src_data.get("detail", "")
             if not detail:
                 continue
-            # 简化数据源名称
+            if src_name == "main_force":
+                raw = src_data.get("raw") or {}
+                super_large = raw.get("latest_super_large_net")
+                large = raw.get("latest_large_net")
+                extras = []
+                points = raw.get("fund_flow_5d") or []
+                if points:
+                    labels = []
+                    for point in points:
+                        date = str(point.get("date", "")).replace("-", "")
+                        label = f"{date[-4:-2]}/{date[-2:]}" if len(date) >= 4 else date
+                        labels.append(f"{label}{_signed_amount(point.get('value'))}")
+                    extras.append("5日" + ",".join(labels))
+                if super_large is not None:
+                    extras.append(f"超大单{_signed_amount(super_large)}")
+                if large is not None:
+                    extras.append(f"大单{_signed_amount(large)}")
+                if extras:
+                    detail += "；" + "/".join(extras)
             short_name = {
-                "north_bound": "北向",
+                "north_bound": "两融",
                 "lhb": "龙虎榜",
                 "main_force": "主力",
                 "shareholder": "股东",
@@ -89,7 +182,241 @@ def _institutional(data) -> str:
         if detail_parts:
             parts.append(" | ".join(detail_parts))
 
+    top10 = inst.get("top10_institutional_ratio")
+    if isinstance(top10, dict):
+        latest = top10.get("latest") or {}
+        prev = top10.get("previous") or {}
+        latest_ratio = latest.get("ratio")
+        if latest_ratio is not None:
+            change = top10.get("change_points")
+            change_text = f"，变化{change:+.2f}pct" if change is not None else ""
+            parts.append(f"前十大机构{latest_ratio:.2f}%{change_text}")
+
     return " | ".join(parts)
+
+
+def _entry_decision_lines(data) -> list[str]:
+    """Build the compact six-question entry view from machine-readable fields."""
+    plan = data.get("execution_plan") or {}
+    tech = data.get("tech_signals") or {}
+    lines = []
+
+    trend = ((tech.get("category_votes") or {}).get("trend") or {})
+    trend_details = "/".join(trend.get("details") or []) or "无信号"
+    lines.append(f"①方向:{trend_details}→{_vote_text(int(trend.get('vote', 0) or 0))}")
+
+    momentum = ((tech.get("category_votes") or {}).get("momentum") or {})
+    pattern = ((tech.get("category_votes") or {}).get("pattern") or {})
+    rsi = data.get("rsi")
+    rsi_text = f"RSI{float(rsi):.1f}(不投票)" if rsi is not None else "RSI:N/A"
+    pattern_details = "/".join(pattern.get("details") or []) or "无信号"
+    lines.append(f"②时机:{rsi_text}+{pattern_details}→{_vote_text(int(pattern.get('vote', 0) or 0))}")
+
+    volume = plan.get("volume_snapshot") or {}
+    volume_ratio = volume.get("volume_ratio")
+    turnover = volume.get("turnover_rate")
+    volume_text = f"量比{float(volume_ratio):.2f}" if volume_ratio is not None else "量比:N/A"
+    if turnover is not None:
+        p90 = volume.get("turnover_p90")
+        hot = "⚠️>P90过热" if volume.get("turnover_hot") else ""
+        p90_text = f"P90={float(p90):.2f}%" if p90 is not None else "P90=N/A"
+        volume_text += f" | 换手{float(turnover):.2f}%({p90_text}){hot}"
+    else:
+        volume_text += " | 换手:N/A"
+    lines.append(f"③量能:{volume_text}")
+
+    fund = plan.get("fund_snapshot") or {}
+    main_flows = fund.get("main_flows") or []
+    if main_flows:
+        inflow_days = sum(1 for value in main_flows if float(value) > 0)
+        strong_text = ",强节奏" if fund.get("main_strong") else ""
+        funds_text = (
+            f"主力5日累计:{_signed_amount(sum(main_flows))}"
+            f"({inflow_days}/{len(main_flows)}日流入{strong_text})"
+        )
+    else:
+        funds_text = "主力资金:N/A"
+    if fund.get("latest_super_large_net") is not None or fund.get("latest_large_net") is not None:
+        super_text = _signed_amount(fund.get("latest_super_large_net")) or "N/A"
+        large_text = _signed_amount(fund.get("latest_large_net")) or "N/A"
+        funds_text += f" | 超大单{super_text}/大单{large_text}→{_vote_text(int(fund.get('vote', 0) or 0))}"
+    lines.append(f"④资金:{funds_text}")
+
+    note = str(data.get("trigger_reason") or data.get("note") or "")
+    trigger_text = note.split(" | 调度:", 1)[0] or "无触发明细"
+    lines.append(f"⑤触发:{_esc(trigger_text)}")
+    return lines
+
+
+def _vote_text(vote: int) -> str:
+    return {1: "+1", -1: "-1", 0: "中性"}.get(vote, "中性")
+
+
+def _render_compact_observation_signal(data):
+    name = data.get("stock_name", "")
+    code = data.get("stock_code", "")
+    current_price = data.get("current_price")
+    change_pct = data.get("change_pct")
+    tech = data.get("tech_signals") or {}
+    categories = tech.get("category_votes") or {}
+    note = str(data.get("note", "") or "")
+    buy_note, _, exit_note = note.partition(" | 卖出: ")
+
+    title = f"观察 {name}({code})"
+    content = f"<b>观察 {name}({code})</b>"
+    if current_price:
+        price_line = f"现价{current_price:.2f}"
+        if change_pct is not None:
+            try:
+                price_line += f" {float(change_pct):+.2f}%"
+            except (TypeError, ValueError):
+                pass
+        content += f" {price_line}"
+    content += "<br/><br/>"
+
+    mode = data.get("market_mode", "")
+    env_parts = []
+    if mode:
+        market_text = "进攻" if mode == "attack" else "防守" if mode == "defend" else "撤退"
+        market_score = data.get("market_score")
+        env_parts.append(
+            f"市场:{market_text}"
+            + (f"({float(market_score):.1f})" if market_score is not None else "")
+        )
+    sector_name = data.get("sector_name", "")
+    if sector_name:
+        env_parts.append(f"板块:{sector_name}({_sector_label(data.get('sector_status', ''))})")
+    env_parts.append("闸门:" + {"attack": "全策略可用", "defend": "禁追强,低吸可用", "retreat": "只减不加"}.get(mode, "常规"))
+    content += f"<b>环境</b><br/>&nbsp;&nbsp;{_esc(' | '.join(env_parts))}<br/><br/>"
+
+    trend = categories.get("trend") or {}
+    momentum = categories.get("momentum") or {}
+    pattern = categories.get("pattern") or {}
+    volume = categories.get("volume") or {}
+    ma5 = data.get("ma5")
+    ma10 = data.get("ma10")
+    ma20 = data.get("ma20")
+    ma_text = ""
+    if ma5 and ma10 and ma20:
+        if ma5 > ma10 > ma20:
+            ma_text = "MA多头排列 | "
+        elif ma5 < ma10 < ma20:
+            ma_text = "MA空头排列 | "
+        else:
+            ma_text = "MA交叉震荡 | "
+    rsi = data.get("rsi") or tech.get("rsi")
+    rsi_text = f"RSI{float(rsi):.1f}(不投票)" if rsi is not None else "RSI:N/A"
+    content += "<b>六问</b><br/>"
+    content += (
+        f"&nbsp;&nbsp;①方向:{_esc(ma_text + '/'.join(trend.get('details') or []) or '无信号')}"
+        f"→{_vote_text(int(trend.get('vote', 0) or 0))}<br/>"
+    )
+    content += (
+        f"&nbsp;&nbsp;②时机:{_esc(rsi_text)}+"
+        f"{_esc('/'.join(pattern.get('details') or []) or '无信号')}"
+        f"→{_vote_text(int(pattern.get('vote', 0) or 0))}<br/>"
+    )
+    volume_ratio = data.get("volume_ratio")
+    turnover = data.get("turnover_rate")
+    volume_text = f"量比{float(volume_ratio):.2f}" if volume_ratio else "量比:N/A"
+    volume_text += f" | 换手{float(turnover):.2f}%" if turnover else " | 换手:N/A"
+    if volume.get("details"):
+        volume_text += " | " + "/".join(volume["details"])
+    content += f"&nbsp;&nbsp;③量能:{_esc(volume_text)}<br/>"
+    content += f"&nbsp;&nbsp;④资金:{_esc(_institutional(data) or '无数据')}<br/>"
+    buy_text = _esc(buy_note.replace("买入: ", "", 1) or "无买入拦截明细")
+    buy_text = buy_text.replace("\n", "<br/>&nbsp;&nbsp;&nbsp;&nbsp;")
+    exit_text = _esc(exit_note or "无卖出检查明细")
+    exit_text = exit_text.replace("\n", "<br/>&nbsp;&nbsp;&nbsp;&nbsp;")
+    content += f"&nbsp;&nbsp;⑤拦截:{buy_text}<br/>"
+    content += f"&nbsp;&nbsp;⑥风控:{exit_text}<br/><br/>"
+    return title, content
+
+
+def _render_compact_entry_signal(data):
+    name = data.get("stock_name", "")
+    code = data.get("stock_code", "")
+    entry_type = data.get("entry_type", "")
+    plan = data.get("execution_plan") or {}
+    current_price = data.get("current_price")
+    change_pct = data.get("change_pct")
+
+    title = f"买入 {entry_type} {name}({code})"
+    content = f"<b>买入 {entry_type} {name}({code})</b>"
+    if current_price:
+        price_line = f"现价{current_price:.2f}"
+        if change_pct is not None:
+            try:
+                price_line += f" {float(change_pct):+.2f}%"
+            except (TypeError, ValueError):
+                pass
+        content += f" {price_line}"
+    content += "<br/><br/>"
+
+    env_parts = []
+    mode = data.get("market_mode", "")
+    if mode:
+        env_parts.append(f"市场:{'进攻' if mode == 'attack' else '防守' if mode == 'defend' else '撤退'}")
+    market_score = data.get("market_score") or plan.get("market_score")
+    if market_score is not None:
+        env_parts[0] += f"({float(market_score):.1f})"
+    sector_name = data.get("sector_name", "") or data.get("sw_level2", "")
+    if sector_name:
+        env_parts.append(f"板块:{sector_name}({_sector_label(data.get('sector_status', ''))})")
+    env_parts.append("闸门:" + {"attack": "全策略可用", "defend": "禁追强,低吸可用", "retreat": "只减不加"}.get(mode, "常规"))
+    content += f"<b>环境</b><br/>&nbsp;&nbsp;{_esc(' | '.join(env_parts))}<br/><br/>"
+
+    content += "<b>决策</b><br/>"
+    for line in _entry_decision_lines(data):
+        content += f"&nbsp;&nbsp;{_esc(line)}<br/>"
+    content += "<br/>"
+
+    confidence_details = plan.get("confidence_details") or []
+    content += (
+        f"<b>置信度</b><br/>&nbsp;&nbsp;"
+        f"{plan.get('confidence_score', 0)}/{plan.get('applicable_score', 0)} "
+        f"{plan.get('confidence', '低')}"
+        f"{_esc('【' + ' | '.join(confidence_details) + '】') if confidence_details else ''}<br/><br/>"
+    )
+
+    rrr = plan.get("rrr_low")
+    rrr_text = f"RRR1:{float(rrr):.2f}" if rrr else "RRR:N/A"
+    content += (
+        f"<b>RRR</b><br/>&nbsp;&nbsp;{rrr_text}"
+        f"【基准{_val(plan.get('benchmark_price'))},非现价口径】<br/><br/>"
+    )
+
+    current = data.get("current_price")
+    content += f"<b>分档</b>{f'(现态{_val(current)})' if current else ''}<br/>"
+    tiers = plan.get("execution_tiers") or []
+    for index, tier in enumerate(tiers):
+        prefix = "└" if index == len(tiers) - 1 else "├"
+        role_labels = {"main": "主仓位", "probe": "试探仓", "stop": "禁入线"}
+        role_label = role_labels.get(str(tier.get("role", "")), "")
+        distance = str(tier.get("distance") or tier.get("state", ""))
+        conditions = str(tier.get("conditions") or "")
+        shares = tier.get("base_shares")
+        shares_text = f"→{int(shares):,}股" if shares else ""
+        content += (
+            f"&nbsp;&nbsp;{prefix}{_esc(str(tier.get('name', '')))} {_val(tier.get('price'))}"
+            f"【{_esc(distance)}{('·' + role_label) if role_label else ''}】"
+            f"{_esc(str(tier.get('trigger', '')))}"
+            f"{('+' + _esc(conditions)) if conditions else ''}{_esc(shares_text)}<br/>"
+        )
+    content += "<br/>"
+
+    shares = data.get("shares")
+    base_shares = plan.get("base_shares")
+    if shares and base_shares:
+        content += (
+            f"<b>仓位链路</b><br/>&nbsp;&nbsp;{int(base_shares):,}股"
+            f" × 产业{float(plan.get('industry_multiplier', 1.0)):.2f}"
+            f" × 风险{float(plan.get('combined_risk_multiplier', 1.0)):.2f}"
+            f" = {int(shares):,}股<br/>"
+        )
+    elif shares:
+        content += f"<b>建议仓位</b><br/>&nbsp;&nbsp;{int(shares):,}股<br/>"
+    return title, content
 
 def _tech(data):
     parts = []
@@ -144,6 +471,9 @@ def _tech(data):
             parts.append(f"投票:{vote}({sc:+.1f}) ⓘ {_esc(top_details)}")
         else:
             parts.append(f"投票:{vote}({sc:+.1f})")
+    turnover = data.get("turnover_rate")
+    if turnover:
+        parts.append(f"换手:{float(turnover):.2f}%")
     ex = []
     if data.get("shrinking_pullback"): ex.append("缩量回踩")
     if data.get("pair_bottom"): ex.append("对手盘底")
@@ -175,6 +505,8 @@ def _filter(data):
 def render_entry_signal(data):
     name, code = data.get("stock_name",""), data.get("stock_code","")
     et = data.get("entry_type","")
+    if data.get("execution_plan"):
+        return _render_compact_entry_signal(data)
     trigger = data.get("trigger_price",0)
     stop_loss = data.get("stop_loss",0)
     target = data.get("target_range",[0,0])
@@ -219,6 +551,9 @@ def render_entry_signal(data):
     env_parts.append(f"板块:{sector_display}")
     content += f"<b>环境</b><br/>&nbsp;&nbsp;{' | '.join(env_parts)}<br/><br/>"
     content += f"<b>技术面</b><br/>&nbsp;&nbsp;{_tech(data)}<br/><br/>"
+    plan_display = _execution_plan(data)
+    if plan_display:
+        content += f"<b>执行计划</b><br/>&nbsp;&nbsp;{plan_display}<br/><br/>"
     # 机构持仓打分（4 数据源投票 + 具体数值）
     inst_display = _institutional(data)
     if inst_display:
@@ -273,11 +608,9 @@ def render_exit_signal(data):
     # 观察股（无 exit_type，有 note 字段）— 用"观察"标题，不显示退出逻辑
     is_observation = not et and bool(note)
     if is_observation:
-        title = f"观察 {name}({code})"
-        content = f"<b>📋 观察 {name}({code})</b><br/><br/>"
-    else:
-        title = f"{'紧急' if is_urgent else '卖出'}{et} {name}({code})"
-        content = f"<b>{'紧急' if is_urgent else '卖出'} {et} {name}({code})</b><br/><br/>"
+        return _render_compact_observation_signal(data)
+    title = f"{'紧急' if is_urgent else '卖出'}{et} {name}({code})"
+    content = f"<b>{'紧急' if is_urgent else '卖出'} {et} {name}({code})</b><br/><br/>"
     pnl_str = _pct(pnl) if pnl else ""
     # 当前价格 + 涨跌幅
     cp = data.get("current_price")

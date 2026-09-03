@@ -23,6 +23,11 @@ class PushPlus:
     # 频率限制：两次推送之间至少间隔 1.2 秒
     MIN_INTERVAL = 1.2
 
+    # PushPlus 单条内容上限 2 万字，留 10% 余量避免边界误判
+    MAX_CONTENT_LEN = 18000
+    # 超长内容分块时优先在安全边界断开，避免切断 HTML 标签触发服务端 999 校验
+    _CHUNK_BOUNDARIES = ("<br/>", "<br>", "<hr/>", "<hr>", "</table>", "</div>", "\n")
+
     def __init__(self, config_path: Optional[str] = None):
         config_file = config_path or str(CONFIG_DIR / "push.yaml")
         with open(config_file, "r", encoding="utf-8") as f:
@@ -44,16 +49,16 @@ class PushPlus:
         level: str = "常规",
     ) -> bool:
         """
-        发送消息
+        发送消息（超长内容自动分批推送）
 
         Args:
-            title: 消息标题
-            content: 消息内容（支持HTML）
+            title: 消息标题（分批时自动追加 (i/N) 后缀）
+            content: 消息内容（支持HTML；超过 PushPlus 单条上限 2 万字时自动分块）
             template: 模板类型 html/txt
             level: 消息级别 常规/重要/紧急
 
         Returns:
-            是否发送成功
+            是否全部批次发送成功
         """
         # 重置日计数
         today = datetime.now().strftime("%Y-%m-%d")
@@ -68,6 +73,55 @@ class PushPlus:
 
         if not self._token or self._token == "your-pushplus-token":
             logger.warning("PushPlus token not configured, skipping push: %s", title)
+            return False
+
+        # P-修复（2026-08-31）：单条内容超过服务端 2 万字上限会被拒（999 发送内容过大），
+        # 按安全边界分块、分批推送；每批标题追加 (i/N) 后缀便于用户串起来读
+        chunks = self._chunk_content(content)
+        if len(chunks) > 1:
+            logger.warning("PushPlus 内容过长(%d字>%d)，拆分为 %d 条推送",
+                           len(content), self.MAX_CONTENT_LEN, len(chunks))
+
+        all_ok = True
+        for i, chunk in enumerate(chunks):
+            chunk_title = title if len(chunks) == 1 else f"{title} ({i + 1}/{len(chunks)})"
+            if not self._send_one(chunk_title, chunk, template, level):
+                all_ok = False
+        return all_ok
+
+    @staticmethod
+    def _chunk_content(content: str, max_len: int = None) -> List[str]:
+        """按安全边界将超长内容分块，避免切断 HTML 标签触发服务端校验。
+
+        优先在 <br/> <hr/> </table> </div> 换行等边界断开；
+        单块内找不到安全边界时硬截断兜底（避免死循环）。
+        """
+        max_len = max_len or PushPlus.MAX_CONTENT_LEN
+        if len(content) <= max_len:
+            return [content]
+        chunks: List[str] = []
+        start = 0
+        while start < len(content):
+            if len(content) - start <= max_len:
+                chunks.append(content[start:])
+                break
+            window = content[start:start + max_len]
+            cut = -1
+            for b in PushPlus._CHUNK_BOUNDARIES:
+                idx = window.rfind(b)
+                if idx >= 0 and idx + len(b) > cut:
+                    cut = idx + len(b)
+            if cut <= 0:
+                cut = max_len  # 兜底：窗口内无安全边界
+            chunks.append(content[start:start + cut])
+            start += cut
+        return chunks
+
+    def _send_one(self, title: str, content: str, template: str, level: str) -> bool:
+        """单条 HTTP 发送（含频率限制、每日限额、html→txt 降级重试）。"""
+        # 分批场景下逐条校验每日限额，避免批次把配额打穿
+        if self._sent_count >= self._daily_limit:
+            logger.warning("PushPlus daily limit reached: %d/%d", self._sent_count, self._daily_limit)
             return False
 
         # 频率限制：避免触发 PushPlus 服务端限流

@@ -20,7 +20,7 @@ _thread_local = threading.local()
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ..config_models import load_config
 from ..analyzers.market_env import get_market_environment  # 修复 BUG-T1: D1 充分条件依赖此函数，原代码未导入导致恐慌抄底永不触发
@@ -50,8 +50,12 @@ class EntrySignal:
     trigger_reason: str = ""       # 触发原因描述
     strategy_summary: str = ""     # 策略逻辑透传
     confidence: str = "中"         # 信号置信度
+    benchmark_price: float = 0.0   # RRR/仓位唯一基准，禁止与现价混用
+    rrr_low: Optional[float] = None
+    rrr_high: Optional[float] = None
     kline_patterns: List[Dict] = field(default_factory=list)
     tech_data: Dict = field(default_factory=dict)
+    execution_plan: Dict = field(default_factory=dict)
 
 
 @dataclass
@@ -262,6 +266,7 @@ class TimingEngine:
         self._tech_cache: Dict[str, Dict] = {}
         self._tech_cache_weekly: Dict[str, List[Dict]] = {}  # 修复 bug: 原代码从未初始化
         self._tech_data_full: Dict[str, Dict] = {}  # 完整 tech_data 缓存（含技术指标+机构打分），供观察列表复用
+        self._exit_diagnostics: Dict[str, str] = {}
         self._market_cache: Optional[Dict] = None
         self._cache_lock = threading.Lock()
 
@@ -310,6 +315,7 @@ class TimingEngine:
             self._tech_cache.clear()
             self._tech_cache_weekly.clear()
             self._tech_data_full.clear()
+            self._exit_diagnostics.clear()
             self._market_cache = None
 
     def reset_caches(self):
@@ -318,6 +324,7 @@ class TimingEngine:
             self._tech_cache.clear()
             self._tech_cache_weekly.clear()
             self._tech_data_full.clear()
+            self._exit_diagnostics.clear()
             self._market_cache = None
 
     # ============================================================
@@ -434,10 +441,12 @@ class TimingEngine:
         if not new_codes:
             return
         logger.info("并行预取 %d 只个股K线 (workers=%d)", len(new_codes), max_workers)
+        hist_calendar_days = self._cfg("prefetch", "hist_calendar_days", default=240)
+        start_date = (datetime.now() - timedelta(days=hist_calendar_days)).strftime("%Y%m%d")
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {}
             for code in new_codes:
-                futures[pool.submit(self._akshare.get_stock_hist, code)] = code
+                futures[pool.submit(self._akshare.get_stock_hist, code, start_date=start_date)] = code
             for future in as_completed(futures):
                 code = futures[future]
                 try:
@@ -511,6 +520,7 @@ class TimingEngine:
         market_mode: str = "defend",
         sector_status: str = "rotational",
         filter_result: Optional[FilterResult] = None,
+        market_score: Optional[float] = None,
     ) -> List[EntrySignal]:
         """
         检查个股入场信号
@@ -562,6 +572,10 @@ class TimingEngine:
 
         # 获取技术数据 + 止损价
         tech_data = self._fetch_tech_data(stock_code, market_mode)
+        if market_score is not None:
+            tech_data["market_score"] = float(market_score)
+        # 入场检查先落缓存，保证未触发买入时诊断用的是同一份完整数据
+        self._tech_data_full[stock_code] = tech_data
         stop_loss_calc = self.calculate_stop_loss(stock_code, tech_data)
 
         # 独立检查四种进场策略
@@ -583,6 +597,26 @@ class TimingEngine:
         merged = self._merge_entry_signals(raw_signals, tech_data, market_mode, sector_status)
         for sig in merged:
             sig.tech_data = tech_data
+            from .signal_plan import build_execution_plan
+            main_tier_price = (
+                float(tech_data.get("ma10"))
+                if tech_data.get("ma10") and float(tech_data.get("ma10")) > 0
+                else sig.entry_trigger_price
+            )
+            plan = build_execution_plan(
+                entry_type=sig.entry_type,
+                benchmark_price=main_tier_price,
+                stop_loss=sig.stop_loss,
+                target_range=sig.target_range,
+                tech_data=tech_data,
+                sector_status=sector_status,
+                sector_name=getattr(sig, "sector_name", "") or getattr(sig, "sw_level2", ""),
+            )
+            sig.execution_plan = plan.as_dict()
+            sig.confidence = plan.confidence
+            sig.benchmark_price = plan.benchmark_price
+            sig.rrr_low = plan.rrr_low
+            sig.rrr_high = plan.rrr_high
         return merged
 
     def _check_panic_bottom(self, code, name, tech_data, stop_loss, mode, sector) -> Optional[EntrySignal]:
@@ -888,10 +922,7 @@ class TimingEngine:
         current = tech_data.get("current_price", 0)
         ma25 = tech_data.get("ma25", 0)
         prev_close = tech_data.get("prev_close", 0)
-        today_volume = tech_data.get("today_volume", 0)
-        volume_ma60 = tech_data.get("volume_ma60", 0)
-
-        if not all([current, ma25, prev_close, today_volume, volume_ma60]):
+        if not all([current, ma25, prev_close]):
             return None
 
         # 站上 MA25（不要求"首次突破"，已站上的也算趋势延续）
@@ -916,11 +947,20 @@ class TimingEngine:
                 is_limit_up_today = True
 
         # 量能突破 60日均量线（涨停日豁免）
-        volume_breakout = today_volume > volume_ma60
+        from .signal_plan import build_volume_snapshot
+
+        # 触发、置信度和分档必须读同一份量能快照，避免原始字段和分位口径分裂。
+        volume_snapshot = build_volume_snapshot(tech_data)
+        if volume_snapshot.volume_vs_ma60 is None:
+            return None
+        volume_breakout = (
+            volume_snapshot.volume_vs_ma60 is not None
+            and volume_snapshot.volume_vs_ma60 > 1.0
+        )
         if not volume_breakout and not is_limit_up_today:
             return None
 
-        vol_ratio = today_volume / volume_ma60 if volume_ma60 > 0 else 0
+        vol_ratio = volume_snapshot.volume_vs_ma60 or 0
         conditions = [
             f"站上MA25({ma25:.2f})",
             f"量能突破60日均量({vol_ratio:.1f}倍)" if volume_breakout else f"涨停豁免量能(涨幅{(current-prev_close)/prev_close*100:.1f}%)",
@@ -1350,6 +1390,22 @@ class TimingEngine:
 
 
         # 合并同类 + 追加推导链
+        if not signals:
+            if not tech_data:
+                self._exit_diagnostics[stock_code] = "卖出检查: 数据不足，无法判断"
+            else:
+                strong_exhaustion = sum(1 for level, _ in exhaustion if level == "strong")
+                medium_exhaustion = sum(1 for level, _ in exhaustion if level == "medium")
+                strong_weakness = sum(1 for level, _ in weakness if level == "strong")
+                medium_weakness = sum(1 for level, _ in weakness if level == "medium")
+                parts = [
+                    f"止损未触发(现价{current_price:.2f}>{stop_loss_calc.stop_loss_price:.2f})",
+                    f"冲高止盈(strong {strong_exhaustion}/2)",
+                    "MA5压制(未同时满足多头排列/MA5上升/跌破阈值)",
+                    f"技术走弱(strong {strong_weakness}/1, medium {medium_weakness}/3)",
+                ]
+                self._exit_diagnostics[stock_code] = "卖出检查: " + "; ".join(parts)
+
         exit_types = list(dict.fromkeys(s.exit_type for s in signals))
         merged: Dict[str, ExitSignal] = {}
         for sig in signals:
@@ -1688,10 +1744,66 @@ class TimingEngine:
             if stock_code in fresh and fresh.get(stock_code):
                 q = fresh[stock_code]
                 return {"price": q.get("current_price", 0), "change_pct": q.get("change_pct", 0),
-                        "volume_ratio": q.get("volume_ratio", 0)}
+                        "volume_ratio": q.get("volume_ratio", 0), "quote": q}
         except Exception as e:
             logger.debug("非关键异常: %s", e)
         return None
+
+    @staticmethod
+    def _sync_last_kline_with_realtime(kline: List[Dict], quote: Optional[Dict]) -> List[Dict]:
+        """把当前交易日的实时 OHLCV 合入历史K线，避免现价与指标数据源错位。"""
+        if not kline or not quote:
+            return kline
+
+        current = float(quote.get("current_price", 0) or 0)
+        if current <= 0:
+            return kline
+
+        stamp = str(quote.get("timestamp", "") or "")
+        if stamp.isdigit() and len(stamp) >= 8:
+            quote_date = f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]}"
+        else:
+            quote_date = datetime.now().strftime("%Y-%m-%d")
+
+        last = kline[-1]
+        last_date = str(last.get("date", last.get("日期", "")))[:10]
+        open_price = float(quote.get("today_open", 0) or 0)
+        high_price = float(quote.get("today_high", 0) or 0)
+        low_price = float(quote.get("today_low", 0) or 0)
+        volume = float(quote.get("volume", 0) or 0)
+
+        if last_date == quote_date:
+            updates = {"close": current, "收盘": current}
+            if open_price > 0:
+                updates.update({"open": open_price, "开盘": open_price})
+            if high_price > 0:
+                high_price = max(high_price, current)
+                updates.update({"high": high_price, "最高": high_price})
+            if low_price > 0:
+                low_price = min(low_price, current)
+                updates.update({"low": low_price, "最低": low_price})
+            if volume > 0:
+                updates.update({"volume": volume, "成交量": volume})
+            turnover = float(quote.get("turnover_rate", 0) or 0)
+            if turnover > 0:
+                updates.update({"turnover_rate": turnover, "换手率": turnover})
+            last.update(updates)
+        elif last_date and last_date < quote_date and open_price > 0 and volume > 0:
+            bar = {
+                "date": quote_date, "开盘": open_price,
+                "high": max(high_price, current), "最高": max(high_price, current),
+                "low": min(low_price, current), "最低": min(low_price, current),
+                "close": current, "收盘": current,
+                "volume": volume, "成交量": volume,
+            }
+            if open_price > 0:
+                bar["open"] = open_price
+            turnover = float(quote.get("turnover_rate", 0) or 0)
+            if turnover > 0:
+                bar.update({"turnover_rate": turnover, "换手率": turnover})
+            kline.append(bar)
+
+        return kline
 
     def _fetch_tech_data(self, stock_code: str, market_mode: str = "defend") -> Dict[str, Any]:
         """获取技术分析数据（含多级均线 + 盘中实时信号）"""
@@ -1702,6 +1814,8 @@ class TimingEngine:
         if realtime:
             data["current_price"] = realtime.get("price", 0)
             data["change_pct"] = realtime.get("change_pct", 0)
+            if realtime.get("quote", {}).get("turnover_rate"):
+                data["turnover_rate"] = realtime["quote"]["turnover_rate"]
             # 量比：优先用行情接口返回字段（与同花顺/腾讯一致），
             # 不用 K 线均量近似值；无接口数据（回测/停牌/接口缺失）时才用 K 线兜底
             if realtime.get("volume_ratio"):
@@ -1718,12 +1832,20 @@ class TimingEngine:
             if cached_kline is not None:
                 kline = cached_kline
             else:
-                hist_result = self._akshare.get_stock_hist(stock_code)
+                hist_calendar_days = self._cfg("prefetch", "hist_calendar_days", default=240)
+                start_date = (datetime.now() - timedelta(days=hist_calendar_days)).strftime("%Y%m%d")
+                hist_result = self._akshare.get_stock_hist(stock_code, start_date=start_date)
                 if hist_result.success and hist_result.data:
                     kline = hist_result.data
 
+        if not self._backtest_mode and kline:
+            kline = self._sync_last_kline_with_realtime(kline, realtime.get("quote") if realtime else None)
+
         if kline:
             data["kline"] = kline
+            last_turnover = kline[-1].get("turnover_rate", kline[-1].get("换手率"))
+            if data.get("turnover_rate") is None and last_turnover is not None:
+                data["turnover_rate"] = last_turnover
             min_klines = self._cfg("tech_data", "min_klines_for_indicator", default=20)
             if kline and len(kline) >= min_klines:
                 try:
@@ -1860,7 +1982,11 @@ class TimingEngine:
             try:
                 from ..data_layer.stock_data import calc_tech_indicators, detect_kline_patterns
                 kline_data = data["kline"]
-                tech = calc_tech_indicators(kline_data, market_mode)
+                tech = calc_tech_indicators(
+                    kline_data,
+                    market_mode,
+                    volume_ratio=data.get("volume_ratio"),
+                )
                 if tech:
                     data["tech_signals"] = tech
                 patterns = detect_kline_patterns(kline_data)

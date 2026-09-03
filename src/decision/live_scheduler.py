@@ -8,7 +8,7 @@ P3: 实盘信号调度器 — 信号服务模式（不维护持仓）
 与回测层 SignalScheduler 的区别：
 - 回测层：维护模拟持仓状态，按日推进
 - 实盘层：单次调度，纯信号输出——卖出信号无条件全量输出，
-  买入信号按入场类型优先级排序 + 质量过滤（碎单/并发上限/预算）
+  买入信号全量输出，仅按入场类型优先级排序
 
 核心逻辑：
 1. 卖出信号：全部输出（不校验是否持仓——持仓由用户自己管理）
@@ -16,9 +16,7 @@ P3: 实盘信号调度器 — 信号服务模式（不维护持仓）
    同优先级按 信心→紧急度→股票代码 兜底排序，保证调度可复现（P1-1 审计 2026-08-18）。
    （注：旧版按"类型历史期望"数值排序，期望值为静态写死的常量、与信号无关，
    已移除——排序只表达类型偏好，不展示伪数值。）
-3. 并发上限：单次最多建议 MAX_CONCURRENT(4) 只买入
-4. 最小下单额：低于 MIN_ORDER_AMOUNT(1万元) 的碎单跳过（含预算缩减后的残额）
-5. 预算上限：单次建议买入合计不超过 total_asset（默认 100 万）
+3. 不做数量上限、总预算、剩余资金或碎单拦截；资金管理由用户自行处理
 
 使用方式：
     from src.decision.live_scheduler import schedule_live_signals
@@ -34,9 +32,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # 调度参数（与 Step0 / position.yaml 一致）
 # ============================================================
-BUDGET_PER_STOCK = 250_000      # 单股建议仓位
-MAX_CONCURRENT = 4              # 单次最多建议买入数量
-MIN_ORDER_AMOUNT = 10_000       # 最小下单金额(元)：低于此额度的碎单直接跳过（P1-1 审计 2026-08-18）
+BUDGET_PER_STOCK = 250_000      # 单股参考仓位，仅用于建议股数，不用于拦截信号
 
 # 入场类型优先级（调度排序用，值越大越优先；纯类型偏好，非收益预测）
 ENTRY_PRIORITY = {
@@ -60,6 +56,11 @@ class ScheduledSignal:
     reason: str = ''
     urgency: str = '常规'
     confidence: str = '中'
+    benchmark_price: float = 0.0
+    rrr_low: float = 0.0
+    risk_multiplier: float = 1.0
+    industry_multiplier: float = 1.0
+    execution_plan: dict = None
     market_mode: str = 'defend'
     # 调度信息
     schedule_note: str = ''  # 调度原因说明
@@ -89,8 +90,7 @@ def schedule_live_signals(
             [{stock_code, stock_name, entry_type, trigger_price, ...}, ...]
         exit_signals: 卖出信号列表
             [{stock_code, stock_name, exit_type, trigger_price, ...}, ...]
-        total_asset: 单次建议买入总额上限（元）。信号服务模式无持仓概念，
-            仅作为"一次别建议买太多"的兜底，默认 100 万。
+        total_asset: 兼容旧接口；纯信号模式下不参与拦截。
         market_mode: 当前市场模式
 
     Returns:
@@ -98,34 +98,32 @@ def schedule_live_signals(
             'buy': [ScheduledSignal, ...],     # 调度后保留的买入信号
             'sell': [ScheduledSignal, ...],    # 卖出信号（全量输出）
             'skipped': {
-                'buy_max_concurrent': [...],
-                'buy_no_budget': [...],
-                'buy_dust_order': [...],       # 下单金额低于 MIN_ORDER_AMOUNT
+            'buy_no_budget': [...],
+                # 兼容旧字段，纯信号模式始终为空
+                'buy_dust_order': [...],
+                'buy_low_confidence': [...],
             },
             'stats': {
                 'entry_in': int, 'sell_in': int,
                 'buy_executed': int, 'sell_executed': int,
-                'buy_skipped_max_concurrent': int,
                 'buy_skipped_no_budget': int,
                 'buy_skipped_dust_order': int,
+                'buy_skipped_low_confidence': int,
             }
         }
     """
-    # 建议买入预算：单次调度内累计扣减（无持仓概念，不读账户）
-    available_cash = max(0.0, total_asset)
-
     stats = {
         'entry_in': len(entry_signals),
         'sell_in': len(exit_signals),
         'buy_executed': 0, 'sell_executed': 0,
-        'buy_skipped_max_concurrent': 0,
         'buy_skipped_no_budget': 0,
         'buy_skipped_dust_order': 0,
+        'buy_skipped_low_confidence': 0,
     }
     skipped = {
-        'buy_max_concurrent': [],
         'buy_no_budget': [],
         'buy_dust_order': [],
+        'buy_low_confidence': [],
     }
 
     # ---- 第1步：卖出信号全量输出（信号服务模式：持仓由用户管理，不校验）----
@@ -165,61 +163,43 @@ def schedule_live_signals(
     buy_with_prio.sort(key=_buy_sort_key)
 
     scheduled_buys = []
-    allocated_total = 0.0  # 本次调度已建议的买入金额（含佣金）
-    n_suggested = 0        # 本次已建议买入数量（并发上限用）
     for sig, entry_type, _prio in buy_with_prio:
         code = sig.get('stock_code', '')
 
-        # 并发上限（单次最多建议 MAX_CONCURRENT 只）
-        if n_suggested >= MAX_CONCURRENT:
-            skipped['buy_max_concurrent'].append({
-                'stock_code': code, 'entry_type': entry_type,
-                'reason': f'单次建议上限{MAX_CONCURRENT}只已满'
-            })
-            stats['buy_skipped_max_concurrent'] += 1
-            continue
-
-        # 预算检查
         trigger_price = sig.get('trigger_price', 0) or sig.get('entry_trigger_price', 0)
         if trigger_price <= 0:
             continue
-        shares = int((BUDGET_PER_STOCK / trigger_price) // 100) * 100
+        confidence = str(sig.get('confidence', '中'))
+        plan = sig.get('execution_plan') or {}
+
+        tiers = [tier for tier in plan.get('execution_tiers', []) if tier.get('role') == 'main']
+        main_tier = tiers[0] if tiers else {}
+        position_price = (
+            float(main_tier.get('price') or sig.get('benchmark_price')
+                  or plan.get('benchmark_price') or trigger_price)
+        )
+        industry_multiplier = float(plan.get('industry_multiplier', 1.0) or 1.0)
+        if market_mode != 'attack' and sig.get('position_level') == 'heavy':
+            industry_multiplier = min(industry_multiplier, 1.0)
+        risk_multiplier = (
+            industry_multiplier
+            * float(plan.get('combined_risk_multiplier', 1.0) or 1.0)
+        )
+        shares = int((BUDGET_PER_STOCK / position_price * risk_multiplier) // 100) * 100
         if shares <= 0:
             continue
-        amount = trigger_price * shares
-        if amount < MIN_ORDER_AMOUNT:
-            skipped['buy_dust_order'].append({
-                'stock_code': code, 'entry_type': entry_type,
-                'amount': round(amount, 2), 'min': MIN_ORDER_AMOUNT,
-                'reason': '下单金额低于最小阈值'
-            })
-            stats['buy_skipped_dust_order'] += 1
-            continue
-        cost = amount * 0.00025  # 佣金
-        total_deduction = amount + cost
-
-        if total_deduction > available_cash:
-            # 预算不足，尝试缩减股数
-            affordable = int((available_cash / (trigger_price * (1 + 0.00025))) // 100) * 100
-            if affordable <= 0:
-                skipped['buy_no_budget'].append({
-                    'stock_code': code, 'entry_type': entry_type,
-                    'need': total_deduction, 'available': available_cash
-                })
-                stats['buy_skipped_no_budget'] += 1
-                continue
-            max_by_budget = int((BUDGET_PER_STOCK / trigger_price) // 100) * 100
-            shares = min(affordable, max_by_budget)
-            if shares <= 0 or shares * trigger_price < MIN_ORDER_AMOUNT:
-                skipped['buy_no_budget'].append({
-                    'stock_code': code, 'entry_type': entry_type,
-                    'reason': f'缩减后 {shares * trigger_price:.0f} 元低于最小下单额 {MIN_ORDER_AMOUNT} 元'
-                })
-                stats['buy_skipped_no_budget'] += 1
-                continue
-            total_deduction = trigger_price * shares * (1 + 0.00025)
-
-        # 执行买入
+        base_shares = int((BUDGET_PER_STOCK / position_price) // 100) * 100
+        plan['base_shares'] = base_shares
+        plan['suggested_shares'] = shares
+        for tier in plan.get('execution_tiers', []):
+            if tier.get('role') == 'main':
+                tier['base_shares'] = base_shares
+            elif tier.get('role') == 'probe':
+                tier['base_shares'] = int((base_shares / 3) // 100) * 100
+            else:
+                tier['base_shares'] = 0
+        benchmark_price = float(sig.get('benchmark_price') or plan.get('benchmark_price') or trigger_price)
+        rrr_low = float(sig.get('rrr_low') or plan.get('rrr_low') or 0)
         scheduled_buys.append(ScheduledSignal(
             stock_code=code,
             stock_name=sig.get('stock_name', code),
@@ -229,19 +209,24 @@ def schedule_live_signals(
             shares=shares,
             reason=sig.get('note', '') or sig.get('reason', ''),
             confidence=sig.get('confidence', '中'),
+            benchmark_price=benchmark_price,
+            rrr_low=rrr_low,
+            risk_multiplier=risk_multiplier,
+            industry_multiplier=industry_multiplier,
+            execution_plan=plan,
             market_mode=market_mode,
-            schedule_note=f'按入场类型优先级建议{shares}股',
+            schedule_note=(
+                f'基准{benchmark_price:.2f} | RRR{rrr_low:.2f} | '
+                f'产业系数{industry_multiplier:.2f} | '
+                f'风险系数{plan.get("combined_risk_multiplier", 1.0):.2f} | '
+                f'主档{position_price:.2f} | 建议{shares}股'
+            ),
         ))
         stats['buy_executed'] += 1
-        allocated_total += total_deduction
-        available_cash -= total_deduction
-        n_suggested += 1
 
     logger.info(
-        "实盘信号调度: 买入 %d/%d (跳过: 并发%d/无资金%d/碎单%d), 卖出 %d/%d",
+        "实盘信号调度: 买入 %d/%d (全量输出), 卖出 %d/%d",
         stats['buy_executed'], stats['entry_in'],
-        stats['buy_skipped_max_concurrent'],
-        stats['buy_skipped_no_budget'], stats['buy_skipped_dust_order'],
         stats['sell_executed'], stats['sell_in'],
     )
 
@@ -258,7 +243,7 @@ def format_scheduled_summary(scheduled: Dict[str, Any]) -> str:
     lines = []
     stats = scheduled['stats']
     lines.append("📊 信号调度统计:")
-    lines.append(f"  买入: {stats['buy_executed']}/{stats['entry_in']} (跳过: 并发{stats['buy_skipped_max_concurrent']}/无资金{stats['buy_skipped_no_budget']}/碎单{stats['buy_skipped_dust_order']})")
+    lines.append(f"  买入: {stats['buy_executed']}/{stats['entry_in']} (低置信度转观察 {stats['buy_skipped_low_confidence']})")
     lines.append(f"  卖出: {stats['sell_executed']}/{stats['sell_in']}")
     lines.append("")
 
@@ -270,20 +255,10 @@ def format_scheduled_summary(scheduled: Dict[str, Any]) -> str:
         lines.append("")
 
     if scheduled['buy']:
-        lines.append("🟢 买入信号（按类型优先级排序，预算约束）:")
+        lines.append("🟢 买入信号（按类型优先级排序）:")
         for s in scheduled['buy']:
             lines.append(f"  {s.stock_code} {s.stock_name} | {s.entry_type} @ {s.trigger_price:.2f} | {s.shares}股")
             lines.append(f"    {s.schedule_note}")
         lines.append("")
-
-    skipped = scheduled['skipped']
-    if any(skipped.values()):
-        lines.append("⚠️ 跳过信号:")
-        if skipped['buy_max_concurrent']:
-            lines.append(f"  单次建议上限: {[s['stock_code'] for s in skipped['buy_max_concurrent']]}")
-        if skipped['buy_no_budget']:
-            lines.append(f"  超预算: {[s['stock_code'] for s in skipped['buy_no_budget']]}")
-        if skipped['buy_dust_order']:
-            lines.append(f"  碎单(<{MIN_ORDER_AMOUNT}元): {[(s['stock_code'], s['entry_type']) for s in skipped['buy_dust_order']]}")
 
     return '\n'.join(lines)

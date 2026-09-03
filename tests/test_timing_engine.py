@@ -92,6 +92,47 @@ class TestStopLossCalc:
         assert slc.chosen_support == 95.0
 
 
+class TestRealtimeKlineSync:
+    """盘中现价必须与投票使用的最后一根K线对齐。"""
+
+    def test_same_day_quote_updates_last_bar(self):
+        te = get_backtest_timing_engine()
+        kline = [{"date": "2026-09-02", "open": 170.0, "high": 178.0,
+                  "low": 169.0, "close": 173.0, "volume": 1000}]
+        quote = {
+            "current_price": 177.45, "today_open": 171.0,
+            "today_high": 178.5, "today_low": 169.5,
+            "volume": 2000, "timestamp": "20260902150000",
+        }
+
+        synced = te._sync_last_kline_with_realtime(kline, quote)
+
+        assert synced is kline
+        assert kline[-1]["close"] == 177.45
+        assert kline[-1]["open"] == 171.0
+        assert kline[-1]["high"] == 178.5
+        assert kline[-1]["low"] == 169.5
+        assert kline[-1]["volume"] == 2000
+
+    def test_missing_today_appends_intraday_bar(self):
+        te = get_backtest_timing_engine()
+        kline = [{"date": "2026-09-01", "open": 170.0, "high": 174.0,
+                  "low": 168.0, "close": 173.0, "volume": 1000}]
+        quote = {
+            "current_price": 177.45, "today_open": 171.0,
+            "today_high": 178.5, "today_low": 169.5,
+            "volume": 2000, "timestamp": "20260902150000",
+        }
+
+        synced = te._sync_last_kline_with_realtime(kline, quote)
+
+        assert synced is kline
+        assert len(kline) == 2
+        assert kline[-1]["date"] == "2026-09-02"
+        assert kline[-1]["close"] == 177.45
+        assert kline[-2]["close"] == 173.0
+
+
 class TestPairBottom:
     """D3: 对子底判定单元测试"""
 

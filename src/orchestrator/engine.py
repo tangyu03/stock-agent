@@ -222,6 +222,7 @@ class Orchestrator:
             market_mode=market_mode,
             sector_result=None,
             sector_map={},
+            market_score=float(env.get("market_score", 0) or 0),
         )
 
         # ---- 3. 构建信号列表 ----
@@ -236,8 +237,8 @@ class Orchestrator:
 
         entry_batch = []
         for sig in batch.entries:
-            signaled_codes.add(sig.stock_code)
             td = getattr(sig, "tech_data", {}) or {}
+            signaled_codes.add(sig.stock_code)
             entry_batch.append({
                 "stock_name": sig.stock_name or sig.stock_code,
                 "stock_code": sig.stock_code,
@@ -254,12 +255,18 @@ class Orchestrator:
                 "note": sig.trigger_reason or "",
                 "confidence": getattr(sig, "confidence", "中"),
                 "market_mode": market_mode,
+                "market_score": td.get("market_score"),
                 "kline_pattern": td.get("kline_pattern", []),
                 "tech_signals": td.get("tech_signals", {}),
                 "ma5": td.get("ma5"), "ma10": td.get("ma10"), "ma20": td.get("ma20"),
                 "rsi": (td.get("tech_signals") or {}).get("rsi"),
                 "adx": (td.get("tech_signals") or {}).get("adx"),
                 "volume_ratio": td.get("volume_ratio", 0),
+                "turnover_rate": td.get("turnover_rate", 0),
+                "benchmark_price": getattr(sig, "benchmark_price", 0),
+                "rrr_low": getattr(sig, "rrr_low", None),
+                "rrr_high": getattr(sig, "rrr_high", None),
+                "execution_plan": getattr(sig, "execution_plan", {}),
                 # 机构持仓打分（4 数据源投票 + 具体数值，透出到 push）
                 "institutional_holding": td.get("institutional_holding", {}),
             })
@@ -320,20 +327,28 @@ class Orchestrator:
                 "tech_signals": td.get("tech_signals", {}),
                 "ma5": td.get("ma5"), "ma10": td.get("ma10"), "ma20": td.get("ma20"),
                 "volume_ratio": td.get("volume_ratio", 0),
+                "turnover_rate": td.get("turnover_rate", 0),
                 "kline_pattern": td.get("kline_pattern", []),
                 "institutional_holding": td.get("institutional_holding", {}),
-                "note": "无买卖信号，持续观察",
+                "market_score": td.get("market_score"),
+                "rsi": (td.get("tech_signals") or {}).get("rsi"),
+                "adx": (td.get("tech_signals") or {}).get("adx"),
+                "note": "买入: "
+                        + batch.entry_diagnostics.get(
+                            code, "未参与入场检查（风控过滤或数据缺失）"
+                        )
+                        + " | 卖出: "
+                        + te._exit_diagnostics.get(code, "未参与卖出检查（数据缺失）"),
             })
-
         logger.info("信号汇总: 买入%d 卖出%d 观察%d (自选%d, 有信号%d)",
                     len(entry_batch), len(exit_batch), len(observation_batch),
                     len(all_holdings), len(signaled_codes))
 
         # ---- 4.5 P3: 实盘信号调度器（信号服务模式：纯信号输出，不维护持仓）----
-        # 卖出信号全量输出；买入按期望排序 + 质量过滤（期望下限/碎单/并发/预算）。
+        # 买卖信号全量输出；买入只按入场类型优先级排序，资金管理由用户自行处理。
         # 不再读取 trade_logger 持仓/账户——持仓回执闭环繁琐且非决策前提，持仓由用户自行管理。
         from ..decision.live_scheduler import schedule_live_signals, format_scheduled_summary
-        total_asset = 1_000_000  # 信号服务模式：仅作单次建议买入总额上限
+        total_asset = 1_000_000  # 兼容旧调用；纯信号模式不参与拦截
         scheduled = schedule_live_signals(
             entry_signals=entry_batch,
             exit_signals=exit_batch,

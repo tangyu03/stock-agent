@@ -227,7 +227,9 @@ def query_industry_fund_flow(force_refresh: bool = False) -> Optional[List[Dict]
 # ---------------------------------------------------------------------------
 # 个股资金流查询（替代 ak.stock_individual_fund_flow）
 # ---------------------------------------------------------------------------
-def query_stock_fund_flow(code: str, name: str = "") -> Optional[Dict[str, Any]]:
+def query_stock_fund_flow(
+    code: str, name: str = "", call_type: str = "normal"
+) -> Optional[Dict[str, Any]]:
     """
     获取个股综合行情数据（主力资金 + 技术指标 + 盘口）。
 
@@ -241,6 +243,11 @@ def query_stock_fund_flow(code: str, name: str = "") -> Optional[Dict[str, Any]]
         {
             "main_net": float,              # 主力净流入(元)
             "net_flows_3d": [float x3],      # 近3日主力净流入
+            "net_flows_5d": [float x5],      # 近5日主力净流入
+            "super_large_net": float,        # 当日超大单净流入
+            "large_net": float,              # 当日大单净流入
+            "super_large_flows_5d": [float], # 近5日超大单净流入
+            "large_flows_5d": [float],       # 近5日大单净流入
             "signal": "流入"|"流出"|"平衡",
             "macd": float, "kdj": float, "rsi": float,
             "turnover_rate": float, "volume_ratio": float,
@@ -249,12 +256,14 @@ def query_stock_fund_flow(code: str, name: str = "") -> Optional[Dict[str, Any]]
         }
         或 None
     """
-    query_text = f"{name or code} 连续3日主力净流入 MACD KDJ RSI 换手率 量比 振幅"
+    query_text = f"{name or code} 近5日主力净流入 超大单净流入 大单净流入 MACD KDJ RSI 换手率 量比 振幅"
     if name:
-        query_text = f"{name} 连续3日主力净流入 MACD KDJ RSI 换手率 量比 振幅"
+        query_text = f"{name} 近5日主力净流入 超大单净流入 大单净流入 MACD KDJ RSI 换手率 量比 振幅"
 
     try:
-        result = _call_api(query=query_text, page="1", limit="1", timeout=10)
+        result = _call_api(
+            query=query_text, page="1", limit="1", timeout=10, call_type=call_type
+        )
         if not result:
             return None
 
@@ -265,17 +274,23 @@ def query_stock_fund_flow(code: str, name: str = "") -> Optional[Dict[str, Any]]
         item = datas[0]
         out = {}
 
-        # 主力净流入(当日)
-        for k, v in item.items():
-            if "主力资金流向[" in str(k):
-                try:
-                    out.setdefault("net_flows_3d", []).append(float(v))
-                except (ValueError, TypeError):
-                    pass
+        out["net_flows_5d"] = _extract_dated_metric_series(
+            item, ("主力资金流向", "主力净流入", "主力资金净流入")
+        )
+        out["fund_flow_points_5d"] = _extract_dated_metric_points(
+            item, ("主力资金流向", "主力净流入", "主力资金净流入")
+        )
+        out["net_flows_3d"] = out["net_flows_5d"][-3:]
+        out["super_large_flows_5d"] = _extract_dated_metric_series(
+            item, ("超大单净流入", "超大单资金流向", "超大单净额")
+        )
+        out["large_flows_5d"] = _extract_dated_metric_series(
+            item, ("大单净流入", "大单资金流向", "大单净额")
+        )
 
         # 最近1日主力净流入
-        if out.get("net_flows_3d"):
-            out["main_net"] = out["net_flows_3d"][-1]
+        if out.get("net_flows_5d"):
+            out["main_net"] = out["net_flows_5d"][-1]
             out["signal"] = "流入" if out["main_net"] > 0 else ("流出" if out["main_net"] < 0 else "平衡")
         else:
             # 降级：匹配无日期后缀的 "主力资金流向"
@@ -283,6 +298,20 @@ def query_stock_fund_flow(code: str, name: str = "") -> Optional[Dict[str, Any]]
             if main_net is not None:
                 out["main_net"] = main_net
                 out["signal"] = "流入" if main_net > 0 else ("流出" if main_net < 0 else "平衡")
+
+        if out.get("super_large_flows_5d"):
+            out["super_large_net"] = out["super_large_flows_5d"][-1]
+        else:
+            super_large = _find_value(item, ["超大单净流入", "超大单资金流向", "超大单净额"])
+            if super_large is not None:
+                out["super_large_net"] = super_large
+
+        if out.get("large_flows_5d"):
+            out["large_net"] = out["large_flows_5d"][-1]
+        else:
+            large = _find_value(item, ["大单净流入", "大单资金流向", "大单净额"])
+            if large is not None:
+                out["large_net"] = large
 
         if "main_net" not in out:
             return None
@@ -392,3 +421,29 @@ def _find_value(item: Dict, candidate_keys: List[str]) -> Optional[float]:
             except (ValueError, TypeError):
                 continue
     return None
+
+
+def _extract_dated_metric_points(item: Dict, phrases: tuple) -> List[Dict[str, Any]]:
+    """按日期字段提取指标序列，例如“主力资金流向[20260901]”。"""
+    values: Dict[str, float] = {}
+    for key, value in item.items():
+        text = str(key)
+        if "[" not in text or "]" not in text:
+            continue
+        metric = text.split("[", 1)[0]
+        date = text.rsplit("[", 1)[1].rstrip("]")
+        if not date or not any(phrase in metric for phrase in phrases):
+            continue
+        number = _find_value({metric: value}, [metric])
+        if number is not None:
+            values[date] = number
+    return [
+        {"date": date, "value": values[date]} for date in sorted(values)
+    ][-5:]
+
+
+def _extract_dated_metric_series(item: Dict, phrases: tuple) -> List[float]:
+    return [
+        point["value"]
+        for point in _extract_dated_metric_points(item, phrases)
+    ]

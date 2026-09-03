@@ -497,7 +497,7 @@ class TestPriority4Fixes:
     def test_RT05_api_key_fallback_present(self):
         """RT-05: skill_wrapper.py 保留硬编码 API Key 作为调试默认值"""
         skill_path = PROJECT_ROOT / "src" / "data_layer" / "skill_wrapper.py"
-        with open(skill_path) as f:
+        with open(skill_path, encoding="utf-8") as f:
             content = f.read()
         # 调试便利：保留硬编码默认 key，未设环境变量时自动启用
         assert "sk-proj-01-19pbDVq97" in content

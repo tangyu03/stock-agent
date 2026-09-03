@@ -137,6 +137,7 @@ timing:
     index_min_klines: 2                  # 上证指数至少 N 条 K 线
     market_vol_avg_window: 20            # 20 日均成交额窗口
     max_workers: 4                       # 并发预取线程数
+    hist_calendar_days: 240              # 个股日K预取窗口；覆盖节假日和停牌
 
   # ──────────────── 回测专用：仓位管理 ────────────────
   # 这部分不参与 timing_engine 实时判断，仅供 backtest loop 使用
