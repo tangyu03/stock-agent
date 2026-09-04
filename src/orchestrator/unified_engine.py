@@ -72,6 +72,8 @@ def _explain_no_entry(
         "retreating": "退潮",
         "unknown": "未知",
     }
+    if tech_data.get("entry_blocked_reason"):
+        primary = tech_data["entry_blocked_reason"]
     tech = tech_data.get("tech_signals") or {}
     tech_score = float(tech.get("vote_score", 0) or 0)
     institutional = tech_data.get("institutional_holding") or {}
@@ -208,6 +210,8 @@ def _volume_breakout_blocker(tech_data: Dict, market_mode: str) -> str:
     from ..analyzers.signal_plan import build_volume_snapshot
 
     volume_snapshot = build_volume_snapshot(tech_data)
+    if volume_snapshot.dirty:
+        return volume_snapshot.dirty_reason
     if volume_snapshot.volume_vs_ma60 is None:
         return "量能数据不足"
     if (

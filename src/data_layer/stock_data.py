@@ -11,7 +11,7 @@
 - 事件/财报体检/资金流：保留问财（独有能力）
 """
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -58,9 +58,38 @@ def batch_get_realtime_quotes(codes: List[str]) -> Dict[str, Dict]:
 
 def _qq_code(code: str) -> str:
     """股票代码 → 腾讯格式（sh/sz 前缀）"""
+    if code[:2] in ("92", "83", "87", "89"):
+        return "bj" + code
     if code.startswith("6") or code.startswith("5") or code.startswith("11"):
         return "sh" + code
     return "sz" + code
+
+
+def _is_a_share_trading_time(timestamp: str = "") -> bool:
+    """仅把 A 股连续竞价时段内的零成交视为可能的停牌。"""
+    now = datetime.now()
+    stamp = str(timestamp or "").strip()
+    if stamp.isdigit() and len(stamp) == 14:
+        try:
+            now = datetime.strptime(stamp, "%Y%m%d%H%M%S")
+        except ValueError:
+            pass
+
+    if now.weekday() >= 5:
+        return False
+    minute_of_day = now.hour * 60 + now.minute
+    return (9 * 60 + 30) <= minute_of_day <= (11 * 60 + 30) or (
+        13 * 60 <= minute_of_day <= (15 * 60)
+    )
+
+
+def _volume_share_factor(volume: float, amount: float, reference_price: float) -> int:
+    """Infer whether a source's volume is shares or lots (100 shares)."""
+    if volume <= 0 or amount <= 0 or reference_price <= 0:
+        return 1
+    price_per_unit = amount / volume
+    ratio = price_per_unit / reference_price
+    return 100 if abs(ratio - 100.0) < abs(ratio - 1.0) else 1
 
 
 def _fetch_qq_quotes(codes: List[str]) -> int:
@@ -68,7 +97,8 @@ def _fetch_qq_quotes(codes: List[str]) -> int:
     腾讯实时行情 qt.gtimg.cn（主源，最稳定），分批 ≤60 只，写入 _spot_cache
 
     返回值格式：v_sh600000="1~名称~代码~现价~昨收~今开~成交量~...~涨跌幅~最高~最低~...~成交额~..."
-    字段索引：[1]名称 [2]代码 [3]现价 [4]昨收 [5]今开 [6]成交量(手)
+    字段索引：[1]名称 [2]代码 [3]现价 [4]昨收 [5]今开 [6]成交量
+              注意：不同板块的该字段可能是手或股，必须用成交额反推。
               [32]涨跌幅% [33]最高 [34]最低 [37]成交额(万)
     """
     import requests
@@ -104,12 +134,16 @@ def _fetch_qq_quotes(codes: List[str]) -> int:
                 if not code:
                     continue
                 name = parts[1]
-                volume_hand = _f(parts[6])  # 成交量单位：手
+                raw_volume = _f(parts[6])
+                amount = _f(parts[37]) * 10000
+                reference_price = _f(parts[4]) or _f(parts[3])
+                volume_factor = _volume_share_factor(raw_volume, amount, reference_price)
+                volume_shares = raw_volume * volume_factor
                 _spot_cache[code] = {
                     "current_price": _f(parts[3]),
                     "change_pct": _f(parts[32]),
-                    "volume": volume_hand * 100,          # 手 → 股
-                    "amount": _f(parts[37]) * 10000,      # 万 → 元
+                    "volume": volume_shares,
+                    "amount": amount,
                     "today_high": _f(parts[33]),
                     "today_low": _f(parts[34]),
                     "today_open": _f(parts[5]),
@@ -117,9 +151,11 @@ def _fetch_qq_quotes(codes: List[str]) -> int:
                     "timestamp": parts[30] if len(parts) > 30 else "",
                     "volume_ratio": _f(parts[49]),        # 量比（与同花顺一致，实测 300843=0.93）
                     "turnover_rate": _f(parts[38]) if len(parts) > 38 else 0.0,
+                    "outer_volume": (_f(parts[7]) if len(parts) > 7 else 0.0) * volume_factor,
+                    "inner_volume": (_f(parts[8]) if len(parts) > 8 else 0.0) * volume_factor,
                     "name": name,
                     "is_st": "ST" in name or "*ST" in name,
-                    "is_suspended": volume_hand == 0,
+                    "is_suspended": raw_volume == 0 and _is_a_share_trading_time(parts[30]),
                 }
                 hit += 1
         except Exception as e:
@@ -133,6 +169,8 @@ def _fetch_qq_quotes(codes: List[str]) -> int:
 
 def _em_secid(code: str) -> str:
     """股票代码 → 东财 secid（1.=沪 0.=深/北）"""
+    if code[:2] in ("92", "83", "87", "89"):
+        return f"0.{code}"
     if code.startswith("6") or code.startswith("5") or code.startswith("11"):
         return f"1.{code}"  # 沪市股票/基金/可转债
     return f"0.{code}"       # 深市/创业板/北交所
@@ -179,12 +217,15 @@ def _fetch_em_ulist(codes: List[str]) -> None:
                         return float(v)
                     except (ValueError, TypeError):
                         return 0.0
-                volume = _f(row.get("f5", 0))
+                raw_volume = _f(row.get("f5", 0))
+                amount = _f(row.get("f6", 0))
+                reference_price = _f(row.get("f18", 0)) or _f(row.get("f2", 0))
+                volume_factor = _volume_share_factor(raw_volume, amount, reference_price)
                 _spot_cache[code] = {
                     "current_price": _f(row.get("f2", 0)),
                     "change_pct": _f(row.get("f3", 0)),
-                    "volume": volume,
-                    "amount": _f(row.get("f6", 0)),
+                    "volume": raw_volume * volume_factor,
+                    "amount": amount,
                     "today_high": _f(row.get("f15", 0)),
                     "today_low": _f(row.get("f16", 0)),
                     "today_open": _f(row.get("f17", 0)),
@@ -193,7 +234,7 @@ def _fetch_em_ulist(codes: List[str]) -> None:
                     "turnover_rate": _f(row.get("f8", 0)),   # 换手率%（东财 f8）
                     "name": name,
                     "is_st": "ST" in name or "*ST" in name,
-                    "is_suspended": volume == 0,
+                    "is_suspended": raw_volume == 0 and _is_a_share_trading_time(),
                 }
                 hit += 1
         except Exception as e:
@@ -220,16 +261,23 @@ def calc_ema(values: List[float], period: int) -> List[float]:
 
 
 def calc_rsi(closes: List[float], period: int = 14) -> float:
-    """计算 RSI（0-100）"""
+    """Wilder RSI（0-100）。"""
     if len(closes) < period + 1:
         return 50.0
     gains, losses = [], []
-    for i in range(-period, 0):
+    for i in range(1, len(closes)):
         diff = closes[i] - closes[i - 1]
-        gains.append(max(diff, 0))
-        losses.append(max(-diff, 0))
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
+        gains.append(max(diff, 0.0))
+        losses.append(max(-diff, 0.0))
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+    if avg_gain == 0 and avg_loss == 0:
+        return 50.0
     if avg_loss == 0:
         return 100.0
     rs = avg_gain / avg_loss
@@ -238,8 +286,7 @@ def calc_rsi(closes: List[float], period: int = 14) -> float:
 
 def calc_adx(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> float:
     """
-    计算 ADX（趋势强度指标）
-    ADX > 25 表示趋势强劲
+    Wilder ADX（趋势强度指标）。ADX 是 DX 的平滑均值，不是单日 DX。
     """
     if len(closes) < period * 2 + 1:
         return 20.0  # 数据不足返回中性
@@ -266,22 +313,29 @@ def calc_adx(highs: List[float], lows: List[float], closes: List[float], period:
         else:
             minus_dms.append(0)
 
-    # 简化：取最近 period 天平均
-    if len(trs) < period:
-        return 20.0
+    smooth_tr = sum(trs[:period])
+    smooth_plus_dm = sum(plus_dms[:period])
+    smooth_minus_dm = sum(minus_dms[:period])
 
-    atr = sum(trs[-period:]) / period
-    if atr == 0:
-        return 20.0
-
-    plus_di = (sum(plus_dms[-period:]) / period) / atr * 100
-    minus_di = (sum(minus_dms[-period:]) / period) / atr * 100
-
-    if plus_di + minus_di == 0:
-        return 20.0
-
-    dx = abs(plus_di - minus_di) / (plus_di + minus_di) * 100
-    return dx
+    adx = 20.0
+    dx_values: List[float] = []
+    for i in range(period, len(trs)):
+        smooth_tr = smooth_tr - smooth_tr / period + trs[i]
+        smooth_plus_dm = smooth_plus_dm - smooth_plus_dm / period + plus_dms[i]
+        smooth_minus_dm = smooth_minus_dm - smooth_minus_dm / period + minus_dms[i]
+        if smooth_tr == 0 or smooth_plus_dm + smooth_minus_dm == 0:
+            continue
+        plus_di = smooth_plus_dm / smooth_tr * 100
+        minus_di = smooth_minus_dm / smooth_tr * 100
+        dx = abs(plus_di - minus_di) / (plus_di + minus_di) * 100
+        dx_values.append(dx)
+        if len(dx_values) < period:
+            continue
+        if len(dx_values) == period:
+            adx = sum(dx_values) / period
+        else:
+            adx = (adx * (period - 1) + dx) / period
+    return adx
 
 
 def calc_bollinger(closes: List[float], period: int = 20, std_dev: float = 2.0) -> Dict:
@@ -380,160 +434,160 @@ def calc_macd(closes: List[float], fast: int = 12, slow: int = 26, signal: int =
     }
 
 
-def detect_chan_divergence(closes: List[float], highs: List[float], lows: List[float],
-                           swing_window: int = 5) -> Dict:
-    """
-    缠论背驰检测（纯本地计算）
-
-    核心逻辑：比较相邻同向走势段的 MACD 柱面积。
-    - 价格创新高但 MACD 面积缩小 → 顶背驰（上涨衰竭）
-    - 价格创新低但 MACD 面积缩小 → 底背驰（下跌衰竭）
-
-    参考 chan-theory skill: 同时满足趋势力度+空间+时间中 2 项以上 → 背驰确认
-
-    Args:
-        closes: 收盘价序列
-        highs:  最高价序列
-        lows:   最低价序列
-        swing_window: 摆动识别窗口（默认5天识别局部极值）
-
-    Returns:
-        {"type": "顶背驰"|"底背驰"|"无",
-         "confidence": "高"|"中"|"低",
-         "detail": str}
-    """
-    n = len(closes)
-    if n < 30:
-        return {"type": "无", "confidence": "低", "detail": "数据不足(需>=30根K线)"}
-
-    # 1. 计算 MACD 序列
-    ema_fast = calc_ema(closes, 12)
-    ema_slow = calc_ema(closes, 26)
-    dif_list = [ema_fast[i] - ema_slow[i] for i in range(len(ema_fast))]
-    dea_list = calc_ema(dif_list, 9)
-    # MACD 柱 = (DIF - DEA) × 2
-    hist_list = [2 * (dif_list[i] - dea_list[i]) for i in range(min(len(dif_list), len(dea_list)))]
-    # 对齐到 closes
-    offset = len(closes) - len(hist_list)
-    hist_list = [0] * max(0, offset) + hist_list
-
-    # 2. 识别摆动点（方向转折检测 + 首尾 implied 摆动点）
-    swings = []  # [(idx, price, "high"|"low"), ...]
-    last_direction = None
-    first_dir = None
-
-    for i in range(swing_window, n - swing_window):
-        before_avg = sum(closes[i - swing_window:i]) / swing_window
-        after_avg = sum(closes[i + 1:i + 1 + swing_window]) / swing_window if i + 1 + swing_window <= n else closes[i]
-        current_dir = "up" if after_avg > before_avg else "down"
-        if first_dir is None:
-            first_dir = current_dir
-
-        if last_direction and current_dir != last_direction:
-            if last_direction == "up":
-                local_idx = max(range(max(0, i - swing_window), min(n, i + 1)),
-                               key=lambda j: highs[j])
-                swings.append((local_idx, highs[local_idx], "high"))
-            else:
-                local_idx = min(range(max(0, i - swing_window), min(n, i + 1)),
-                               key=lambda j: lows[j])
-                swings.append((local_idx, lows[local_idx], "low"))
-        last_direction = current_dir
-
-    if not swings:
-        return {"type": "无", "confidence": "低", "detail": "未检测到方向转折"}
-
-    # 在数据首尾补 implied 摆动点（没有转折的起始段/末尾段也需要表示）
-    start_dir = first_dir or "up"
-    if start_dir == "up":
-        start_idx = min(range(swing_window), key=lambda j: lows[j])
-        swings.insert(0, (start_idx, lows[start_idx], "low"))
-    else:
-        start_idx = max(range(swing_window), key=lambda j: highs[j])
-        swings.insert(0, (start_idx, highs[start_idx], "high"))
-
-    end_dir = last_direction or "up"
-    if end_dir == "up":
-        end_idx = max(range(n - swing_window, n), key=lambda j: highs[j])
-        swings.append((end_idx, highs[end_idx], "high"))
-    else:
-        end_idx = min(range(n - swing_window, n), key=lambda j: lows[j])
-        swings.append((end_idx, lows[end_idx], "low"))
-
-    if len(swings) < 4:
-        return {"type": "无", "confidence": "低", "detail": "摆动点不足"}
-
-    # 3. 取最近的同向走势段进行比较
-    # 走势段：从一个摆点到下一个反向摆点
-    last = swings[-1]
-    second_last = swings[-2]
-    third_last = swings[-3] if len(swings) >= 3 else None
-    fourth_last = swings[-4] if len(swings) >= 4 else None
-
-    # 计算一段走势的 MACD 面积（绝对值之和）和价格变化
-    def segment_info(start_swing, end_swing):
-        si, sp, st = start_swing
-        ei, ep, et = end_swing
-        if si >= ei:
-            return None
-        area = sum(abs(hist_list[j]) for j in range(si, ei + 1))
-        price_chg = abs(ep - sp) / sp if sp > 0 else 0
-        duration = ei - si
-        return {"area": area, "price_chg": price_chg, "duration": duration,
-                "start_idx": si, "end_idx": ei, "direction": st}
-
-    # 找最近的同方向走势段对
-    # 当前段: last 是 low → 上涨段(从倒数第二个low到last high)
-    #          last 是 high → 下跌段(从倒数第二个high到last low)
-    current_seg = None
-    prev_seg = None
-
-    if last[2] == "high" and fourth_last and third_last and second_last:
-        # last=高点, second_last=低点 → 当前上涨段: second_last→last
-        current_seg = segment_info(second_last, last)
-        # 前一同向段: fourth_last→third_last (都是上涨)
-        if fourth_last[2] == "low" and third_last[2] == "high":
-            prev_seg = segment_info(fourth_last, third_last)
-
-    elif last[2] == "low" and fourth_last and third_last and second_last:
-        # last=低点, second_last=高点 → 当前下跌段: second_last→last
-        current_seg = segment_info(second_last, last)
-        # 前一同向段: fourth_last→third_last (都是下跌)
-        if fourth_last[2] == "high" and third_last[2] == "low":
-            prev_seg = segment_info(fourth_last, third_last)
-
-    if not current_seg or not prev_seg:
-        return {"type": "无", "confidence": "低", "detail": "未找到可比走势段"}
-
-    # 4. 背驰判断：价格创新高/低 + MACD面积缩小
-    price_confirm = current_seg["price_chg"] > prev_seg["price_chg"] * 0.8  # 价格力度相当或更强
-    area_shrink = current_seg["area"] < prev_seg["area"] * 0.8              # 面积缩小20%以上
-    time_confirm = current_seg["duration"] <= prev_seg["duration"] * 1.5    # 时间不显著延长
-
-    # 同时满足2项以上 → 背驰
-    conditions_met = sum([area_shrink, price_confirm, time_confirm])
-
-    if conditions_met < 2:
-        return {"type": "无", "confidence": "低", "detail": "未满足背驰条件"}
-
-    if current_seg["direction"] == "low":
-        # 当前是上涨段（从low到high），但MACD面积缩小 → 顶背驰
-        type_ = "顶背驰"
-        signal = "看跌"
-        area_ratio = current_seg["area"] / prev_seg["area"] if prev_seg["area"] > 0 else 1
-        detail = (f"上涨段MACD面积{current_seg['area']:.1f} < 前段{prev_seg['area']:.1f}"
-                  f"(比值{area_ratio:.2f})，上涨力度衰竭")
-    else:
-        # 当前是下跌段（从high到low），但MACD面积缩小 → 底背驰
-        type_ = "底背驰"
-        signal = "看涨"
-        area_ratio = current_seg["area"] / prev_seg["area"] if prev_seg["area"] > 0 else 1
-        detail = (f"下跌段MACD面积{current_seg['area']:.1f} < 前段{prev_seg['area']:.1f}"
-                  f"(比值{area_ratio:.2f})，下跌力度衰竭")
-
-    conf = "高" if conditions_met >= 3 else "中"
-
-    return {"type": type_, "signal": signal, "confidence": conf,
+def detect_chan_divergence(closes: List[float], highs: List[float], lows: List[float],
+                           swing_window: int = 5) -> Dict:
+    """
+    缠论背驰检测（纯本地计算）
+
+    核心逻辑：比较相邻同向走势段的 MACD 柱面积。
+    - 价格创新高但 MACD 面积缩小 → 顶背驰（上涨衰竭）
+    - 价格创新低但 MACD 面积缩小 → 底背驰（下跌衰竭）
+
+    参考 chan-theory skill: 同时满足趋势力度+空间+时间中 2 项以上 → 背驰确认
+
+    Args:
+        closes: 收盘价序列
+        highs:  最高价序列
+        lows:   最低价序列
+        swing_window: 摆动识别窗口（默认5天识别局部极值）
+
+    Returns:
+        {"type": "顶背驰"|"底背驰"|"无",
+         "confidence": "高"|"中"|"低",
+         "detail": str}
+    """
+    n = len(closes)
+    if n < 30:
+        return {"type": "无", "confidence": "低", "detail": "数据不足(需>=30根K线)"}
+
+    # 1. 计算 MACD 序列
+    ema_fast = calc_ema(closes, 12)
+    ema_slow = calc_ema(closes, 26)
+    dif_list = [ema_fast[i] - ema_slow[i] for i in range(len(ema_fast))]
+    dea_list = calc_ema(dif_list, 9)
+    # MACD 柱 = (DIF - DEA) × 2
+    hist_list = [2 * (dif_list[i] - dea_list[i]) for i in range(min(len(dif_list), len(dea_list)))]
+    # 对齐到 closes
+    offset = len(closes) - len(hist_list)
+    hist_list = [0] * max(0, offset) + hist_list
+
+    # 2. 识别摆动点（方向转折检测 + 首尾 implied 摆动点）
+    swings = []  # [(idx, price, "high"|"low"), ...]
+    last_direction = None
+    first_dir = None
+
+    for i in range(swing_window, n - swing_window):
+        before_avg = sum(closes[i - swing_window:i]) / swing_window
+        after_avg = sum(closes[i + 1:i + 1 + swing_window]) / swing_window if i + 1 + swing_window <= n else closes[i]
+        current_dir = "up" if after_avg > before_avg else "down"
+        if first_dir is None:
+            first_dir = current_dir
+
+        if last_direction and current_dir != last_direction:
+            if last_direction == "up":
+                local_idx = max(range(max(0, i - swing_window), min(n, i + 1)),
+                               key=lambda j: highs[j])
+                swings.append((local_idx, highs[local_idx], "high"))
+            else:
+                local_idx = min(range(max(0, i - swing_window), min(n, i + 1)),
+                               key=lambda j: lows[j])
+                swings.append((local_idx, lows[local_idx], "low"))
+        last_direction = current_dir
+
+    if not swings:
+        return {"type": "无", "confidence": "低", "detail": "未检测到方向转折"}
+
+    # 在数据首尾补 implied 摆动点（没有转折的起始段/末尾段也需要表示）
+    start_dir = first_dir or "up"
+    if start_dir == "up":
+        start_idx = min(range(swing_window), key=lambda j: lows[j])
+        swings.insert(0, (start_idx, lows[start_idx], "low"))
+    else:
+        start_idx = max(range(swing_window), key=lambda j: highs[j])
+        swings.insert(0, (start_idx, highs[start_idx], "high"))
+
+    end_dir = last_direction or "up"
+    if end_dir == "up":
+        end_idx = max(range(n - swing_window, n), key=lambda j: highs[j])
+        swings.append((end_idx, highs[end_idx], "high"))
+    else:
+        end_idx = min(range(n - swing_window, n), key=lambda j: lows[j])
+        swings.append((end_idx, lows[end_idx], "low"))
+
+    if len(swings) < 4:
+        return {"type": "无", "confidence": "低", "detail": "摆动点不足"}
+
+    # 3. 取最近的同向走势段进行比较
+    # 走势段：从一个摆点到下一个反向摆点
+    last = swings[-1]
+    second_last = swings[-2]
+    third_last = swings[-3] if len(swings) >= 3 else None
+    fourth_last = swings[-4] if len(swings) >= 4 else None
+
+    # 计算一段走势的 MACD 面积（绝对值之和）和价格变化
+    def segment_info(start_swing, end_swing):
+        si, sp, st = start_swing
+        ei, ep, et = end_swing
+        if si >= ei:
+            return None
+        area = sum(abs(hist_list[j]) for j in range(si, ei + 1))
+        price_chg = abs(ep - sp) / sp if sp > 0 else 0
+        duration = ei - si
+        return {"area": area, "price_chg": price_chg, "duration": duration,
+                "start_idx": si, "end_idx": ei, "direction": st}
+
+    # 找最近的同方向走势段对
+    # 当前段: last 是 low → 上涨段(从倒数第二个low到last high)
+    #          last 是 high → 下跌段(从倒数第二个high到last low)
+    current_seg = None
+    prev_seg = None
+
+    if last[2] == "high" and fourth_last and third_last and second_last:
+        # last=高点, second_last=低点 → 当前上涨段: second_last→last
+        current_seg = segment_info(second_last, last)
+        # 前一同向段: fourth_last→third_last (都是上涨)
+        if fourth_last[2] == "low" and third_last[2] == "high":
+            prev_seg = segment_info(fourth_last, third_last)
+
+    elif last[2] == "low" and fourth_last and third_last and second_last:
+        # last=低点, second_last=高点 → 当前下跌段: second_last→last
+        current_seg = segment_info(second_last, last)
+        # 前一同向段: fourth_last→third_last (都是下跌)
+        if fourth_last[2] == "high" and third_last[2] == "low":
+            prev_seg = segment_info(fourth_last, third_last)
+
+    if not current_seg or not prev_seg:
+        return {"type": "无", "confidence": "低", "detail": "未找到可比走势段"}
+
+    # 4. 背驰判断：价格创新高/低 + MACD面积缩小
+    price_confirm = current_seg["price_chg"] > prev_seg["price_chg"] * 0.8  # 价格力度相当或更强
+    area_shrink = current_seg["area"] < prev_seg["area"] * 0.8              # 面积缩小20%以上
+    time_confirm = current_seg["duration"] <= prev_seg["duration"] * 1.5    # 时间不显著延长
+
+    # 同时满足2项以上 → 背驰
+    conditions_met = sum([area_shrink, price_confirm, time_confirm])
+
+    if conditions_met < 2:
+        return {"type": "无", "confidence": "低", "detail": "未满足背驰条件"}
+
+    if current_seg["direction"] == "low":
+        # 当前是上涨段（从low到high），但MACD面积缩小 → 顶背驰
+        type_ = "顶背驰"
+        signal = "看跌"
+        area_ratio = current_seg["area"] / prev_seg["area"] if prev_seg["area"] > 0 else 1
+        detail = (f"上涨段MACD面积{current_seg['area']:.1f} < 前段{prev_seg['area']:.1f}"
+                  f"(比值{area_ratio:.2f})，上涨力度衰竭")
+    else:
+        # 当前是下跌段（从high到low），但MACD面积缩小 → 底背驰
+        type_ = "底背驰"
+        signal = "看涨"
+        area_ratio = current_seg["area"] / prev_seg["area"] if prev_seg["area"] > 0 else 1
+        detail = (f"下跌段MACD面积{current_seg['area']:.1f} < 前段{prev_seg['area']:.1f}"
+                  f"(比值{area_ratio:.2f})，下跌力度衰竭")
+
+    conf = "高" if conditions_met >= 3 else "中"
+
+    return {"type": type_, "signal": signal, "confidence": conf,
             "detail": detail, "area_ratio": round(area_ratio, 2)}
 
 
@@ -734,10 +788,22 @@ def _calc_volume_signal(volumes: List[float], period: int = 5,
     return "正常"
 
 
+def _safe_quote_number(value) -> Optional[float]:
+    """行情字段允许 0，但不把缺失/非法值当作 0。"""
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
 def calc_tech_indicators(
     kline: List[Dict],
     market_mode: str = "defend",
     volume_ratio: Optional[float] = None,
+    realtime_quote: Optional[Dict] = None,
 ) -> Dict:
     """
     计算完整技术指标（替代问财 tech_signals）
@@ -798,8 +864,11 @@ def calc_tech_indicators(
     rsi_cfg = voting_cfg.get("rsi", {})
     adx_cfg = voting_cfg.get("adx", {})
 
-    # RSI（6 区细分，借鉴 a-stock-kline-analyzer）
+    # RSI：14日用于标准强度，6日用于A股短线超买超卖提示。
     rsi = calc_rsi(closes, 14)
+    rsi6 = calc_rsi(closes, 6)
+    ma6 = sum(closes[-6:]) / 6 if len(closes) >= 6 else None
+    bias6 = ((closes[-1] - ma6) / ma6 * 100) if ma6 else None
     rsi_signal = _rsi_zone(rsi,
                            overbought=rsi_cfg.get("overbought", 70),
                            oversold=rsi_cfg.get("oversold", 30))
@@ -850,12 +919,43 @@ def calc_tech_indicators(
     })
     vol_signal = volume_snapshot.label
     vol_stagnation_pct = vol_cfg.get("stagnation_pct", 0.01)
+    if volume_snapshot.dirty:
+        details_by_cat["volume"].append(volume_snapshot.dirty_reason + "(不投票)")
 
     # 波动率
     volatility = calc_volatility(closes)
 
     # 缠论背驰
     divergence = detect_chan_divergence(closes, highs, lows)
+
+    # 内外盘只做成交主动性展示；算法拆单可能失真，不参与投票。
+    outer_volume = None
+    inner_volume = None
+    for key in ("outer_volume", "外盘"):
+        value = _safe_quote_number((realtime_quote or {}).get(key))
+        if value is not None:
+            outer_volume = value
+            break
+    for key in ("inner_volume", "内盘"):
+        value = _safe_quote_number((realtime_quote or {}).get(key))
+        if value is not None:
+            inner_volume = value
+            break
+    order_total = (outer_volume or 0) + (inner_volume or 0)
+    order_flow_available = outer_volume is not None and inner_volume is not None and order_total > 0
+    order_imbalance = (
+        (outer_volume - inner_volume) / order_total * 100
+        if order_flow_available
+        else None
+    )
+    if order_imbalance is None:
+        order_flow_label = "数据不足"
+    elif order_imbalance >= 5:
+        order_flow_label = "外盘占优"
+    elif order_imbalance <= -5:
+        order_flow_label = "内盘占优"
+    else:
+        order_flow_label = "均衡"
 
     # ═══════════════════════════════════════════════════════════════
     # 4 类分组投票（阈值从 config/market_scoring.yaml → voting 读取）
@@ -900,6 +1000,9 @@ def calc_tech_indicators(
         details_by_cat["momentum"].append(f"RSI强势({rsi:.0f})(中性不投票)")
     elif rsi_signal == "弱势":
         details_by_cat["momentum"].append(f"RSI弱势({rsi:.0f})(中性不投票)")
+    details_by_cat["momentum"].append(f"RSI6={rsi6:.1f}")
+    if bias6 is not None:
+        details_by_cat["momentum"].append(f"BIAS6={bias6:.1f}%(展示)")
 
     mom_vote = 1 if mom_bull > mom_bear else (-1 if mom_bear > mom_bull else 0)
 
@@ -940,7 +1043,7 @@ def calc_tech_indicators(
 
     # ── 量能组：统一量能快照 + 当日价格方向 ──
     vol_vote = 0
-    volume_active = (
+    volume_active = not volume_snapshot.dirty and (
         volume_snapshot.volume_hot
         or volume_snapshot.turnover_hot
         or (
@@ -1033,6 +1136,8 @@ def calc_tech_indicators(
         "ema_long": round(ema_long, 2),
         "ema_cross": ema_cross,
         "rsi": round(rsi, 2),
+        "rsi6": round(rsi6, 2),
+        "bias6": round(bias6, 2) if bias6 is not None else None,
         "rsi_signal": rsi_signal,
         "adx": round(adx, 2),
         "adx_signal": adx_signal,
@@ -1051,6 +1156,15 @@ def calc_tech_indicators(
         # 波动率
         "volatility": round(volatility, 1),
         "volume_snapshot": volume_snapshot.as_dict(),
+        "order_flow": {
+            "available": order_flow_available,
+            "outer_volume": outer_volume,
+            "inner_volume": inner_volume,
+            "imbalance_pct": round(order_imbalance, 2) if order_imbalance is not None else None,
+            "label": order_flow_label,
+            "unit": "手",
+            "display_only": True,
+        },
         # 缠论背驰
         "chan_divergence": divergence,
     }

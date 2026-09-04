@@ -35,6 +35,26 @@ def test_volume_snapshot_uses_prior_day_quantiles():
     assert snapshot.volume_hot is True
 
 
+def test_dirty_volume_snapshot_is_blocked_by_breakout():
+    kline = [{"volume": 100, "turnover_rate": 1.0} for _ in range(61)]
+    tech_data = {
+        "kline": kline,
+        "today_volume": 2000,
+        "volume_ratio": 0.8,
+        "current_price": 101.0,
+        "ma25": 90.0,
+    }
+
+    snapshot = build_volume_snapshot(tech_data)
+
+    assert snapshot.dirty is True
+    assert snapshot.volume_ratio < 1.0
+    assert snapshot.volume_vs_ma60 > 10.0
+    assert snapshot.label == "量能脏数据"
+    assert "量能口径冲突" in snapshot.dirty_reason
+    assert snapshot.dirty_reason == _volume_breakout_blocker(tech_data, "defend")
+
+
 def test_medium_conflict_is_labeled_without_confidence_penalty():
     tech_data = {
         "current_price": 101.61,
@@ -44,7 +64,7 @@ def test_medium_conflict_is_labeled_without_confidence_penalty():
         "tech_signals": {
             "vote_score": 0,
             "category_votes": {},
-            "chan_divergence": {"type": "顶背驰", "confidence": "中"},
+                "chan_divergence": {"type": "顶背驰", "confidence": "中"},
         },
     }
 
@@ -56,7 +76,7 @@ def test_medium_conflict_is_labeled_without_confidence_penalty():
         tech_data=tech_data,
     )
 
-    assert "矛盾0:MACD顶背驰(中)" in plan.confidence_details
+    assert "矛盾0:价格顶背驰(中)" in plan.confidence_details
     assert plan.confidence_score == 0
 
 
@@ -506,7 +526,7 @@ def test_observation_render_uses_compact_reasoning_format():
 
     assert "市场:防守(5.0)" in rendered
     assert "①方向:MACD死叉延续" in rendered
-    assert "②时机:RSI30.3(不投票)" in rendered
+    assert "②时机:RSI14=30.3(不投票)" in rendered
     assert "③量能:量比0.86" in rendered
     assert "④资金:🟢机构看空" in rendered or "机构看空(-3票" in rendered
     assert "⑤拦截:技术投票偏空" in rendered

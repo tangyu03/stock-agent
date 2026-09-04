@@ -54,6 +54,30 @@ def _signed_amount(amount) -> str:
     return f"{direction}{abs_amt:.0f}元"
 
 
+def _main_flow_window(fund: dict) -> str:
+    """Return a truthful window label for mixed fund-flow sources."""
+    source = str(fund.get("source") or "")
+    if "3日" in source:
+        return "3日快照"
+    count = len(fund.get("main_flows") or [])
+    return f"{count}日累计" if count else "窗口:N/A"
+
+
+def _order_flow_text(tech: dict) -> str:
+    flow = tech.get("order_flow") or {}
+    if not flow.get("available"):
+        return "内外盘:N/A(展示)"
+
+    def hand(value):
+        value = float(value or 0)
+        return f"{value / 10000:.2f}万手" if abs(value) >= 10000 else f"{value:.0f}手"
+
+    outer = hand(flow.get("outer_volume"))
+    inner = hand(flow.get("inner_volume"))
+    imbalance = float(flow.get("imbalance_pct") or 0)
+    return f"外盘{outer}/内盘{inner}({imbalance:+.1f}%,展示)"
+
+
 def _sector_label(s: str) -> str:
     """板块状态英文→中文"""
     return {"main_trend": "主线", "rotational": "轮动", "retreating": "退潮",
@@ -82,7 +106,7 @@ def _execution_plan(data) -> str:
         inflow_days = sum(1 for value in fund["main_flows"] if float(value) > 0)
         strong_text = ",强节奏" if fund.get("main_strong") else ""
         parts.append(
-            f"主力5日累计:{_signed_amount(sum(fund['main_flows']))}"
+            f"主力{_main_flow_window(fund)}:{_signed_amount(sum(fund['main_flows']))}"
             f"({inflow_days}/{len(fund['main_flows'])}日流入{strong_text})"
         )
     if fund.get("latest_super_large_net") is not None or fund.get("latest_large_net") is not None:
@@ -208,7 +232,16 @@ def _entry_decision_lines(data) -> list[str]:
     momentum = ((tech.get("category_votes") or {}).get("momentum") or {})
     pattern = ((tech.get("category_votes") or {}).get("pattern") or {})
     rsi = data.get("rsi")
-    rsi_text = f"RSI{float(rsi):.1f}(不投票)" if rsi is not None else "RSI:N/A"
+    rsi6 = data.get("rsi6") or tech.get("rsi6")
+    rsi_text = f"RSI14={float(rsi):.1f}" if rsi is not None else "RSI14:N/A"
+    if rsi6 is not None:
+        rsi_text += f" | RSI6={float(rsi6):.1f}"
+    bias6 = data.get("bias6")
+    if bias6 is None:
+        bias6 = tech.get("bias6")
+    if bias6 is not None:
+        rsi_text += f" | BIAS6={float(bias6):.1f}%"
+    rsi_text += "(不投票)"
     pattern_details = "/".join(pattern.get("details") or []) or "无信号"
     lines.append(f"②时机:{rsi_text}+{pattern_details}→{_vote_text(int(pattern.get('vote', 0) or 0))}")
 
@@ -223,6 +256,9 @@ def _entry_decision_lines(data) -> list[str]:
         volume_text += f" | 换手{float(turnover):.2f}%({p90_text}){hot}"
     else:
         volume_text += " | 换手:N/A"
+    order_text = _order_flow_text(tech)
+    if order_text:
+        volume_text += f" | {order_text}"
     lines.append(f"③量能:{volume_text}")
 
     fund = plan.get("fund_snapshot") or {}
@@ -231,7 +267,7 @@ def _entry_decision_lines(data) -> list[str]:
         inflow_days = sum(1 for value in main_flows if float(value) > 0)
         strong_text = ",强节奏" if fund.get("main_strong") else ""
         funds_text = (
-            f"主力5日累计:{_signed_amount(sum(main_flows))}"
+            f"主力{_main_flow_window(fund)}:{_signed_amount(sum(main_flows))}"
             f"({inflow_days}/{len(main_flows)}日流入{strong_text})"
         )
     else:
@@ -305,7 +341,16 @@ def _render_compact_observation_signal(data):
         else:
             ma_text = "MA交叉震荡 | "
     rsi = data.get("rsi") or tech.get("rsi")
-    rsi_text = f"RSI{float(rsi):.1f}(不投票)" if rsi is not None else "RSI:N/A"
+    rsi6 = data.get("rsi6") or tech.get("rsi6")
+    rsi_text = f"RSI14={float(rsi):.1f}" if rsi is not None else "RSI14:N/A"
+    if rsi6 is not None:
+        rsi_text += f" | RSI6={float(rsi6):.1f}"
+    bias6 = data.get("bias6")
+    if bias6 is None:
+        bias6 = tech.get("bias6")
+    if bias6 is not None:
+        rsi_text += f" | BIAS6={float(bias6):.1f}%"
+    rsi_text += "(不投票)"
     content += "<b>六问</b><br/>"
     content += (
         f"&nbsp;&nbsp;①方向:{_esc(ma_text + '/'.join(trend.get('details') or []) or '无信号')}"
@@ -322,6 +367,9 @@ def _render_compact_observation_signal(data):
     volume_text += f" | 换手{float(turnover):.2f}%" if turnover else " | 换手:N/A"
     if volume.get("details"):
         volume_text += " | " + "/".join(volume["details"])
+    order_text = _order_flow_text(tech)
+    if order_text:
+        volume_text += f" | {order_text}"
     content += f"&nbsp;&nbsp;③量能:{_esc(volume_text)}<br/>"
     content += f"&nbsp;&nbsp;④资金:{_esc(_institutional(data) or '无数据')}<br/>"
     buy_text = _esc(buy_note.replace("买入: ", "", 1) or "无买入拦截明细")
@@ -454,9 +502,18 @@ def _tech(data):
             ema_label = "-"
         parts.append(f"EMA:{ema_label}")
         rsi_val = data.get("rsi") or ts.get("rsi")
+        rsi6_val = data.get("rsi6") or ts.get("rsi6")
+        bias6_val = data.get("bias6")
+        if bias6_val is None:
+            bias6_val = ts.get("bias6")
         if rsi_val:
             zone = ts.get("rsi_signal", "")
-            parts.append(f"RSI:{rsi_val:.1f}({zone})" if zone else f"RSI:{rsi_val:.1f}")
+            rsi_text = f"RSI14:{rsi_val:.1f}"
+            if rsi6_val:
+                rsi_text += f"/RSI6:{rsi6_val:.1f}"
+            if bias6_val is not None:
+                rsi_text += f"/BIAS6:{float(bias6_val):.1f}%"
+            parts.append(f"{rsi_text}({zone})" if zone else rsi_text)
         adx = ts.get("adx")
         if adx: parts.append(f"ADX:{adx:.1f}({'趋势强' if adx>25 else '趋势弱' if adx<20 else '中性'})")
         bp = ts.get("bollinger",{}).get("position","")
@@ -474,6 +531,9 @@ def _tech(data):
     turnover = data.get("turnover_rate")
     if turnover:
         parts.append(f"换手:{float(turnover):.2f}%")
+    order_text = _order_flow_text(ts)
+    if order_text:
+        parts.append(order_text)
     ex = []
     if data.get("shrinking_pullback"): ex.append("缩量回踩")
     if data.get("pair_bottom"): ex.append("对手盘底")

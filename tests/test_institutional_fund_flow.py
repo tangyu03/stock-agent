@@ -1,5 +1,6 @@
 import time
 
+import importlib
 import akshare
 import pandas as pd
 
@@ -159,6 +160,35 @@ def test_batch_snapshot_backs_off_instead_of_fixed_cooldown(monkeypatch):
     assert len(calls) == 2
     assert inst._main_force_fallback_failures == 1
     assert inst._main_force_fallback_block_until > time.monotonic()
+
+
+def test_bse_missing_data_neutralizes_bullish_votes(monkeypatch):
+    # test_timing_engine replaces this module function at import time; reload
+    # restores the real scorer so the downweight rule is tested directly.
+    importlib.reload(inst)
+    monkeypatch.setattr(
+        inst, "_fetch_margin_balance",
+        lambda code: {"vote": 1, "detail": "bullish", "raw": {}},
+    )
+    monkeypatch.setattr(
+        inst, "_fetch_lhb_institutional",
+        lambda code: {"vote": 1, "detail": "bullish", "raw": {}},
+    )
+    monkeypatch.setattr(
+        inst, "_fetch_shareholder_count",
+        lambda code: {"vote": 1, "detail": "bullish", "raw": {}},
+    )
+    monkeypatch.setattr(
+        inst, "_fetch_top10_institutional_ratio", lambda code: None
+    )
+
+    result = inst.score_institutional_holding("920045", turnover_available=False)
+
+    assert result["vote_score"] == 0
+    assert result["vote_label"] == "机构数据不足(降权)"
+    assert result["data_sufficient"] is False
+    assert result["downweighted"] is True
+    assert result["votes"]["main_force"]["raw"]["uncovered_market"] is True
 
 
 def test_backoff_allows_one_probe_after_expiry(monkeypatch):

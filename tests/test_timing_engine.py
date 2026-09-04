@@ -13,7 +13,7 @@ os.environ["TQDM_DISABLE"] = "1"
 
 # 跳过 akshare 依赖
 import src.analyzers.institutional_scorer as _inst
-_inst.score_institutional_holding = lambda c: {
+_inst.score_institutional_holding = lambda c, *args, **kwargs: {
     "vote_score": 0, "vote_label": "skip", "votes": {},
     "bullish_count": 0, "bearish_count": 0, "neutral_count": 4, "stale": False
 }
@@ -60,6 +60,22 @@ class TestSafeFloat:
 class TestStopLossCalc:
     """止损价计算单元测试"""
 
+    def test_dirty_volume_blocks_entry_and_records_reason(self):
+        te = get_backtest_timing_engine()
+        kline = [{"volume": 100, "close": 10.0} for _ in range(61)]
+        tech_data = {
+            "kline": kline,
+            "today_volume": 2000,
+            "volume_ratio": 0.8,
+        }
+        te._fetch_tech_data = lambda code, mode: tech_data
+
+        signals = te.check_entry_signals("688008", "测试", "defend")
+
+        assert signals == []
+        assert te._tech_data_full["688008"]["volume_data_valid"] is False
+        assert "量能口径冲突" in te._tech_data_full["688008"]["entry_blocked_reason"]
+
     def test_stop_loss_with_below_support(self):
         """有下方支撑时，止损价=支撑×0.97"""
         te = get_backtest_timing_engine()
@@ -94,6 +110,23 @@ class TestStopLossCalc:
 
 class TestRealtimeKlineSync:
     """盘中现价必须与投票使用的最后一根K线对齐。"""
+
+    def test_star_quote_volume_is_normalized_from_history_unit(self):
+        te = get_backtest_timing_engine()
+        kline = [
+            {"date": "2026-09-01", "close": 100.0, "volume": 1000,
+             "amount": 10000000.0},
+            {"date": "2026-09-02", "close": 100.5, "volume": 1000,
+             "amount": 10050000.0},
+        ]
+        quote = {"current_price": 101.0, "today_open": 100.6,
+                 "volume": 200000.0, "amount": 20100000.0}
+
+        te._sync_last_kline_with_realtime(kline, quote)
+
+        assert kline[-1]["volume"] == 200000.0
+        assert kline[-1]["成交量"] == 200000.0
+        assert kline[0]["volume"] == 100000.0
 
     def test_same_day_quote_updates_last_bar(self):
         te = get_backtest_timing_engine()

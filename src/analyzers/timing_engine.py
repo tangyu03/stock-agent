@@ -26,6 +26,7 @@ from ..config_models import load_config
 from ..analyzers.market_env import get_market_environment  # 修复 BUG-T1: D1 充分条件依赖此函数，原代码未导入导致恐慌抄底永不触发
 from ..data_layer.akshare_adapter import get_akshare_adapter
 from ..data_layer.skill_wrapper import get_skill_wrapper
+from ..data_layer.stock_data import _volume_share_factor
 from ..analyzers.stock_filter import get_stock_filter, FilterResult
 
 logger = logging.getLogger(__name__)
@@ -572,6 +573,14 @@ class TimingEngine:
 
         # 获取技术数据 + 止损价
         tech_data = self._fetch_tech_data(stock_code, market_mode)
+        from .signal_plan import build_volume_snapshot
+        volume_snapshot = build_volume_snapshot(tech_data)
+        if volume_snapshot.dirty:
+            tech_data["volume_data_valid"] = False
+            tech_data["volume_snapshot"] = volume_snapshot.as_dict()
+            tech_data["entry_blocked_reason"] = volume_snapshot.dirty_reason
+            self._tech_data_full[stock_code] = tech_data
+            return []
         if market_score is not None:
             tech_data["market_score"] = float(market_score)
         # 入场检查先落缓存，保证未触发买入时诊断用的是同一份完整数据
@@ -1770,7 +1779,34 @@ class TimingEngine:
         open_price = float(quote.get("today_open", 0) or 0)
         high_price = float(quote.get("today_high", 0) or 0)
         low_price = float(quote.get("today_low", 0) or 0)
-        volume = float(quote.get("volume", 0) or 0)
+        quote_volume = float(quote.get("volume", 0) or 0)
+        quote_amount = float(quote.get("amount", 0) or 0)
+        quote_reference_price = float(quote.get("prev_close", 0) or current)
+        quote_volume = quote_volume * _volume_share_factor(
+            quote_volume, quote_amount, quote_reference_price
+        )
+
+        # Historical sources may report lots while realtime volume is shares.
+        # Convert every historical bar to shares before adding the intraday bar.
+        reference = kline[-2] if len(kline) >= 2 else kline[-1]
+        history_factor = 1
+        for item in reversed(kline[:-1]):
+            reference_volume = float(item.get("volume", item.get("成交量", 0)) or 0)
+            reference_amount = float(item.get("amount", item.get("成交额", 0)) or 0)
+            reference_close = float(item.get("close", item.get("收盘", 0)) or 0)
+            history_factor = _volume_share_factor(
+                reference_volume, reference_amount, reference_close
+            )
+            if reference_volume > 0 and reference_amount > 0:
+                break
+        if history_factor == 100:
+            for item in kline:
+                historical_volume = float(item.get("volume", item.get("成交量", 0)) or 0)
+                item["volume"] = historical_volume * 100
+                item["成交量"] = historical_volume * 100
+
+        volume = quote_volume
+        reference_close = float(reference.get("close", reference.get("收盘", 0)) or 0)
 
         if last_date == quote_date:
             updates = {"close": current, "收盘": current}
@@ -1820,6 +1856,11 @@ class TimingEngine:
             # 不用 K 线均量近似值；无接口数据（回测/停牌/接口缺失）时才用 K 线兜底
             if realtime.get("volume_ratio"):
                 data["volume_ratio"] = realtime["volume_ratio"]
+            quote = realtime.get("quote") or {}
+            if quote.get("outer_volume") is not None:
+                data["outer_volume"] = quote["outer_volume"]
+            if quote.get("inner_volume") is not None:
+                data["inner_volume"] = quote["inner_volume"]
 
         # 获取 K 线
         kline = None
@@ -1986,6 +2027,7 @@ class TimingEngine:
                     kline_data,
                     market_mode,
                     volume_ratio=data.get("volume_ratio"),
+                    realtime_quote=data,
                 )
                 if tech:
                     data["tech_signals"] = tech
@@ -2012,7 +2054,10 @@ class TimingEngine:
         # 机构持仓打分（4 数据源投票，API 失败默认中性，session 缓存 1 小时）
         try:
             from .institutional_scorer import score_institutional_holding
-            inst_score = score_institutional_holding(stock_code)
+            inst_score = score_institutional_holding(
+                stock_code,
+                turnover_available=bool(data.get("turnover_rate")),
+            )
             data["institutional_holding"] = inst_score
         except Exception as e:
             logger.debug("机构持仓打分失败 %s: %s", stock_code, e)

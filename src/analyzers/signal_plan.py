@@ -24,6 +24,8 @@ class VolumeSnapshot:
     turnover_hot: bool = False
     volume_hot: bool = False
     shrinking: bool = False
+    dirty: bool = False
+    dirty_reason: str = ""
     label: str = "数据不足"
     data_ok: bool = False
 
@@ -127,6 +129,16 @@ def build_volume_snapshot(tech_data: Dict[str, Any], min_samples: int = 60) -> V
         if today_volume and volume_ma60 and volume_ma60 > 0
         else None
     )
+    dirty = bool(
+        volume_ratio is not None
+        and volume_ratio < 1.0
+        and volume_vs_ma60 is not None
+        and volume_vs_ma60 > 10.0
+    )
+    dirty_reason = (
+        f"量能口径冲突(量比{volume_ratio:.2f}<1, 60日均量倍数{volume_vs_ma60:.2f}>10)"
+        if dirty else ""
+    )
 
     # Historical ratios exclude the current bar so intraday volume cannot move its own threshold.
     volume_ratios: List[float] = []
@@ -149,6 +161,8 @@ def build_volume_snapshot(tech_data: Dict[str, Any], min_samples: int = 60) -> V
     snapshot = VolumeSnapshot(
         volume_ratio=volume_ratio,
         volume_vs_ma60=volume_vs_ma60,
+        dirty=dirty,
+        dirty_reason=dirty_reason,
         turnover_rate=today_turnover,
         turnover_p25=_percentile(turnover_history, 0.25),
         turnover_p50=_percentile(turnover_history, 0.50),
@@ -195,6 +209,8 @@ def build_volume_snapshot(tech_data: Dict[str, Any], min_samples: int = 60) -> V
         snapshot.label = "缩量"
     elif snapshot.data_ok:
         snapshot.label = "正常"
+    if dirty:
+        snapshot.label = "量能脏数据"
     return snapshot
 
 
@@ -485,24 +501,24 @@ def _signal_conflicts(tech_data: Dict[str, Any], direction: int = 1) -> List[Dic
     elif direction < 0 and pattern_vote > 0:
         conflicts.append({"label": "K线偏多", "severity": 1})
 
-    rsi = _number(tech_data.get("rsi") or tech.get("rsi"))
-    if rsi is not None:
-        if direction > 0 and rsi >= 65:
+    rsi6 = _number(tech_data.get("rsi6") or tech.get("rsi6"))
+    if rsi6 is not None:
+        if direction > 0 and rsi6 >= 70:
             conflicts.append({"label": "RSI过热", "severity": 1})
-        elif direction < 0 and rsi <= 35:
+        elif direction < 0 and rsi6 <= 30:
             conflicts.append({"label": "RSI超卖", "severity": 1})
 
     divergence = tech.get("chan_divergence") or {}
     divergence_type = divergence.get("type")
     if divergence_type == "顶背驰" and direction > 0:
         conflicts.append({
-            "label": "MACD顶背驰"
+            "label": "价格顶背驰"
                      + (f"({divergence.get('confidence')})" if divergence.get("confidence") else ""),
             "severity": 2 if divergence.get("confidence") == "高" else 1,
         })
     elif divergence_type == "底背驰" and direction < 0:
         conflicts.append({
-            "label": "MACD底背驰"
+            "label": "价格底背驰"
                      + (f"({divergence.get('confidence')})" if divergence.get("confidence") else ""),
             "severity": 2 if divergence.get("confidence") == "高" else 1,
         })

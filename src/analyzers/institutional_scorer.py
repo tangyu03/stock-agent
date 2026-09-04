@@ -749,6 +749,11 @@ def _fetch_lhb_institutional(code: str) -> Dict[str, Any]:
 # 数据源已切换至问财 OpenAPI，不再使用东财 push2his HTTP 爬虫
 # ---------------------------------------------------------------------------
 
+def _is_bj_stock(code: str) -> bool:
+    clean = str(code).zfill(6)
+    return clean[:2] in ("92", "83", "87", "89")
+
+
 def _fetch_main_force_flow(code: str) -> Dict[str, Any]:
     """
     查询个股主力资金流，按最近 5 日累计方向投票。
@@ -761,6 +766,12 @@ def _fetch_main_force_flow(code: str) -> Dict[str, Any]:
         vote: 1=最近 5 日累计净流入看多, -1=累计净流出看空, 0=无趋势
     """
     clean_code = str(code).zfill(6)
+    if _is_bj_stock(clean_code):
+        return {
+            "vote": 0,
+            "detail": "主力资金:N/A(北交所数据源未覆盖)",
+            "raw": {"market": "BJ", "uncovered_market": True},
+        }
     if _api_disabled["main_force"]:
         return {"vote": 0, "detail": "主力资金接口已短路（连续多只失败）", "raw": {}}
     if _main_force_failures.get(clean_code, 0) >= _MAIN_FORCE_FAILURE_THRESHOLD:
@@ -1051,7 +1062,10 @@ def _fetch_top10_institutional_ratio(code: str) -> Optional[Dict[str, Any]]:
 # 主入口：综合打分
 # ---------------------------------------------------------------------------
 
-def score_institutional_holding(code: str) -> Dict[str, Any]:
+def score_institutional_holding(
+    code: str,
+    turnover_available: Optional[bool] = None,
+) -> Dict[str, Any]:
     """
     机构持仓综合打分（简单投票制）。
 
@@ -1080,7 +1094,8 @@ def score_institutional_holding(code: str) -> Dict[str, Any]:
     """
     # session 缓存检查
     now = time.time()
-    cached = _institutional_session_cache.get(code)
+    cache_key = f"{str(code).zfill(6)}:{turnover_available}"
+    cached = _institutional_session_cache.get(cache_key)
     if cached and (now - cached["ts"] < _INSTITUTIONAL_CACHE_TTL):
         cached_result = dict(cached["result"])
         cached_result["stale"] = True
@@ -1101,6 +1116,19 @@ def score_institutional_holding(code: str) -> Dict[str, Any]:
     bearish_count = sum(1 for v in vote_scores if v < 0)
     neutral_count = sum(1 for v in vote_scores if v == 0)
 
+    main_force_missing = bool(
+        _is_bj_stock(code)
+        and votes["main_force"].get("raw", {}).get("uncovered_market")
+    )
+    data_sufficient = not (main_force_missing or turnover_available is False)
+    if not data_sufficient:
+        vote_scores = [0 for _ in vote_scores]
+        total_score = 0
+        bullish_count = 0
+        bearish_count = 0
+        neutral_count = len(votes)
+        vote_label = "机构数据不足(降权)"
+
     # 标签
     if total_score >= 2:
         vote_label = "机构看多"
@@ -1112,6 +1140,8 @@ def score_institutional_holding(code: str) -> Dict[str, Any]:
         vote_label = "机构偏空"
     else:
         vote_label = "机构中性"
+    if not data_sufficient:
+        vote_label = "机构数据不足(降权)"
 
     result = {
         "vote_score": total_score,
@@ -1121,11 +1151,14 @@ def score_institutional_holding(code: str) -> Dict[str, Any]:
         "bearish_count": bearish_count,
         "neutral_count": neutral_count,
         "top10_institutional_ratio": top10_ratio,
+        "data_sufficient": data_sufficient,
+        "downweighted": not data_sufficient,
+        "data_reason": "" if data_sufficient else "主力资金缺失/换手率缺失",
         "stale": False,
     }
 
     # 写入 session 缓存
-    _institutional_session_cache[code] = {"result": result, "ts": now}
+    _institutional_session_cache[cache_key] = {"result": result, "ts": now}
 
     logger.info(
         "机构持仓打分 %s: 总分=%d (%s), 看多=%d/看空=%d/中性=%d",
