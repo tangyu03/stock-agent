@@ -141,22 +141,69 @@ def _execution_plan(data) -> str:
     return "<br/>&nbsp;&nbsp;".join(parts)
 
 
+# 【Phase3】估值透镜标签（高增长≠便宜：同增速背后质量天差地别）
+_LENS_TAG_LABELS = {
+    "valuation_bubble": "估值泡沫",
+    "valuation_elevated": "估值偏高",
+    "value_growth": "低估真增长",
+    "low_base_reversal": "低基数反转",
+    "strategic_loss": "战略性亏损(订单加速)",
+    "model_loss": "商业模式亏损",
+    "analyst_flow_conflict": "资金-研报冲突",
+}
+
+
+def _lens_text(lens) -> str:
+    """估值透镜摘要：PE/PB + 分档标签（净利双口径在基本面行主段拼接）。"""
+    if not lens or not isinstance(lens, dict):
+        return ""
+    parts = []
+    val = lens.get("valuation") or {}
+    pe = _num_or_none(val.get("pe_ttm"))
+    pb = _num_or_none(val.get("pb"))
+    if pe is not None:
+        seg = f"PE(TTM){pe:.1f}倍"
+        if pb is not None:
+            seg += f"/PB{pb:.1f}"
+        source = str(val.get("pe_source") or "")
+        if source and source != "TTM":
+            seg += f"[{source}]"
+        parts.append(seg)
+    verdict = lens.get("verdict") or {}
+    tags = verdict.get("tags") or []
+    hits = [_LENS_TAG_LABELS.get(t, t) for t in tags if t in _LENS_TAG_LABELS]
+    if hits:
+        parts.append("⚠" + "/".join(hits))
+    return " | ".join(parts)
+
+
 def _fundamental_line(data) -> str:
     """
     【二】基本面行（七问第⑦问）：业绩快报/预告 + 盈利质量 + 财报窗口。
-    报告期级数据强制带口径（报告期），防止把过去报告期的变化当当下变化。
+    【Phase3】估值透镜合并展示：净利双口径（增速+绝对值——长光华芯
+    +238%但仅 0.30 亿的低基数反转必须现形）+ PE/PB + 估值分档 +
+    亏损分型。报告期级数据强制带口径（报告期），防止把过去报告期的
+    变化当当下变化。
     """
     fund = data.get("fundamental")
+    lens = data.get("valuation_lens") if isinstance(data.get("valuation_lens"), dict) else None
     if not fund or not isinstance(fund, dict):
         # 允许信号侧直接携带 fundamental_note（拒绝/降级摘要）
         note = str(data.get("fundamental_note") or "").strip()
-        return note or ""
+        lens_text = _lens_text(lens)
+        return " | ".join(x for x in (note, lens_text) if x)
     parts = []
     profit = _num_or_none(fund.get("profit_yoy"))
     deducted = _num_or_none(fund.get("deducted_yoy"))
+    # 【Phase3】净利双口径：增速 + 绝对值（亿元）
+    profit_abs = _num_or_none(fund.get("profit_abs"))
+    if profit_abs is None and lens:
+        profit_abs = _num_or_none((lens.get("verdict") or {}).get("profit_abs"))
     forecast = str(fund.get("forecast_type") or "")
     if profit is not None:
         seg = f"净利{profit:+.1f}%"
+        if profit_abs is not None:
+            seg += f"({profit_abs:.2f}亿)"
         if deducted is not None:
             seg += f"/扣非{deducted:+.1f}%"
         parts.append(seg)
@@ -184,6 +231,10 @@ def _fundamental_line(data) -> str:
     period = str(fund.get("report_period") or "")
     if period:
         parts.append(f"报告期{period[:4]}-{period[4:6] if len(period) >= 6 else ''}")
+    # 【Phase3】估值透镜段：PE/PB + 估值分档/低基数反转/亏损分型/冲突标签
+    lens_text = _lens_text(lens)
+    if lens_text:
+        parts.append(lens_text)
     reason_note = str(verdict.get("note") or "")
     if reason_note and not parts:
         parts.append(reason_note)
@@ -200,12 +251,17 @@ def _num_or_none(value):
 
 def _institutional(data) -> str:
     """
-    渲染机构持仓打分（4 数据源投票 + 具体数值）。
+    渲染资金流投票（4 数据源投票 + 具体数值）。
+
+    【Phase3】语义修正：原"机构资金"标签易误导——4 票源全是短周期
+    资金流/筹码数据（主力/股东/两融/龙虎榜），不测度研报共识。
+    兆易创新（PE 33.9 倍+研报一致买入）曾被标"机构看空(-2票)"。
+    现改为双标签：资金投票 + 研报共识（冲突时显式标记，禁止单标签定性）。
 
     数据来自 tech_data['institutional_holding']，包含：
-    - vote_score: 总票数 (-4 到 +4)
-    - vote_label: 机构看多/看空/中性
+    - vote_score / vote_label: 资金看多/看空/中性
     - votes: 各数据源详情 (north_bound/lhb/main_force/shareholder)
+    - analyst_consensus: 研报共识（valuation_lens 旁路注入，不参与资金票计分）
     """
     inst = data.get("institutional_holding")
     if not inst or not isinstance(inst, dict):
@@ -213,13 +269,15 @@ def _institutional(data) -> str:
 
     parts = []
     score = inst.get("vote_score", 0)
-    label = inst.get("vote_label", "机构中性")
+    label = inst.get("vote_label", "资金中性")
     bull = inst.get("bullish_count", 0)
     bear = inst.get("bearish_count", 0)
 
-    # 总分 + 标签
+    # 总分 + 标签（【Phase3】口径标注：资金流投票，非研报共识）
     emoji = "🟢" if score >= 2 else ("🔴" if score <= -2 else "⚪")
-    parts.append(f"{emoji}{label}({score:+d}票,多{bull}/空{bear})")
+    scope = str(inst.get("label_scope") or "")
+    parts.append(f"{emoji}{label}({score:+d}票,多{bull}/空{bear})"
+                 + (f"[{scope}]" if scope else ""))
 
     # 各数据源具体数值
     votes = inst.get("votes", {})
@@ -276,6 +334,19 @@ def _institutional(data) -> str:
             change = top10.get("change_points")
             change_text = f"，变化{change:+.2f}pct" if change is not None else ""
             parts.append(f"前十大机构{latest_ratio:.2f}%{change_text}")
+
+    # 【Phase3】研报共识旁路（资金是节奏、研报是方向，不混票）
+    analyst = inst.get("analyst_consensus")
+    if isinstance(analyst, dict) and analyst.get("total"):
+        seg = (
+            f"研报共识{analyst.get('consensus_label', '无数据')}"
+            f"(买入{analyst.get('buy', 0)}/增持{analyst.get('outperform', 0)}"
+            f"/中性{analyst.get('neutral', 0)}/减持{analyst.get('reduce', 0)}，"
+            f"近90天{analyst.get('total', 0)}份)"
+        )
+        parts.append(seg)
+        if inst.get("flow_analyst_conflict"):
+            parts.append("⚠资金与研报反向(双标签呈现，禁止单标签定性)")
 
     return " | ".join(parts)
 
@@ -726,7 +797,7 @@ def render_entry_signal(data):
     # 机构持仓打分（4 数据源投票 + 具体数值）
     inst_display = _institutional(data)
     if inst_display:
-        content += f"<b>机构资金</b><br/>&nbsp;&nbsp;{inst_display}<br/><br/>"
+        content += f"<b>资金投票</b><br/>&nbsp;&nbsp;{inst_display}<br/><br/>"
     content += f"<b>K线形态</b><br/>&nbsp;&nbsp;{_kline(data)}<br/><br/>"
     fc = data.get("filter_checks",{})
     if fc:
@@ -823,7 +894,7 @@ def render_exit_signal(data):
             content += f"<b>技术面</b><br/>&nbsp;&nbsp;{tech_display}<br/><br/>"
         inst_display = _institutional(data)
         if inst_display:
-            content += f"<b>机构资金</b><br/>&nbsp;&nbsp;{inst_display}<br/><br/>"
+            content += f"<b>资金投票</b><br/>&nbsp;&nbsp;{inst_display}<br/><br/>"
         content += f"<b>说明</b><br/>&nbsp;&nbsp;{_esc(note)}<br/>"
         return title, content
 
@@ -832,7 +903,7 @@ def render_exit_signal(data):
     # 机构持仓打分（4 数据源投票 + 具体数值）
     inst_display = _institutional(data)
     if inst_display:
-        content += f"<b>机构资金</b><br/>&nbsp;&nbsp;{inst_display}<br/><br/>"
+        content += f"<b>资金投票</b><br/>&nbsp;&nbsp;{inst_display}<br/><br/>"
     bear = [p for p in data.get("kline_pattern",[]) if "看跌" in p.get("signal","") or "压力" in p.get("signal","")]
     if bear:
         content += "<b>看跌形态</b><br/>&nbsp;&nbsp;"

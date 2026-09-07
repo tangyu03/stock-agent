@@ -65,6 +65,8 @@ class EntrySignal:
     audience: str = "empty"
     # 【二】基本面摘要（业绩雷/盈利质量/财报窗口，来自 fundamental_gate）
     fundamental_note: str = ""
+    # 【Phase3】估值透镜摘要（估值泡沫/低基数反转/亏损分型/资金-分析师冲突）
+    valuation_note: str = ""
 
 
 @dataclass
@@ -722,8 +724,22 @@ class TimingEngine:
                     "tags": verdict.get("tags", []),
                     "report_period": plan.fundamental.get("report_period", ""),
                 }
-            if plan.hypothesis_rejected or plan.fundamental_rejected:
-                # 【一】/【二】出厂拒绝：假说不完整或业绩雷 → 不进调度不推送，
+            # 【Phase3】估值透镜摘要透传 + 假说留痕（估值维度进入记录闭环）
+            if plan.valuation and isinstance(plan.valuation, dict):
+                lens_verdict = plan.valuation.get("verdict") or {}
+                lens_note = str(lens_verdict.get("note") or "")
+                lens_reasons = "/".join(str(r) for r in (lens_verdict.get("reasons") or []))
+                sig.valuation_note = " | ".join(x for x in (lens_note, lens_reasons) if x)
+                sig.hypothesis["valuation"] = {
+                    "note": lens_note,
+                    "verdict": lens_verdict.get("verdict", ""),
+                    "tags": lens_verdict.get("tags", []),
+                    "pe_ttm": (plan.valuation.get("valuation") or {}).get("pe_ttm"),
+                    "profit_abs": lens_verdict.get("profit_abs"),
+                }
+            if plan.hypothesis_rejected or plan.fundamental_rejected or plan.valuation_rejected:
+                # 【一】/【二】/【Phase3】出厂拒绝：假说不完整、业绩雷或
+                # 估值泡沫/模式性亏损追高 → 不进调度不推送，
                 # 留痕供审计（signal_rejections 表）
                 self._entry_rejections[stock_code] = {
                     "stock_code": stock_code,
@@ -736,6 +752,8 @@ class TimingEngine:
                     "hypothesis": plan.hypothesis,
                     "fundamental": plan.fundamental,
                     "fundamental_rejected": plan.fundamental_rejected,
+                    "valuation": plan.valuation,
+                    "valuation_rejected": plan.valuation_rejected,
                 }
                 logger.warning(
                     "信号出厂被拒 %s %s: %s",
@@ -1695,20 +1713,17 @@ class TimingEngine:
     # ============================================================
 
     def _get_paired_position(self, stock_code: str) -> Optional[Dict]:
-        """读取可用于配对出场的持仓或买入信号。
+        """读取该持仓的入场假说（来源：回执闭环 trade_logs executed 买入行）。
 
         返回 dict: entry_type / paired_z / paired_w_low / paired_w_high /
         z_reference / entry_price / hypothesis_sentence 等；无持仓返回 None。
         回测模式不读 DB，直接返回 None（回测引擎自管出场）。
-
-        实盘/复盘使用 `get_paired_position`：已回执持仓优先，
-        未回执的买入信号只要有配对假说也跟踪出场；真实持仓聚合仍只认 executed。
         """
         if self._backtest_mode:
             return None
         try:
             from ..feedback.trade_logger import get_trade_logger
-            position = get_trade_logger().get_paired_position(stock_code)
+            position = get_trade_logger().get_open_position(stock_code)
             return position if position else None
         except Exception as e:
             logger.debug("配对持仓读取失败 %s: %s", stock_code, e)
@@ -1990,7 +2005,7 @@ class TimingEngine:
         inst = tech_data.get("institutional_holding")
         if isinstance(inst, dict):
             inst_score = inst.get("vote_score", 0)
-            inst_label = inst.get("vote_label", "机构中性")
+            inst_label = inst.get("vote_label", "资金中性")
             inst_bull = inst.get("bullish_count", 0)
             inst_bear = inst.get("bearish_count", 0)
             stale_mark = "📅" if inst.get("stale") else ""
@@ -2005,19 +2020,31 @@ class TimingEngine:
                     vote_parts.append(f"{src_name}↓")
             vote_summary = "/".join(vote_parts) if vote_parts else "全中性"
             lines.append(
-                f"②.5机构: {inst_label}({inst_score:+d}票,看多{inst_bull}/看空{inst_bear}) "
+                f"②.5资金: {inst_label}({inst_score:+d}票,看多{inst_bull}/看空{inst_bear}) "
                 f"[{vote_summary}]{stale_mark}"
             )
 
-            # 机构与技术面共振/矛盾判断
+            # 【Phase3】分析师共识旁路展示（不混票：资金是节奏、研报是方向）
+            analyst = inst.get("analyst_consensus")
+            if isinstance(analyst, dict) and analyst.get("total"):
+                lines.append(
+                    f"②.6研报: 共识{analyst.get('consensus_label', '无数据')}"
+                    f"(买入{analyst.get('buy', 0)}/增持{analyst.get('outperform', 0)}"
+                    f"/中性{analyst.get('neutral', 0)}/减持{analyst.get('reduce', 0)}，"
+                    f"近90天{analyst.get('total', 0)}份)"
+                )
+                if inst.get("flow_analyst_conflict"):
+                    lines.append("   ↳ ⚠️资金与研报共识反向(双标签呈现，禁止单标签定性)")
+
+            # 资金与技术面共振/矛盾判断
             if inst_score >= 2 and vote_dir > 0:
-                lines.append("   ↳ 机构与技术共振看多✅")
+                lines.append("   ↳ 资金与技术共振看多✅")
             elif inst_score <= -2 and vote_dir < 0:
-                lines.append("   ↳ 机构与技术共振看空⚠️")
+                lines.append("   ↳ 资金与技术共振看空⚠️")
             elif inst_score >= 2 and vote_dir < 0:
-                lines.append("   ↳ ⚠️机构看多但技术看空(分歧)")
+                lines.append("   ↳ ⚠️资金看多但技术看空(分歧)")
             elif inst_score <= -2 and vote_dir > 0:
-                lines.append("   ↳ ⚠️机构看空但技术看多(分歧)")
+                lines.append("   ↳ ⚠️资金看空但技术看多(分歧)")
 
         # ③ 信号触发
         if triggered_types:
@@ -2364,7 +2391,7 @@ class TimingEngine:
         except Exception as e:
             logger.debug("机构持仓打分失败 %s: %s", stock_code, e)
             data["institutional_holding"] = {
-                "vote_score": 0, "vote_label": "机构中性",
+                "vote_score": 0, "vote_label": "资金中性",
                 "votes": {}, "bullish_count": 0, "bearish_count": 0,
                 "neutral_count": 4, "stale": False,
             }
@@ -2379,6 +2406,31 @@ class TimingEngine:
                 data["fundamental"] = fund_snapshot
         except Exception as e:
             logger.debug("基本面快照获取失败 %s: %s", stock_code, e)
+
+        # 【Phase3】估值透镜：PE/PB/净利绝对值/合同负债/存货/研报共识。
+        # 观察卡与信号出厂共用；此处做中性口径评估（供展示），
+        # signal_plan.build_execution_plan 按 entry_type 重新评估——
+        # 追高型策略（确认追强/价量突破）对 model_loss/估值泡沫更严格。
+        # 数据源全部失败时保持缺省（透镜放行，不产生假估值结论）。
+        try:
+            from .valuation_lens import assemble_valuation_lens, attach_analyst_to_institutional
+            flow_vote = None
+            if isinstance(data.get("institutional_holding"), dict):
+                flow_vote = data["institutional_holding"].get("vote_score")
+            lens = assemble_valuation_lens(
+                stock_code,
+                data.get("stock_name", "") or "",
+                fundamental=data.get("fundamental"),
+                flow_vote=flow_vote,
+                config=self._tc,
+            )
+            if lens:
+                data["valuation_lens"] = lens
+                # 分析师共识旁路注入机构投票结果（渲染层双标签呈现，不混票）
+                if isinstance(data.get("institutional_holding"), dict):
+                    attach_analyst_to_institutional(data["institutional_holding"], lens)
+        except Exception as e:
+            logger.debug("估值透镜获取失败 %s: %s", stock_code, e)
 
         return data
 

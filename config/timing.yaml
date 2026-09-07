@@ -77,6 +77,25 @@ timing:
     report_window_days: 7                # 距法定披露日 ≤ N 天 → 财报窗口降级
     warn_risk_multiplier: 0.6            # warn 级风险乘数（与 turnover_hot 同一体系）
     cache_ttl_seconds: 3600              # 基本面快照 session 缓存 TTL
+  # 【Phase3】估值透镜：高增长≠便宜（报告只列净利同比导致方向性误判）
+  valuation_lens:
+    enabled: true
+    bubble_pe_threshold: 300.0           # PE(TTM) ≥ 该值 → 泡沫；叠加低基数(净利<2亿)→ veto
+    elevated_pe_threshold: 60.0          # PE ≥ 该值 → 估值偏高（科技股常态，仅标注）
+    value_pe_threshold: 60.0             # PE < 该值 + 真增长(≥50%且≥5亿) → 低估真增长
+    real_growth_yoy: 50.0                # 低估真增长要求的最低净利同比（%）
+    real_profit_threshold: 5.0           # 低估真增长要求的净利体量（亿元）
+    low_base_yoy: 100.0                  # 同比 ≥ 100% 且净利 < 2亿 → 低基数反转
+    low_base_profit_threshold: 2.0       # 低基数判定的净利体量（亿元）
+    strategic_contract_liab_pct: 30.0    # 亏损时合同负债较年初 ≥ 该值(%) → 战略性亏损
+    strategic_inventory_pct: 20.0        # 亏损时存货较年初 ≥ 该值(%) → 战略性亏损
+    model_loss_risk_multiplier: 0.5      # 模式性亏损（低吸型）风险乘数
+    bubble_warn_risk_multiplier: 0.5     # 泡沫(warn级)风险乘数
+    warn_risk_multiplier: 0.6            # 其余 warn 级风险乘数
+    consensus_buy_ratio: 60.0            # 研报买入+增持占比 ≥ 该值(%) → 共识看多
+    consensus_min_votes: 3               # 或买入+增持 ≥ N 家 → 共识看多
+    conflict_flow_score: -1              # 资金票 ≤ 该值 且研报看多 → 冲突标记
+    cache_ttl_seconds: 3600              # 估值/研报/资产负债表 session 缓存 TTL
 
   # ──────────────── 【三】信号事件生命周期 (signal_lifecycle.py) ────────────────
   # 诞生（突破当日+收阳+量能）→ N 日内回踩买点有效 →

@@ -215,7 +215,7 @@ class TestVoteWeights:
         assert result["vote_weights"]["north_bound"] == 1.0
 
     def test_disclosed_sources_keep_full_weight(self, monkeypatch):
-        """两融+1、龙虎榜+1（交易所披露口径）→ 加权 2.0 → 机构看多。"""
+        """两融+1、龙虎榜+1（交易所披露口径）→ 加权 2.0 → 资金看多。"""
         monkeypatch.setattr(_inst, "_fetch_margin_balance",
                             lambda c: {"vote": 1, "detail": "两融增加", "raw": {}})
         monkeypatch.setattr(_inst, "_fetch_lhb_institutional",
@@ -227,7 +227,7 @@ class TestVoteWeights:
         monkeypatch.setattr(_inst, "_fetch_top10_institutional_ratio", lambda c: None)
         result = _REAL_SCORE("603061")
         assert result["vote_score"] == 2
-        assert result["vote_label"] == "机构看多"
+        assert result["vote_label"] == "资金看多"
 
     def test_weight_annotation_in_push_template(self):
         """推送④资金行：主力/股东明细带（权重0.5）标注，人工可复核。"""
@@ -235,7 +235,7 @@ class TestVoteWeights:
         data = {
             "institutional_holding": {
                 "vote_score": 0,
-                "vote_label": "机构中性",
+                "vote_label": "资金中性",
                 "bullish_count": 1, "bearish_count": 2,
                 "votes": {
                     "main_force": {"vote": -1, "detail": "主力净流出", "raw": {}},

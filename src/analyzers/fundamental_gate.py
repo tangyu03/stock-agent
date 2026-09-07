@@ -82,6 +82,9 @@ class FundamentalSnapshot:
     profit_yoy: Optional[float] = None    # 净利同比（%）
     deducted_yoy: Optional[float] = None  # 扣非净利同比（%）
     revenue_yoy: Optional[float] = None   # 营收同比（%）
+    # 【Phase3】净利绝对值（亿元）——低基数反转识别（长光华芯：+238%但仅3034万）。
+    # 单位归一化：业绩表通常以"元"计，绝对值 ≥ 1e4 视为元→换算亿元。
+    profit_abs: Optional[float] = None
     forecast_type: str = ""               # 预告类型：预增/预亏/首亏/...
     forecast_change_pct: Optional[float] = None  # 预告变动幅度（%）
     forecast_reason: str = ""             # 业绩变动原因
@@ -271,6 +274,12 @@ def fetch_fundamental_snapshot(code: str, name: str = "",
             snap.report_period = period
             snap.profit_yoy = profit
             snap.revenue_yoy = revenue
+            # 【Phase3】净利绝对值（同表零额外调用）
+            raw_profit_abs = _to_float(_table_get_column(row, [
+                "净利润", "净利润-净利润", "归属净利润", "归母净利润",
+            ]))
+            if raw_profit_abs is not None:
+                snap.profit_abs = round(raw_profit_abs / 1e8, 4) if abs(raw_profit_abs) >= 1e4 else raw_profit_abs
             snap.announce_date = str(announce or "")[:10]
             sources.append(func_name)
             break

@@ -13,7 +13,13 @@
 
 打分逻辑：简单投票制（Phase2-C 引入噪音降权）
   每个数据源看多 +1 票，看空 -1 票，无数据 0 票
-  累计 ≥2 票视为机构看多；≤-2 票视为机构看空
+  累计 ≥2 票视为资金看多；≤-2 票视为资金看空
+
+  【Phase3 标签语义修正】四个票源（主力/股东/两融/龙虎榜）全部是
+  短周期资金流/筹码数据，无一测度研报共识——却曾以"机构看多/看空"
+  命名，导致兆易创新（PE 33.9 倍+净利 68.57 亿+研报一致买入）被标
+  "机构看空(-2票)"的方向性误导。标签改"资金看X"诚实命名；研报共识
+  由 valuation_lens.analyst 独立维度呈现（不混票，冲突只标记不融合）。
 
 Phase2-C 数据源技术性缺陷整改（用户实测批评）：
   1. 两融：SSE/SZSE 官方接口失败时东财 datacenter 兜底；按日期记录
@@ -1208,7 +1214,9 @@ def score_institutional_holding(
     Returns:
         {
             "vote_score": int,          # 总票数（-4 到 +4）
-            "vote_label": str,          # "机构看多"/"机构看空"/"机构中性"
+            "vote_label": str,          # "资金看多"/"资金看空"/"资金中性"
+                                        # （【Phase3】语义修正：四票源全是资金流
+                                        #   数据，不测度研报共识，诚实命名）
             "votes": {                  # 各数据源投票详情
                 "north_bound": {"vote": 1, "detail": "..."},
                 "lhb": {"vote": -1, "detail": "..."},
@@ -1262,21 +1270,21 @@ def score_institutional_holding(
         bullish_count = 0
         bearish_count = 0
         neutral_count = len(votes)
-        vote_label = "机构数据不足(降权)"
+        vote_label = "资金数据不足(降权)"
 
-    # 标签
+    # 标签（【Phase3】资金流投票标签——非研报共识）
     if total_score >= 2:
-        vote_label = "机构看多"
+        vote_label = "资金看多"
     elif total_score <= -2:
-        vote_label = "机构看空"
+        vote_label = "资金看空"
     elif total_score > 0:
-        vote_label = "机构偏多"
+        vote_label = "资金偏多"
     elif total_score < 0:
-        vote_label = "机构偏空"
+        vote_label = "资金偏空"
     else:
-        vote_label = "机构中性"
+        vote_label = "资金中性"
     if not data_sufficient:
-        vote_label = "机构数据不足(降权)"
+        vote_label = "资金数据不足(降权)"
 
     result = {
         "vote_score": total_score,
@@ -1294,6 +1302,8 @@ def score_institutional_holding(
         "vote_weights": dict(_VOTE_WEIGHTS),
         "vote_score_weighted": round(weighted_total, 1),
         "weight_note": "主力/股东票降权0.5（拆单算法噪音/报告期滞后）",
+        # 【Phase3】标签口径声明（渲染层展示，防止把资金流当研报共识误读）
+        "label_scope": "资金流投票(4源,非研报共识)",
     }
 
     # 写入 session 缓存
@@ -1349,7 +1359,7 @@ def score_institutional_for_sector(stock_codes: List[str]) -> Dict[str, Any]:
     net_bullish = bullish - bearish
     score = bullish / len(stock_codes) if stock_codes else 0.0
 
-    detail = f"板块内机构看多 {bullish} 只, 看空 {bearish} 只, 净看多 {net_bullish} 只"
+    detail = f"板块内资金看多 {bullish} 只, 看空 {bearish} 只, 净看多 {net_bullish} 只"
 
     logger.info(
         "板块机构持仓打分: %d 只股票, 看多=%d, 看空=%d, 净看多=%d, 得分=%.2f",

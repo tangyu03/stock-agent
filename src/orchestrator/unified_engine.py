@@ -139,7 +139,30 @@ def _strategy_blockers(
         blockers.append("套利低吸: 未出现低吸形态")
 
     if market_mode != "attack":
-        blockers.append("确认追强: 仅进攻模式启用")
+        chase_blocker = "确认追强: 仅进攻模式启用"
+        # 【Phase3】闸门冲突披露：防守/撤退模式拦下追强，但个股基本面强
+        # （低估值真增长 / 战略性亏损订单加速 / 研报共识看多）——
+        # 闸门不因个股放开（防守纪律优先，否则模式闸门名存实亡），
+        # 但必须披露冲突：报告看得见踏空风险，模式判断错了可被复盘。
+        # （中际旭创案例：H1 净利 136.5 亿+PE 合理+订单排至 2027，
+        #   被"禁追强"静默拦截，报告零冲突提示。）
+        lens = tech_data.get("valuation_lens") or {}
+        if isinstance(lens, dict) and lens:
+            tags = ((lens.get("verdict") or {}).get("tags")) or []
+            strong_fund = "value_growth" in tags or "strategic_loss" in tags
+            analyst = lens.get("analyst") or {}
+            analyst_bull = isinstance(analyst, dict) and str(analyst.get("consensus_label")) == "看多"
+            if strong_fund or analyst_bull:
+                hints = []
+                if strong_fund:
+                    hints.append("估值透镜基本面强")
+                if analyst_bull:
+                    hints.append("研报共识看多")
+                chase_blocker += (
+                    f" ⚠基本面冲突({'、'.join(hints)}；防守纪律优先不放开闸门，"
+                    "但踏空风险显式披露供复盘)"
+                )
+        blockers.append(chase_blocker)
     else:
         chase_reason = _momentum_chase_blocker(tech_data)
         if chase_reason:

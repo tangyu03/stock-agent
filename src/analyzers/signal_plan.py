@@ -102,6 +102,9 @@ class ExecutionPlan:
     # 【二】基本面闸门：业绩雷 veto / 盈利质量·财报窗口 warn（Phase2-A）
     fundamental: Optional[Dict[str, Any]] = None
     fundamental_rejected: bool = False
+    # 【Phase3】估值透镜：估值泡沫/低基数反转/亏损分型/资金-分析师冲突
+    valuation: Optional[Dict[str, Any]] = None
+    valuation_rejected: bool = False
 
     def as_dict(self) -> Dict[str, Any]:
         result = self.__dict__.copy()
@@ -670,6 +673,43 @@ def build_execution_plan(
         fundamental_verdict and fundamental_verdict.get("verdict") == "veto"
     )
 
+    # ============================================================
+    # 【Phase3】估值透镜：高增长≠便宜。按 entry_type 重新评估
+    # （追高型对 model_loss / 估值泡沫更严格）——
+    # 长光华芯案例：PE 1155倍 + 净利仅3034万（低基数反转）→ veto；
+    # 芯原案例：模式性亏损 + 确认追强 → veto；
+    # 兆易案例：PE 33.9倍 + 净利 68.57亿 + +1091% → value_growth
+    # 正向证据展示（不加分不否决，防系统性吹票）；
+    # 数据全部缺失时放行（不产生假估值结论）。
+    # ============================================================
+    lens = tech_data.get("valuation_lens") or None
+    valuation_verdict: Optional[Dict[str, Any]] = None
+    valuation: Optional[Dict[str, Any]] = None
+    if isinstance(lens, dict) and lens:
+        try:
+            from .valuation_lens import evaluate_valuation_lens
+            lens_fund = lens.get("fundamental") or fundamental
+            flow_vote = None
+            inst = tech_data.get("institutional_holding")
+            if isinstance(inst, dict):
+                try:
+                    flow_vote = int(inst.get("vote_score", 0) or 0)
+                except (TypeError, ValueError):
+                    flow_vote = None
+            valuation_verdict = evaluate_valuation_lens(
+                lens_fund, lens.get("valuation"), lens.get("analyst"),
+                lens.get("balance"),
+                entry_type=entry_type, config=gate_config, flow_vote=flow_vote,
+            )
+            valuation = dict(lens)
+            valuation["verdict"] = valuation_verdict
+        except Exception as e:
+            logger.debug("估值透镜评估失败: %s", str(e)[:60])
+            valuation_verdict = None
+    valuation_rejected = bool(
+        valuation_verdict and valuation_verdict.get("verdict") == "veto"
+    )
+
     technical_votes = _net_technical_votes(tech_data)
     if technical_votes is not None and technical_votes * 1 >= 2:
         score += 1
@@ -749,6 +789,10 @@ def build_execution_plan(
     if fundamental_verdict and fundamental_verdict.get("verdict") == "warn":
         fv_mult = float(fundamental_verdict.get("risk_multiplier") or 0.6)
         multipliers["fundamental_warn"] = fv_mult
+    # 【Phase3】估值透镜 warn：泡沫警示/低基数反转/亏损分型 → 风险乘数
+    if valuation_verdict and valuation_verdict.get("verdict") == "warn":
+        lv_mult = float(valuation_verdict.get("risk_multiplier") or 0.6)
+        multipliers["valuation_warn"] = lv_mult
     combined = 1.0
     for multiplier in multipliers.values():
         combined *= multiplier
@@ -761,6 +805,11 @@ def build_execution_plan(
     if fundamental_warn:
         confidence = {"高": "中", "中": "低", "低": "低"}.get(confidence, confidence)
 
+    # 【Phase3】估值透镜 warn：置信度降一档（泡沫/低基数/亏损分型）
+    valuation_warn = bool(valuation_verdict and valuation_verdict.get("verdict") == "warn")
+    if valuation_warn:
+        confidence = {"高": "中", "中": "低", "低": "低"}.get(confidence, confidence)
+
     # 【一】/【二】拒绝路径：假说不完整 或 基本面业绩雷 → execute=False（不进调度不推送，留痕）
     hard_notes: List[str] = list(hyp_obj.rejection_reasons)
     if hypothesis_rejected:
@@ -770,12 +819,19 @@ def build_execution_plan(
         hard_notes = fundamental_reasons + hard_notes
     elif fundamental_warn:
         hard_notes.extend(fundamental_reasons)
-    if hypothesis_rejected or fundamental_rejected:
+    valuation_reasons = [f"估值透镜: {r}" for r in (valuation_verdict or {}).get("reasons") or []]
+    if valuation_rejected:
+        hard_notes = valuation_reasons + hard_notes
+    elif valuation_warn:
+        hard_notes.extend(valuation_reasons)
+    if hypothesis_rejected or fundamental_rejected or valuation_rejected:
         reject_details = list(details)
         if hypothesis_rejected:
             reject_details.append("假说被拒绝，不参与置信度评定")
         if fundamental_rejected:
             reject_details.append("基本面业绩雷，出厂即拒绝")
+        if valuation_rejected:
+            reject_details.append("估值透镜否决（泡沫+低基数/模式性亏损追高），出厂即拒绝")
         plan = ExecutionPlan(
             entry_type=entry_type,
             benchmark_price=benchmark,
@@ -801,14 +857,18 @@ def build_execution_plan(
             execute=False,
             hypothesis=hyp_obj.as_dict(),
             hypothesis_rejected=hypothesis_rejected,
-            rejection_reasons=list(hyp_obj.rejection_reasons) + fundamental_reasons,
+            rejection_reasons=list(hyp_obj.rejection_reasons) + fundamental_reasons + valuation_reasons,
             fundamental=fundamental,
             fundamental_rejected=fundamental_rejected,
+            valuation=valuation,
+            valuation_rejected=valuation_rejected,
         )
         return plan
 
     if fundamental_warn:
         details.append(f"基本面降级（{fundamental_verdict.get('note', '')}）")
+    if valuation_warn:
+        details.append(f"估值降级（{(valuation_verdict or {}).get('note', '')}）")
 
     plan = ExecutionPlan(
         entry_type=entry_type,
@@ -838,6 +898,8 @@ def build_execution_plan(
         rejection_reasons=[],
         fundamental=fundamental,
         fundamental_rejected=False,
+        valuation=valuation,
+        valuation_rejected=False,
     )
     return plan
 

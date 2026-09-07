@@ -534,7 +534,7 @@ def test_observation_render_uses_compact_reasoning_format():
         },
         "institutional_holding": {
             "vote_score": -3,
-            "vote_label": "机构看空",
+            "vote_label": "资金看空",
             "bullish_count": 0,
             "bearish_count": 3,
             "votes": {
@@ -553,7 +553,7 @@ def test_observation_render_uses_compact_reasoning_format():
     assert "①方向:MACD死叉延续" in rendered
     assert "②时机:RSI14=30.3(不投票)" in rendered
     assert "③量能:量比0.86" in rendered
-    assert "④资金:🟢机构看空" in rendered or "机构看空(-3票" in rendered
+    assert "④资金:🔴资金看空" in rendered or "资金看空(-3票" in rendered
     assert "⑤拦截:技术投票偏空" in rendered
     assert "⑥风控:止损未触发" in rendered
     assert "技术面" not in rendered

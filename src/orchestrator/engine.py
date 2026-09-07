@@ -276,6 +276,9 @@ class Orchestrator:
                 # 【二】基本面透传（业绩雷/盈利质量/财报窗口，七问第⑦问）
                 "fundamental": td.get("fundamental", {}),
                 "fundamental_note": getattr(sig, "fundamental_note", ""),
+                # 【Phase3】估值透镜透传（PE/PB/低基数/亏损分型/研报共识）
+                "valuation_lens": td.get("valuation_lens", {}),
+                "valuation_note": getattr(sig, "valuation_note", ""),
             })
 
         exit_batch = []
@@ -354,6 +357,9 @@ class Orchestrator:
                 # 【二】基本面透传：持仓观察卡展示业绩雷/盈利质量风险
                 # （汇成真空式暴雷在观察卡可见，不再只看 K 线和资金流）
                 "fundamental": td.get("fundamental", {}),
+                # 【Phase3】估值透镜透传：观察卡展示 PE/PB/低基数/亏损分型
+                # （长光华芯式泡沫、中科飞测式战略亏损在观察卡可见）
+                "valuation_lens": td.get("valuation_lens", {}),
                 "note": (position_hint + " | " if position_hint else "")
                         + "买入: "
                         + batch.entry_diagnostics.get(
@@ -440,6 +446,9 @@ class Orchestrator:
                         # 【二】基本面业绩雷拒绝留痕（报告期口径一并存档）
                         "fundamental": rejection.get("fundamental"),
                         "fundamental_rejected": rejection.get("fundamental_rejected", False),
+                        # 【Phase3】估值透镜拒绝留痕（泡沫+低基数/模式性亏损追高）
+                        "valuation": rejection.get("valuation"),
+                        "valuation_rejected": rejection.get("valuation_rejected", False),
                     },
                 )
             except Exception as e:

@@ -207,6 +207,73 @@ python scripts/trade_feedback.py --strategies    # 策略在线状态（含下�
 
 ---
 
+## 第三阶段：估值透镜（机构标签失真 / 估值维度缺失 / 亏损分型粗糙 / 技术基本面脱节）
+
+**用户铁证（Pushplus 报告 8 大缺陷 → 3 个方向性误判）**：报告只罗列"净利同比"一个数字，
+估值、盈利体量、订单证据、研报共识全部不在系统考量内——
+
+| 误判案例（真实数据） | 原框架行为 | Phase3 行为 |
+|---|---|---|
+| 兆易创新 603986：PE(TTM) 33.9 倍 / 净利 68.57 亿 / +1091.5% / 研报一致买入 | 被 4 票资金流投票标"机构看空(-2票)" | 标签语义修正（"资金看X"）+ `value_growth` 正向证据 + `analyst_flow_conflict` 冲突双标签 |
+| 长光华芯 688048：PE 1155.5 倍 / 净利 +238% 但仅 3034 万 | "+238%" 高增长无任何拦截 | `low_base_reversal` + `valuation_bubble`【veto】出厂拒绝 |
+| 中科飞测 688361：亏损但合同负债 +66.3% / 存货 +26% | 与芯原同贴"机构偏空" | `strategic_loss`【warn】订单加速的战略性亏损，披露不否决 |
+| 芯原股份 688521：亏 6.12 亿无订单证据 | 同上 | `model_loss`：追高型策略 veto / 低吸型 warn+0.5 乘数 |
+| 中际旭创 300308：净利 136.5 亿 + PE 合理 + 订单排至 2027 | 防守模式"禁追强"静默拦截 | 闸门不放开（纪律优先）但 **⚠基本面冲突显式披露**，踏空风险可复盘 |
+
+### A. 估值透镜（`src/analyzers/valuation_lens.py`，与 fundamental_gate 互补）
+
+后者管"业绩在不在暴雷"；透镜管"**增长是真的吗 / 估值配得上吗 / 亏损是什么性质 /
+资金票与研报共识是否反向**"：
+
+1. **估值分档**：PE(TTM)≥300 且净利<2亿（低基数）→ veto；PE≥300 但体量大 → warn+0.5；
+   PE 60~300 → 仅标注"估值偏高"（科技股常态，宽进严出防误伤）；
+   PE<60 且同比≥50% 且净利≥5亿 → `value_growth`（正向证据只展示，不加分防吹票）。
+2. **低基数反转**：同比≥100% 且净利<2亿 → 增速数字不构成成长证据，报告双口径。
+3. **亏损分型**：合同负债较年初≥30% / 存货≥20% → `strategic_loss`（中科飞测）；
+   无订单证据 → `model_loss`：追高型（确认追强/价量突破）veto，低吸型 warn。
+4. **资金-分析师冲突**：资金票≤-1 而研报共识看多（买入+增持≥60% 或≥3家）→
+   冲突标记双标签呈现（兆易案例）。**分析师共识不混入资金票计分**——资金是节奏、
+   研报是方向，混票会把冲突平均掉，这正是"机构看空"误导的根源。
+
+### B. 标签语义修正（`institutional_scorer.py`）
+
+4 票源（主力/股东/两融/龙虎榜）全是短周期资金流/筹码数据，无一测度研报共识——
+"机构看多/看空"是语义挪用。改为"资金看X" + `label_scope` 口径声明 +
+`analyst_consensus` 旁路注入（渲染双标签，冲突显式标记）。
+
+### C. 追强闸门冲突披露（`unified_engine._strategy_blockers`）
+
+防守/撤退模式拦下追强但个股基本面强（value_growth / strategic_loss / 研报看多）→
+闸门**不因个股放开**（防守纪律优先，否则模式闸门名存实亡），但 blocker 文案
+追加 ⚠基本面冲突警示——报告看得见踏空风险，模式判断错了可被复盘。
+
+### D. 数据源（全部优雅降级 + session 缓存）
+
+- `ak.stock_value_em` PE-TTM/PB/总市值；兜底 `ak.stock_zh_a_spot_em`（全市场表
+  会话级共享缓存，口径标注"动态,非TTM"）
+- 业绩快报"净利润"列（复用 fundamental_gate 已缓存表，**零额外调用**）→ 净利绝对值
+- `ak.stock_balance_sheet_by_report_em` 合同负债/存货较年初
+- `ak.stock_research_report_em` 近 90 天研报评级计数
+
+### E. 接线
+
+- `signal_plan.build_execution_plan`：透镜按 entry_type 重新评估（追高型更严格），
+  veto → execute=False + 留痕；warn → 风险乘数 + 置信度降档
+- `timing_engine`：`_fetch_tech_data` 拉透镜入 `tech_data["valuation_lens"]`；
+  EntrySignal 增 `valuation_note`；出厂拒绝条件扩为 假说∨业绩雷∨透镜
+- `engine.py`：买卡/观察卡透传 `valuation_lens`；拒绝留痕落库存档
+- 推送⑦基本面行：净利双口径（增速+绝对值）+ PE/PB + 估值分档/亏损分型/冲突标签
+
+### 新增测试（34 用例，`tests/test_valuation_lens.py`）
+
+五案例全锚定：兆易 value_growth+冲突 / 长光华芯 bubble veto / 中科飞测战略亏损 /
+芯原模式亏损双策略分型 / 中际旭创闸门冲突披露；出厂拒绝流、风险乘数、
+渲染双口径、单位归一化（元→亿）、优雅降级、阈值可配、标签语义修正、
+共识标签规则、旁路不混票。
+
+
+---
+
 ## 新增数据表
 
 | 表 | 用途 |
@@ -242,17 +309,25 @@ python scripts/trade_feedback.py --list   # 回执
    本次未收编；后续如接入，需同样过 `build_execution_plan` 假说门。
 3. `hypothesis_gate.enabled: false` 可整体关闭出厂检查回退旧行为（仅供对照排查）；
    `fundamental_gate.enabled: false` 同理可关闭基本面闸门；
-   `theme_map.yaml enabled: false` 可关闭主题归属修正（回退纯行业链路）。
+   `theme_map.yaml enabled: false` 可关闭主题归属修正（回退纯行业链路）；
+   `valuation_lens.enabled: false` 可整体关闭估值透镜（回退 Phase2 行为）。
 4. 旧行为测试已按新语义更新：`test_orchestrator_low_confidence`（低置信≠假说不完整，
-   低置信仍可调度；`execute=False` 才被拦）。
+   低置信仍可调度；`execute=False` 才被拦）；`test_signal_plan`/
+   `test_data_source_fixes`/`test_institutional_fund_flow` 标签断言随
+   "机构看X→资金看X"语义修正同步更新。
 
 ## 测试
 
 ```bash
-python -m pytest tests/ -q          # 182 passed / 2 skipped / 2 env-failed(原有，沙箱无 akshare)
+python -m pytest tests/ -q          # 216 passed / 2 skipped / 2 failed(基线遗留，见注)
 ```
 
-新增测试套件（共 95+ 用例）：
+> 注：沙箱无 akshare。`test_institutional_fund_flow.py` 顶部硬依赖 akshare
+> 需 `--ignore` 隔离（基线即如此）；`test_metrics_enrichment.py` 的 2 个失败
+> 在 Phase2 原始代码上同样复现（已用打包件对照验证，属环境依赖遗留，与
+> 本次改造无关）。
+
+新增测试套件（共 130+ 用例）：
 
 | 文件 | 覆盖 |
 |---|---|
@@ -265,3 +340,4 @@ python -m pytest tests/ -q          # 182 passed / 2 skipped / 2 env-failed(原�
 | `tests/test_fundamental_gate.py` | 基本面闸门：澜起盈利质量 / 汇成真空业绩雷 / 财报窗口 / 出厂拒绝 |
 | `tests/test_theme_attribution.py` | 主题归属修正：错配股改判 / 代理状态最严格 / 引擎闸门接线 |
 | `tests/test_data_source_fixes.py` | 两融兜底与口径区分 / 股东户数滞后 / 主力噪音降权 / 七问渲染 |
+| `tests/test_valuation_lens.py` | 估值透镜：兆易冲突双标签 / 长光华芯泡沫 veto / 中科飞测战略亏损 / 芯原模式亏损分型 / 中际旭创闸门冲突披露 / 出厂拒绝流 / 单位归一化 / 优雅降级 |
