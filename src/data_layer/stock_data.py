@@ -434,160 +434,160 @@ def calc_macd(closes: List[float], fast: int = 12, slow: int = 26, signal: int =
     }
 
 
-def detect_chan_divergence(closes: List[float], highs: List[float], lows: List[float],
-                           swing_window: int = 5) -> Dict:
-    """
-    缠论背驰检测（纯本地计算）
-
-    核心逻辑：比较相邻同向走势段的 MACD 柱面积。
-    - 价格创新高但 MACD 面积缩小 → 顶背驰（上涨衰竭）
-    - 价格创新低但 MACD 面积缩小 → 底背驰（下跌衰竭）
-
-    参考 chan-theory skill: 同时满足趋势力度+空间+时间中 2 项以上 → 背驰确认
-
-    Args:
-        closes: 收盘价序列
-        highs:  最高价序列
-        lows:   最低价序列
-        swing_window: 摆动识别窗口（默认5天识别局部极值）
-
-    Returns:
-        {"type": "顶背驰"|"底背驰"|"无",
-         "confidence": "高"|"中"|"低",
-         "detail": str}
-    """
-    n = len(closes)
-    if n < 30:
-        return {"type": "无", "confidence": "低", "detail": "数据不足(需>=30根K线)"}
-
-    # 1. 计算 MACD 序列
-    ema_fast = calc_ema(closes, 12)
-    ema_slow = calc_ema(closes, 26)
-    dif_list = [ema_fast[i] - ema_slow[i] for i in range(len(ema_fast))]
-    dea_list = calc_ema(dif_list, 9)
-    # MACD 柱 = (DIF - DEA) × 2
-    hist_list = [2 * (dif_list[i] - dea_list[i]) for i in range(min(len(dif_list), len(dea_list)))]
-    # 对齐到 closes
-    offset = len(closes) - len(hist_list)
-    hist_list = [0] * max(0, offset) + hist_list
-
-    # 2. 识别摆动点（方向转折检测 + 首尾 implied 摆动点）
-    swings = []  # [(idx, price, "high"|"low"), ...]
-    last_direction = None
-    first_dir = None
-
-    for i in range(swing_window, n - swing_window):
-        before_avg = sum(closes[i - swing_window:i]) / swing_window
-        after_avg = sum(closes[i + 1:i + 1 + swing_window]) / swing_window if i + 1 + swing_window <= n else closes[i]
-        current_dir = "up" if after_avg > before_avg else "down"
-        if first_dir is None:
-            first_dir = current_dir
-
-        if last_direction and current_dir != last_direction:
-            if last_direction == "up":
-                local_idx = max(range(max(0, i - swing_window), min(n, i + 1)),
-                               key=lambda j: highs[j])
-                swings.append((local_idx, highs[local_idx], "high"))
-            else:
-                local_idx = min(range(max(0, i - swing_window), min(n, i + 1)),
-                               key=lambda j: lows[j])
-                swings.append((local_idx, lows[local_idx], "low"))
-        last_direction = current_dir
-
-    if not swings:
-        return {"type": "无", "confidence": "低", "detail": "未检测到方向转折"}
-
-    # 在数据首尾补 implied 摆动点（没有转折的起始段/末尾段也需要表示）
-    start_dir = first_dir or "up"
-    if start_dir == "up":
-        start_idx = min(range(swing_window), key=lambda j: lows[j])
-        swings.insert(0, (start_idx, lows[start_idx], "low"))
-    else:
-        start_idx = max(range(swing_window), key=lambda j: highs[j])
-        swings.insert(0, (start_idx, highs[start_idx], "high"))
-
-    end_dir = last_direction or "up"
-    if end_dir == "up":
-        end_idx = max(range(n - swing_window, n), key=lambda j: highs[j])
-        swings.append((end_idx, highs[end_idx], "high"))
-    else:
-        end_idx = min(range(n - swing_window, n), key=lambda j: lows[j])
-        swings.append((end_idx, lows[end_idx], "low"))
-
-    if len(swings) < 4:
-        return {"type": "无", "confidence": "低", "detail": "摆动点不足"}
-
-    # 3. 取最近的同向走势段进行比较
-    # 走势段：从一个摆点到下一个反向摆点
-    last = swings[-1]
-    second_last = swings[-2]
-    third_last = swings[-3] if len(swings) >= 3 else None
-    fourth_last = swings[-4] if len(swings) >= 4 else None
-
-    # 计算一段走势的 MACD 面积（绝对值之和）和价格变化
-    def segment_info(start_swing, end_swing):
-        si, sp, st = start_swing
-        ei, ep, et = end_swing
-        if si >= ei:
-            return None
-        area = sum(abs(hist_list[j]) for j in range(si, ei + 1))
-        price_chg = abs(ep - sp) / sp if sp > 0 else 0
-        duration = ei - si
-        return {"area": area, "price_chg": price_chg, "duration": duration,
-                "start_idx": si, "end_idx": ei, "direction": st}
-
-    # 找最近的同方向走势段对
-    # 当前段: last 是 low → 上涨段(从倒数第二个low到last high)
-    #          last 是 high → 下跌段(从倒数第二个high到last low)
-    current_seg = None
-    prev_seg = None
-
-    if last[2] == "high" and fourth_last and third_last and second_last:
-        # last=高点, second_last=低点 → 当前上涨段: second_last→last
-        current_seg = segment_info(second_last, last)
-        # 前一同向段: fourth_last→third_last (都是上涨)
-        if fourth_last[2] == "low" and third_last[2] == "high":
-            prev_seg = segment_info(fourth_last, third_last)
-
-    elif last[2] == "low" and fourth_last and third_last and second_last:
-        # last=低点, second_last=高点 → 当前下跌段: second_last→last
-        current_seg = segment_info(second_last, last)
-        # 前一同向段: fourth_last→third_last (都是下跌)
-        if fourth_last[2] == "high" and third_last[2] == "low":
-            prev_seg = segment_info(fourth_last, third_last)
-
-    if not current_seg or not prev_seg:
-        return {"type": "无", "confidence": "低", "detail": "未找到可比走势段"}
-
-    # 4. 背驰判断：价格创新高/低 + MACD面积缩小
-    price_confirm = current_seg["price_chg"] > prev_seg["price_chg"] * 0.8  # 价格力度相当或更强
-    area_shrink = current_seg["area"] < prev_seg["area"] * 0.8              # 面积缩小20%以上
-    time_confirm = current_seg["duration"] <= prev_seg["duration"] * 1.5    # 时间不显著延长
-
-    # 同时满足2项以上 → 背驰
-    conditions_met = sum([area_shrink, price_confirm, time_confirm])
-
-    if conditions_met < 2:
-        return {"type": "无", "confidence": "低", "detail": "未满足背驰条件"}
-
-    if current_seg["direction"] == "low":
-        # 当前是上涨段（从low到high），但MACD面积缩小 → 顶背驰
-        type_ = "顶背驰"
-        signal = "看跌"
-        area_ratio = current_seg["area"] / prev_seg["area"] if prev_seg["area"] > 0 else 1
-        detail = (f"上涨段MACD面积{current_seg['area']:.1f} < 前段{prev_seg['area']:.1f}"
-                  f"(比值{area_ratio:.2f})，上涨力度衰竭")
-    else:
-        # 当前是下跌段（从high到low），但MACD面积缩小 → 底背驰
-        type_ = "底背驰"
-        signal = "看涨"
-        area_ratio = current_seg["area"] / prev_seg["area"] if prev_seg["area"] > 0 else 1
-        detail = (f"下跌段MACD面积{current_seg['area']:.1f} < 前段{prev_seg['area']:.1f}"
-                  f"(比值{area_ratio:.2f})，下跌力度衰竭")
-
-    conf = "高" if conditions_met >= 3 else "中"
-
-    return {"type": type_, "signal": signal, "confidence": conf,
+def detect_chan_divergence(closes: List[float], highs: List[float], lows: List[float],
+                           swing_window: int = 5) -> Dict:
+    """
+    缠论背驰检测（纯本地计算）
+
+    核心逻辑：比较相邻同向走势段的 MACD 柱面积。
+    - 价格创新高但 MACD 面积缩小 → 顶背驰（上涨衰竭）
+    - 价格创新低但 MACD 面积缩小 → 底背驰（下跌衰竭）
+
+    参考 chan-theory skill: 同时满足趋势力度+空间+时间中 2 项以上 → 背驰确认
+
+    Args:
+        closes: 收盘价序列
+        highs:  最高价序列
+        lows:   最低价序列
+        swing_window: 摆动识别窗口（默认5天识别局部极值）
+
+    Returns:
+        {"type": "顶背驰"|"底背驰"|"无",
+         "confidence": "高"|"中"|"低",
+         "detail": str}
+    """
+    n = len(closes)
+    if n < 30:
+        return {"type": "无", "confidence": "低", "detail": "数据不足(需>=30根K线)"}
+
+    # 1. 计算 MACD 序列
+    ema_fast = calc_ema(closes, 12)
+    ema_slow = calc_ema(closes, 26)
+    dif_list = [ema_fast[i] - ema_slow[i] for i in range(len(ema_fast))]
+    dea_list = calc_ema(dif_list, 9)
+    # MACD 柱 = (DIF - DEA) × 2
+    hist_list = [2 * (dif_list[i] - dea_list[i]) for i in range(min(len(dif_list), len(dea_list)))]
+    # 对齐到 closes
+    offset = len(closes) - len(hist_list)
+    hist_list = [0] * max(0, offset) + hist_list
+
+    # 2. 识别摆动点（方向转折检测 + 首尾 implied 摆动点）
+    swings = []  # [(idx, price, "high"|"low"), ...]
+    last_direction = None
+    first_dir = None
+
+    for i in range(swing_window, n - swing_window):
+        before_avg = sum(closes[i - swing_window:i]) / swing_window
+        after_avg = sum(closes[i + 1:i + 1 + swing_window]) / swing_window if i + 1 + swing_window <= n else closes[i]
+        current_dir = "up" if after_avg > before_avg else "down"
+        if first_dir is None:
+            first_dir = current_dir
+
+        if last_direction and current_dir != last_direction:
+            if last_direction == "up":
+                local_idx = max(range(max(0, i - swing_window), min(n, i + 1)),
+                               key=lambda j: highs[j])
+                swings.append((local_idx, highs[local_idx], "high"))
+            else:
+                local_idx = min(range(max(0, i - swing_window), min(n, i + 1)),
+                               key=lambda j: lows[j])
+                swings.append((local_idx, lows[local_idx], "low"))
+        last_direction = current_dir
+
+    if not swings:
+        return {"type": "无", "confidence": "低", "detail": "未检测到方向转折"}
+
+    # 在数据首尾补 implied 摆动点（没有转折的起始段/末尾段也需要表示）
+    start_dir = first_dir or "up"
+    if start_dir == "up":
+        start_idx = min(range(swing_window), key=lambda j: lows[j])
+        swings.insert(0, (start_idx, lows[start_idx], "low"))
+    else:
+        start_idx = max(range(swing_window), key=lambda j: highs[j])
+        swings.insert(0, (start_idx, highs[start_idx], "high"))
+
+    end_dir = last_direction or "up"
+    if end_dir == "up":
+        end_idx = max(range(n - swing_window, n), key=lambda j: highs[j])
+        swings.append((end_idx, highs[end_idx], "high"))
+    else:
+        end_idx = min(range(n - swing_window, n), key=lambda j: lows[j])
+        swings.append((end_idx, lows[end_idx], "low"))
+
+    if len(swings) < 4:
+        return {"type": "无", "confidence": "低", "detail": "摆动点不足"}
+
+    # 3. 取最近的同向走势段进行比较
+    # 走势段：从一个摆点到下一个反向摆点
+    last = swings[-1]
+    second_last = swings[-2]
+    third_last = swings[-3] if len(swings) >= 3 else None
+    fourth_last = swings[-4] if len(swings) >= 4 else None
+
+    # 计算一段走势的 MACD 面积（绝对值之和）和价格变化
+    def segment_info(start_swing, end_swing):
+        si, sp, st = start_swing
+        ei, ep, et = end_swing
+        if si >= ei:
+            return None
+        area = sum(abs(hist_list[j]) for j in range(si, ei + 1))
+        price_chg = abs(ep - sp) / sp if sp > 0 else 0
+        duration = ei - si
+        return {"area": area, "price_chg": price_chg, "duration": duration,
+                "start_idx": si, "end_idx": ei, "direction": st}
+
+    # 找最近的同方向走势段对
+    # 当前段: last 是 low → 上涨段(从倒数第二个low到last high)
+    #          last 是 high → 下跌段(从倒数第二个high到last low)
+    current_seg = None
+    prev_seg = None
+
+    if last[2] == "high" and fourth_last and third_last and second_last:
+        # last=高点, second_last=低点 → 当前上涨段: second_last→last
+        current_seg = segment_info(second_last, last)
+        # 前一同向段: fourth_last→third_last (都是上涨)
+        if fourth_last[2] == "low" and third_last[2] == "high":
+            prev_seg = segment_info(fourth_last, third_last)
+
+    elif last[2] == "low" and fourth_last and third_last and second_last:
+        # last=低点, second_last=高点 → 当前下跌段: second_last→last
+        current_seg = segment_info(second_last, last)
+        # 前一同向段: fourth_last→third_last (都是下跌)
+        if fourth_last[2] == "high" and third_last[2] == "low":
+            prev_seg = segment_info(fourth_last, third_last)
+
+    if not current_seg or not prev_seg:
+        return {"type": "无", "confidence": "低", "detail": "未找到可比走势段"}
+
+    # 4. 背驰判断：价格创新高/低 + MACD面积缩小
+    price_confirm = current_seg["price_chg"] > prev_seg["price_chg"] * 0.8  # 价格力度相当或更强
+    area_shrink = current_seg["area"] < prev_seg["area"] * 0.8              # 面积缩小20%以上
+    time_confirm = current_seg["duration"] <= prev_seg["duration"] * 1.5    # 时间不显著延长
+
+    # 同时满足2项以上 → 背驰
+    conditions_met = sum([area_shrink, price_confirm, time_confirm])
+
+    if conditions_met < 2:
+        return {"type": "无", "confidence": "低", "detail": "未满足背驰条件"}
+
+    if current_seg["direction"] == "low":
+        # 当前是上涨段（从low到high），但MACD面积缩小 → 顶背驰
+        type_ = "顶背驰"
+        signal = "看跌"
+        area_ratio = current_seg["area"] / prev_seg["area"] if prev_seg["area"] > 0 else 1
+        detail = (f"上涨段MACD面积{current_seg['area']:.1f} < 前段{prev_seg['area']:.1f}"
+                  f"(比值{area_ratio:.2f})，上涨力度衰竭")
+    else:
+        # 当前是下跌段（从high到low），但MACD面积缩小 → 底背驰
+        type_ = "底背驰"
+        signal = "看涨"
+        area_ratio = current_seg["area"] / prev_seg["area"] if prev_seg["area"] > 0 else 1
+        detail = (f"下跌段MACD面积{current_seg['area']:.1f} < 前段{prev_seg['area']:.1f}"
+                  f"(比值{area_ratio:.2f})，下跌力度衰竭")
+
+    conf = "高" if conditions_met >= 3 else "中"
+
+    return {"type": type_, "signal": signal, "confidence": conf,
             "detail": detail, "area_ratio": round(area_ratio, 2)}
 
 

@@ -419,6 +419,11 @@ def _render_compact_entry_signal(data):
         content += f"&nbsp;&nbsp;{_esc(line)}<br/>"
     content += "<br/>"
 
+    # 【一】可证伪假说：因为X，所以在Y买入；若Z认错；若W兑现
+    hyp_block = _hypothesis_block(data)
+    if hyp_block:
+        content += hyp_block
+
     confidence_details = plan.get("confidence_details") or []
     content += (
         f"<b>置信度</b><br/>&nbsp;&nbsp;"
@@ -465,6 +470,42 @@ def _render_compact_entry_signal(data):
     elif shares:
         content += f"<b>建议仓位</b><br/>&nbsp;&nbsp;{int(shares):,}股<br/>"
     return title, content
+
+def _hypothesis_block(data):
+    """【一】可证伪假说渲染：X/Y/Z/W 四要素 + 事件有效期说明"""
+    hyp = data.get("hypothesis") or (data.get("execution_plan") or {}).get("hypothesis") or {}
+    if not hyp or not hyp.get("sentence"):
+        return ""
+    lines = []
+    x = hyp.get("x", "")
+    y = hyp.get("y", 0)
+    y_note = hyp.get("y_note", "")
+    z = hyp.get("z", 0)
+    z_note = hyp.get("z_note", "")
+    w = hyp.get("w") or []
+    w_note = hyp.get("w_note", "")
+    z_ref = hyp.get("z_reference", 0)
+    if x:
+        lines.append(f"X·因为: {_esc(str(x))[:120]}")
+    if y:
+        lines.append(f"Y·在{_val(y)}买入({_esc(y_note)})")
+    if z:
+        ref_text = f"，结构位{_val(z_ref)}" if z_ref else ""
+        lines.append(f"Z·若{_esc(z_note)}{_ref_text_adj(ref_text)}出现({_val(z)})→认错离场")
+    if w:
+        w_text = f"{_val(w[0])}" + (f"~{_val(w[-1])}" if len(w) > 1 and w[-1] > w[0] else "")
+        lines.append(f"W·若{_esc(w_note)}出现({w_text})→兑现离场")
+    event_id = data.get("event_id") or ""
+    if event_id:
+        lines.append(_esc(f"事件: {event_id}（N日内回踩买点有效，收盘跌回结构位立即撤单）"))
+    if not lines:
+        return ""
+    return "<b>可证伪假说</b><br/>" + "<br/>".join(f"&nbsp;&nbsp;{l}" for l in lines) + "<br/><br/>"
+
+
+def _ref_text_adj(ref_text):
+    return "(X的直接否定)" if not ref_text else f"(X的直接否定{ref_text})"
+
 
 def _tech(data):
     parts = []

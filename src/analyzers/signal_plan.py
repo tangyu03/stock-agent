@@ -6,6 +6,18 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+# ============================================================
+# 【二】数据层一致性守卫默认值（口径统一：全链路成交量统一为“股”）
+# 科创板“股被当手”两类拦截：
+#   规则1: 量比<1 而 量能倍数>10  → 今日量被放大百倍（股/手错位）
+#   规则2: 换手<10% 而成交量>10亿股 → 换手与量级矛盾（同上，反向证据）
+# 阈值可由 config/timing.yaml data_guard 覆盖。
+# ============================================================
+DATA_GUARD_DEFAULTS: Dict[str, float] = {
+    "turnover_threshold_pct": 10.0,     # 换手率阈值（%）
+    "max_volume_shares": 1.0e9,         # 成交量阈值（股）：10亿股
+}
+
 
 @dataclass
 class VolumeSnapshot:
@@ -83,6 +95,10 @@ class ExecutionPlan:
     execution_tiers: List[Dict[str, Any]] = field(default_factory=list)
     hard_constraint_notes: List[str] = field(default_factory=list)
     execute: bool = False
+    # 【一】可证伪假说：X/Y/Z/W 及出厂检查结论
+    hypothesis: Dict[str, Any] = field(default_factory=dict)
+    hypothesis_rejected: bool = False
+    rejection_reasons: List[str] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, Any]:
         result = self.__dict__.copy()
@@ -110,7 +126,22 @@ def _number(value: Any) -> Optional[float]:
     return number if number == number else None
 
 
-def build_volume_snapshot(tech_data: Dict[str, Any], min_samples: int = 60) -> VolumeSnapshot:
+def _guard_value(guard: Optional[Dict], key: str) -> float:
+    """读守卫阈值：传入 guard 覆盖 > 模块默认。"""
+    if guard:
+        try:
+            value = float(guard.get(key, DATA_GUARD_DEFAULTS[key]))
+            return value
+        except (TypeError, ValueError, KeyError):
+            pass
+    return float(DATA_GUARD_DEFAULTS[key])
+
+
+def build_volume_snapshot(
+    tech_data: Dict[str, Any],
+    min_samples: int = 60,
+    guard: Optional[Dict[str, Any]] = None,
+) -> VolumeSnapshot:
     kline = tech_data.get("kline") or []
     volumes = [
         _number(item.get("volume", item.get("成交量", 0))) or 0.0
@@ -119,6 +150,16 @@ def build_volume_snapshot(tech_data: Dict[str, Any], min_samples: int = 60) -> V
     today_volume = _number(tech_data.get("today_volume"))
     if today_volume is None and volumes:
         today_volume = volumes[-1]
+
+    # 换手率先行（一致性校验需要；原逻辑在后面才算，提前到此处）
+    turnover_values: List[float] = []
+    for item in kline:
+        value = _number(item.get("turnover_rate", item.get("换手率")))
+        if value is not None:
+            turnover_values.append(value)
+    today_turnover = _number(tech_data.get("turnover_rate"))
+    if today_turnover is None and turnover_values:
+        today_turnover = turnover_values[-1]
 
     volume_ratio = _number(tech_data.get("volume_ratio"))
     volume_ma60 = _number(tech_data.get("volume_ma60"))
@@ -129,6 +170,7 @@ def build_volume_snapshot(tech_data: Dict[str, Any], min_samples: int = 60) -> V
         if today_volume and volume_ma60 and volume_ma60 > 0
         else None
     )
+    # 【二】规则1: 量比<1 而量能倍数>10 → 量能口径冲突（股/手错位放大百倍）
     dirty = bool(
         volume_ratio is not None
         and volume_ratio < 1.0
@@ -139,6 +181,17 @@ def build_volume_snapshot(tech_data: Dict[str, Any], min_samples: int = 60) -> V
         f"量能口径冲突(量比{volume_ratio:.2f}<1, 60日均量倍数{volume_vs_ma60:.2f}>10)"
         if dirty else ""
     )
+    # 【二】规则2: 换手<10% 而成交量>10亿股 → 换手与量级矛盾，同判脏数据
+    # （沃尔德 9/4 案例：换手 4.8% 而成交量口径被放大后 >10 亿股，接口层单位错位）
+    if not dirty and today_turnover is not None and today_volume is not None:
+        turnover_thresh = _guard_value(guard, "turnover_threshold_pct")
+        max_volume = _guard_value(guard, "max_volume_shares")
+        if today_turnover < turnover_thresh and today_volume > max_volume:
+            dirty = True
+            dirty_reason = (
+                f"换手/成交量口径冲突(换手{today_turnover:.1f}%<{turnover_thresh:.0f}%, "
+                f"成交量{today_volume / 1e8:.1f}亿股>{max_volume / 1e8:.0f}亿股)"
+            )
 
     # Historical ratios exclude the current bar so intraday volume cannot move its own threshold.
     volume_ratios: List[float] = []
@@ -148,14 +201,6 @@ def build_volume_snapshot(tech_data: Dict[str, Any], min_samples: int = 60) -> V
             volume_ratios.append(volumes[index] / base)
     volume_ratios = volume_ratios[-min_samples:]
 
-    turnover_values: List[float] = []
-    for item in kline:
-        value = _number(item.get("turnover_rate", item.get("换手率")))
-        if value is not None:
-            turnover_values.append(value)
-    today_turnover = _number(tech_data.get("turnover_rate"))
-    if today_turnover is None and turnover_values:
-        today_turnover = turnover_values[-1]
     turnover_history = turnover_values[-(min_samples + 1):-1] if len(turnover_values) > min_samples else []
 
     snapshot = VolumeSnapshot(
@@ -541,7 +586,20 @@ def build_execution_plan(
     tech_data: Dict[str, Any],
     sector_status: str = "",
     sector_name: str = "",
+    hypothesis_x: str = "",
+    hypothesis: Optional[Dict[str, Any]] = None,
+    atr: Optional[float] = None,
+    data_guard: Optional[Dict[str, Any]] = None,
+    gate_config: Optional[Dict[str, Any]] = None,
 ) -> ExecutionPlan:
+    """构建执行计划（唯一出口）。
+
+    【一】可证伪性出厂检查：X/Y/Z/W 缺任一要素、止损倒挂、缓冲不足、
+    兑现无利润空间 → execute=False 拒绝（不进调度不推送），原因写入
+    hard_constraint_notes / rejection_reasons 供留痕。
+    原行为：倒挂仅降置信度照发（沃尔德 9/4: 买93.88/损93.94 照推）——
+    新行为：该信号在生成阶段即被拒绝。
+    """
     benchmark = _number(benchmark_price) or 0.0
     stop = _number(stop_loss) or 0.0
     targets = [_number(value) for value in (target_range or []) if _number(value) is not None]
@@ -552,10 +610,42 @@ def build_execution_plan(
     rrr_low = (targets[0] - benchmark) / risk_ratio if targets and risk_ratio else None
     rrr_high = (targets[-1] - benchmark) / risk_ratio if len(targets) >= 2 and risk_ratio else rrr_low
 
-    volume = build_volume_snapshot(tech_data)
+    volume = build_volume_snapshot(tech_data, guard=data_guard)
     fund = build_fund_snapshot(tech_data.get("institutional_holding"), tech_data)
     details: List[str] = []
     score = 0
+
+    # ============================================================
+    # 【一】假说出厂检查（先于置信度打分：缺要素的信号不配谈置信度）
+    # ============================================================
+    from .hypothesis import validate_hypothesis, TradeHypothesis
+
+    hyp_obj = TradeHypothesis(
+        strategy=str(entry_type or ""),
+        reason_x=str(hypothesis_x or "").split("\n")[0].strip(),
+        entry_y=benchmark,
+        entry_y_note="主档回踩承接",
+        exit_z=stop,
+        exit_z_note="跌破止损价",
+        exit_w=[t for t in targets if t],
+        exit_w_note="到达目标位兑现",
+    )
+    # 若调用方已构建完整配对假说，直接复用其校验结果
+    if hypothesis:
+        hyp_obj = TradeHypothesis(
+            strategy=hypothesis.get("strategy", entry_type or ""),
+            reason_x=hypothesis.get("x", ""),
+            entry_y=_number(hypothesis.get("y")) or benchmark,
+            entry_y_note=hypothesis.get("y_note", ""),
+            exit_z=_number(hypothesis.get("z")) or stop,
+            exit_z_note=hypothesis.get("z_note", "跌破止损价"),
+            exit_w=[_number(v) or 0.0 for v in (hypothesis.get("w") or [])],
+            exit_w_note=hypothesis.get("w_note", "到达目标位兑现"),
+            z_reference=_number(hypothesis.get("z_reference")) or 0.0,
+            z_reference_name=hypothesis.get("z_reference_name", ""),
+        )
+    hyp_obj = validate_hypothesis(hyp_obj, atr=atr, config=gate_config)
+    hypothesis_rejected = not hyp_obj.falsifiable
 
     technical_votes = _net_technical_votes(tech_data)
     if technical_votes is not None and technical_votes * 1 >= 2:
@@ -639,6 +729,39 @@ def build_execution_plan(
     industry_multiplier, industry_tags = _industry_tuning(sector_name)
     tiers = _build_execution_tiers(benchmark, stop, tech_data, volume, fund)
 
+    # 【一】拒绝路径：假说不完整 → execute=False（不进调度不推送，留痕）
+    hard_notes: List[str] = list(hyp_obj.rejection_reasons)
+    if hypothesis_rejected:
+        hard_notes.insert(0, "假说四要素不完整，信号出厂即拒绝")
+        plan = ExecutionPlan(
+            entry_type=entry_type,
+            benchmark_price=benchmark,
+            stop_loss=stop,
+            target_range=targets,
+            risk_pct=risk_pct,
+            reward_low_pct=rewards[0] if rewards else None,
+            reward_high_pct=rewards[-1] if rewards else None,
+            rrr_low=rrr_low,
+            rrr_high=rrr_high,
+            confidence_score=score,
+            applicable_score=applicable_score,
+            confidence="低",
+            confidence_details=details + ["假说被拒绝，不参与置信度评定"],
+            volume_snapshot=volume,
+            fund_snapshot=fund,
+            risk_multipliers=multipliers,
+            combined_risk_multiplier=combined,
+            industry_multiplier=industry_multiplier,
+            industry_tags=industry_tags,
+            execution_tiers=tiers,
+            hard_constraint_notes=hard_notes,
+            execute=False,
+            hypothesis=hyp_obj.as_dict(),
+            hypothesis_rejected=True,
+            rejection_reasons=list(hyp_obj.rejection_reasons),
+        )
+        return plan
+
     plan = ExecutionPlan(
         entry_type=entry_type,
         benchmark_price=benchmark,
@@ -660,8 +783,11 @@ def build_execution_plan(
         industry_multiplier=industry_multiplier,
         industry_tags=industry_tags,
         execution_tiers=tiers,
-        hard_constraint_notes=[],
+        hard_constraint_notes=hard_notes,
         execute=True,
+        hypothesis=hyp_obj.as_dict(),
+        hypothesis_rejected=False,
+        rejection_reasons=[],
     )
     return plan
 

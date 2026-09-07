@@ -41,6 +41,42 @@ timing:
   # ──────────────── 价量突破 (_check_volume_breakout) ────────────────
   volume_breakout:
     require_rs_above_ma: true            # attack 模式下 RS 必须站上均线
+    # 【三】事件边界（状态→事件）：“站上MA25”是状态，今明两天都为真，
+    # 导致同一信号连发两天。事件化后只在突破当日诞生：
+    # 昨收 <= 昨日MA25 且 今价站上今日MA25
+    require_event_boundary: true
+    # 【三】诞生双腿之一：当日收阳（日内以 现价>今开 近似）
+    require_bullish_close: true
+
+  # ──────────────── 【一】可证伪假说出厂检查 (hypothesis.py) ────────────────
+  # 每笔交易必须能写成：因为X，所以在Y买入；若Z出现认错离场；若W出现兑现离场。
+  # X/Y/Z/W 缺一即拒绝（不进调度不推送，写入 signal_rejections 表留痕）。
+  hypothesis_gate:
+    enabled: true                        # 总开关（关闭后回退旧行为，仅供对照）
+    z_atr_mult: 1.5                     # Z 距结构位的最小 ATR 缓冲（宽度由波动率决定）
+    z_pct_buffer: 0.005                 # Z 距结构位的最小百分比缓冲（0.5%）
+    min_z_buffer_pct: 0.01              # ATR 缺失时 Y-Z 最小百分比宽度（1%）
+
+  # ──────────────── 【二】数据层一致性守卫 (signal_plan.py) ────────────────
+  # 科创板“股被当手”两条最便宜的拦截（口径统一：全链路成交量=股）：
+  #   规则1: 量比<1 而量能倍数>10 → 脏数据拦截（9/3 全部 4 条误触发）
+  #   规则2: 换手<阈值% 而成交量>阈值股 → 脏数据拦截（9/4 沃尔德）
+  data_guard:
+    turnover_threshold_pct: 10.0         # 换手率阈值（%）
+    max_volume_shares: 1000000000.0      # 成交量阈值（股）：10 亿
+
+  # ──────────────── 【三】信号事件生命周期 (signal_lifecycle.py) ────────────────
+  # 诞生（突破当日+收阳+量能）→ N 日内回踩买点有效 →
+  # 收盘跌回突破位/板块退潮立即撤单 → 超期作废。
+  signal_lifecycle:
+    valid_days: 5                        # 回踩买点有效期（N 日）
+
+  # ──────────────── 【六】策略分层统计与自动下线 (strategy_stats.py) ────────────────
+  # 一套不能被自己的业绩杀死的逻辑，不算被厘清，只是被相信。
+  strategy_stats:
+    min_trades_for_stats: 30             # 分层统计最小样本
+    kill_rolling_window: 50              # 滚动窗口
+    kill_min_trades: 50                  # 下线判定的最小样本（不足只报告不下线）
 
   # ──────────────── 出场信号 (check_exit_signals) ────────────────
   exit:
@@ -146,3 +182,55 @@ timing:
     budget_per_stock: 250000             # 单股最大仓位
     max_concurrent_positions: 4          # 最大并发持仓数
     cooldown_days_after_sell: 3          # 卖出后冷却天数
+
+
+- code: '688409'
+  name: 富创精密
+- code: '300843'
+  name: 胜蓝股份
+- code: '688008'
+  name: 澜起科技
+- code: '688041'
+  name: 海光信息
+- code: '688027'
+  name: 国盾量子
+- code: '301666'
+  name: 大普微
+- code: '688797'
+  name: 臻宝
+- code: '920045'
+  name: 蘅东光
+- code: '688820'
+  name: 盛合晶微
+- code: '688028'
+  name: 沃尔德
+- code: '300757'
+  name: 罗博特科
+- code: '688521'
+  name: 芯原股份
+- code: '002975'
+  name: 博杰股份
+- code: '300083'
+  name: 创世纪
+- code: '688392'
+  name: 骄成超声
+- code: '300480'
+  name: 光力科技
+- code: '301392'
+  name: 汇成真空
+- code: '300308'
+  name: 中际旭创
+- code: '688048'
+  name: 长光华芯
+- code: '603986'
+  name: 兆易创新
+- code: '688361'
+  name: 中科飞测
+- code: '688630'
+  name: 芯碁微装
+- code: '688328'
+  name: 深科达
+- code: '603061'
+  name: 金海通
+- code: '688627'
+  name: 精智达     

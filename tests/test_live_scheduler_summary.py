@@ -41,9 +41,14 @@ def test_buy_signals_ignore_total_asset_budget():
     assert scheduled["stats"]["buy_executed"] == 2
     assert scheduled["stats"]["buy_skipped_no_budget"] == 0
     assert scheduled["stats"]["buy_skipped_dust_order"] == 0
+    # 【一】【六】新增两类跳过桶（假说拒绝/策略下线），默认为空
     assert scheduled["skipped"] == {
         "buy_no_budget": [],
         "buy_dust_order": [],
         "buy_low_confidence": [],
+        "buy_hypothesis_rejected": [],
+        "buy_strategy_offline": [],
     }
+    assert scheduled["stats"]["buy_hypothesis_rejected"] == 0
+    assert scheduled["stats"]["buy_strategy_offline"] == 0
     assert "跳过信号" not in format_scheduled_summary(scheduled)

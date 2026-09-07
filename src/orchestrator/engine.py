@@ -7,7 +7,7 @@ Orchestrator 调度引擎（v3 — pre_market 与 intraday 已合并）
   weekly                — 周报
 """
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, List
 from datetime import datetime
 
 from ..config_models import load_config
@@ -267,6 +267,10 @@ class Orchestrator:
                 "rrr_low": getattr(sig, "rrr_low", None),
                 "rrr_high": getattr(sig, "rrr_high", None),
                 "execution_plan": getattr(sig, "execution_plan", {}),
+                # 【一】可证伪假说透传（模板渲染 + 落库）
+                "hypothesis": getattr(sig, "hypothesis", {}) or {},
+                "event_id": getattr(sig, "event_id", "") or "",
+                "audience": getattr(sig, "audience", "empty") or "empty",
                 # 机构持仓打分（4 数据源投票 + 具体数值，透出到 push）
                 "institutional_holding": td.get("institutional_holding", {}),
             })
@@ -302,6 +306,14 @@ class Orchestrator:
                 })
 
         # 构建观察列表：无买卖信号的持仓股
+        # 【三】受众四选一之"持有"：持仓且无任何买卖信号 → 持有建议
+        # 持仓来源 = 回执闭环聚合（executed 记录），买入事件只对空仓者成立
+        holdings = []
+        try:
+            holdings = self._trade_logger.get_current_holdings() or []
+        except Exception as e:
+            logger.warning("持仓聚合不可用（按空仓调度）: %s", e)
+        held_codes = {str(h.get("code") or "") for h in (holdings or [])}
         # 从 timing_engine._tech_data_full 取技术面+机构资金数据（出场检查已算好，不重复调 API）
         from ..analyzers.timing_engine import get_timing_engine
         te = get_timing_engine()
@@ -316,6 +328,9 @@ class Orchestrator:
             td = te._tech_data_full.get(code, {})
             if not isinstance(td, dict):
                 td = {}
+            position_hint = ""
+            if code in held_codes:
+                position_hint = "持仓建议: 持有（无买卖信号触发）"
             observation_batch.append({
                 "stock_name": name,
                 "stock_code": code,
@@ -333,7 +348,8 @@ class Orchestrator:
                 "market_score": td.get("market_score"),
                 "rsi": (td.get("tech_signals") or {}).get("rsi"),
                 "adx": (td.get("tech_signals") or {}).get("adx"),
-                "note": "买入: "
+                "note": (position_hint + " | " if position_hint else "")
+                        + "买入: "
                         + batch.entry_diagnostics.get(
                             code, "未参与入场检查（风控过滤或数据缺失）"
                         )
@@ -344,9 +360,20 @@ class Orchestrator:
                     len(entry_batch), len(exit_batch), len(observation_batch),
                     len(all_holdings), len(signaled_codes))
 
-        # ---- 4.5 P3: 实盘信号调度器（信号服务模式：纯信号输出，不维护持仓）----
-        # 买卖信号全量输出；买入只按入场类型优先级排序，资金管理由用户自行处理。
-        # 不再读取 trade_logger 持仓/账户——持仓回执闭环繁琐且非决策前提，持仓由用户自行管理。
+        # ---- 4.5 P3: 实盘信号调度器（信号服务模式 + 受众分流 + 假说门 + 策略下线）----
+        # 【三】受众：holdings 已在上文回执闭环聚合；
+        # 买入事件只对空仓者成立，持仓者输出四选一。
+
+        # 【六】策略下线判定（滚动50笔期望为负/胜率跌破盈亏平衡线 → 自动下线+告警）
+        kill_report: Dict = {}
+        offline_strategies: List = []
+        try:
+            from ..feedback.strategy_stats import evaluate_kill_switch
+            kill_report = evaluate_kill_switch() or {}
+            offline_strategies = [s for s, info in kill_report.items() if info.get("status") == "offline"]
+        except Exception as e:
+            logger.warning("策略下线评估不可用（按全策略调度）: %s", e)
+
         from ..decision.live_scheduler import schedule_live_signals, format_scheduled_summary
         total_asset = 1_000_000  # 兼容旧调用；纯信号模式不参与拦截
         scheduled = schedule_live_signals(
@@ -354,6 +381,8 @@ class Orchestrator:
             exit_signals=exit_batch,
             total_asset=total_asset,
             market_mode=market_mode,
+            holdings=holdings,
+            offline_strategies=offline_strategies,
         )
 
         # 用调度后的信号替换原始信号推送
@@ -388,6 +417,45 @@ class Orchestrator:
         schedule_summary = format_scheduled_summary(scheduled)
         logger.info("信号调度完成:\n%s", schedule_summary)
 
+        # 【一】出厂拒绝留痕：假说不完整的信号写入 signal_rejections 表
+        # （不进调度不推送，但可审计——可证伪性是信号出厂前的完整性检查）
+        for rejection in getattr(batch, "rejected", []) or []:
+            try:
+                self._trade_logger.log_rejection(
+                    stock_code=rejection.get("stock_code", ""),
+                    stock_name=rejection.get("stock_name", ""),
+                    entry_type=rejection.get("entry_type", ""),
+                    reasons=rejection.get("reasons", []),
+                    detail={
+                        "benchmark_price": rejection.get("benchmark_price", 0),
+                        "stop_loss": rejection.get("stop_loss", 0),
+                        "target_range": rejection.get("target_range", []),
+                        "hypothesis": rejection.get("hypothesis", {}),
+                    },
+                )
+            except Exception as e:
+                logger.warning("拒绝留痕失败: %s", e)
+
+        # 【六】策略下线告警推送（一套不能被自己的业绩杀死的逻辑，不算被厘清）
+        newly_offline = [
+            (strategy, info)
+            for strategy, info in (kill_report or {}).items()
+            if info.get("newly_offline")
+        ]
+        if newly_offline:
+            try:
+                alert_lines = ["⛔ 策略自动下线（记录闭环判定）:"]
+                for strategy, info in newly_offline:
+                    alert_lines.append(f"  {strategy}: {info.get('reason', '')}")
+                alert_lines.append("策略下线重校前不再产生新买入信号；已持仓出场不受影响。")
+                self._pushplus.send(
+                    "策略下线告警",
+                    f"<pre>{chr(10).join(alert_lines)}</pre><p>代码版本 {_get_git_head()}</p>",
+                    level="重要",
+                )
+            except Exception:
+                pass
+
         # ---- 5. 合并推送（环境 + 调度后买卖信号 + 观察一条消息）----
         # 推送调度后的信号（而非原始全量信号）
         self._pushplus.send_intraday_report(env, scheduled_entry_batch, scheduled_exit_batch, observation_batch)
@@ -404,8 +472,10 @@ class Orchestrator:
             except Exception:
                 pass
 
-        # ---- 5.5 P1-3: 推送后落库（user_action=pending，仅作信号记录供盘后/周报统计；
-        #      回执闭环为可选——scripts/trade_feedback.py 保留，不再参与调度）----
+        # ---- 5.5 P1-3 + 【六】记录闭环：推送后落库（user_action=pending）----
+        # 每笔交易四行日志之第一行：假说原文（X/Y/Z/W + 整句）与配对价位，
+        # 推送时同步落库（修复：原实现 stop_loss/target_price 从未写入，全部为 0）。
+        # 回执后 update_action 联动回填 exit_price/pnl_pct/zw_triggered。
         # 去重：当日同股同类型 pending 已存在则跳过（盘中多次运行不重复落库）
         today = datetime.now().strftime("%Y-%m-%d")
         existing_pending = self._trade_logger.get_pending_signals(today)
@@ -415,6 +485,11 @@ class Orchestrator:
             key = (s.stock_code, "buy", s.entry_type or "")
             if key in pending_keys:
                 continue
+            hyp = s.hypothesis or {}
+            w_range = [v for v in (hyp.get("w") or []) if v]
+            if not w_range:
+                plan_targets = (s.execution_plan or {}).get("target_range") or [0]
+                w_range = [plan_targets[0] or 0]
             self._trade_logger.log_signal(
                 signal_type="buy",
                 stock_code=s.stock_code,
@@ -425,9 +500,17 @@ class Orchestrator:
                     "mode_at_signal": s.market_mode,
                     "market_score": env.get("market_score", 0),
                     "suggested_position": min(s.shares * s.trigger_price / max(total_asset, 1), 0.25),
+                    # 【一】假说四要素 + 配对 Z/W 落库（记录闭环第一行）
+                    "stop_loss": float(hyp.get("z") or 0) or s.execution_plan.get("stop_loss", 0),
+                    "target_price": float(w_range[0] or 0),
+                    "paired_z": float(hyp.get("z") or 0),
+                    "paired_w_low": float(w_range[0] or 0),
+                    "paired_w_high": float(w_range[-1] or 0),
+                    "event_id": getattr(s, "event_id", "") or "",
+                    "hypothesis": hyp,
                 },
                 shares=s.shares,
-                note=s.schedule_note,
+                note=(s.schedule_note + " | 假说: " + hyp.get("sentence", "")) if hyp.get("sentence") else s.schedule_note,
             )
             logged["buy"] += 1
         for s in scheduled['sell']:

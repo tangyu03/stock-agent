@@ -225,6 +225,7 @@ def test_execution_plan_scores_risk_and_rrr_from_benchmark():
         target_range=[11.5, 12.5],
         tech_data=_valid_tech_data(),
         sector_status="main_trend",
+            hypothesis_x="测试买入理由:放量突破MA25",
     )
 
     assert plan.confidence == "高"
@@ -247,6 +248,7 @@ def test_rrr_below_two_blocks_high_confidence():
         target_range=[10.9],
         tech_data=_valid_tech_data(),
         sector_status="main_trend",
+            hypothesis_x="测试买入理由:放量突破MA25",
     )
 
     assert plan.rrr_low < 2.0
@@ -279,6 +281,11 @@ def test_execution_plan_builds_current_state_tiers():
 
 
 def test_scheduler_schedules_low_confidence_for_display_only():
+    """低置信（假说完整）仍可调度；execute=False（假说被拒）不进调度转 skipped。
+
+    【一】新语义：execution_plan.execute=False 表示假说出厂被拒
+    （缺 X/Y/Z/W、止损倒挂、缓冲不足），调度器兜底拦截。
+    """
     plan = build_execution_plan(
         entry_type="价量突破",
         benchmark_price=10.0,
@@ -286,13 +293,25 @@ def test_scheduler_schedules_low_confidence_for_display_only():
         target_range=[11.5],
         tech_data=_valid_tech_data(),
         sector_status="main_trend",
+        hypothesis_x="测试买入理由:放量突破MA25",
     )
     low_plan = dict(plan.as_dict())
     low_plan.update({"execute": False, "confidence": "低", "combined_risk_multiplier": 1.0})
+    # 低置信但假说完整：execute 保持 True
+    low_conf_complete = dict(plan.as_dict())
+    low_conf_complete.update({"confidence": "低", "combined_risk_multiplier": 1.0})
     entries = [
         {
             "stock_code": "LOW",
             "stock_name": "低置信",
+            "entry_type": "价量突破",
+            "trigger_price": 10.0,
+            "confidence": "低",
+            "execution_plan": low_conf_complete,
+        },
+        {
+            "stock_code": "REJ",
+            "stock_name": "被拒",
             "entry_type": "价量突破",
             "trigger_price": 10.0,
             "confidence": "低",
@@ -312,12 +331,15 @@ def test_scheduler_schedules_low_confidence_for_display_only():
 
     scheduled = schedule_live_signals(entries, [])
 
+    # 假说被拒（execute=False）→ 不进调度，进 skipped 留痕
     assert [item.stock_code for item in scheduled["buy"]] == ["PLAN", "LOW"]
     assert scheduled["buy"][0].shares == 10_000
     assert scheduled["buy"][0].risk_multiplier == 0.4
     assert scheduled["buy"][1].shares == 25_000
     assert scheduled["buy"][1].confidence == "低"
     assert not scheduled["skipped"]["buy_low_confidence"]
+    assert [s["stock_code"] for s in scheduled["skipped"]["buy_hypothesis_rejected"]] == ["REJ"]
+    assert scheduled["stats"]["buy_hypothesis_rejected"] == 1
 
 
 def test_scheduler_uses_main_tier_and_defend_caps_industry_boost():
@@ -328,6 +350,7 @@ def test_scheduler_uses_main_tier_and_defend_caps_industry_boost():
         target_range=[11.5],
         tech_data=_valid_tech_data(),
         sector_status="main_trend",
+            hypothesis_x="测试买入理由:放量突破MA25",
         sector_name="半导体",
     )
     plan_dict = plan.as_dict()
@@ -421,6 +444,7 @@ def test_template_renders_execution_plan():
         target_range=[191.38],
         tech_data=_valid_tech_data(),
         sector_status="main_trend",
+            hypothesis_x="测试买入理由:放量突破MA25",
     )
 
     rendered = _execution_plan({"execution_plan": plan.as_dict()})
@@ -439,6 +463,7 @@ def test_entry_render_uses_compact_execution_format():
         target_range=[191.38],
         tech_data=_valid_tech_data(),
         sector_status="main_trend",
+            hypothesis_x="测试买入理由:放量突破MA25",
     )
     plan_dict = plan.as_dict()
     plan_dict.update({

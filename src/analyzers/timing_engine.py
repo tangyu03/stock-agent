@@ -37,7 +37,7 @@ class EntrySignal:
     """入场信号"""
     stock_code: str
     stock_name: str
-    entry_type: str               # 恐慌抄底 / 套利低吸 / 确认追强
+    entry_type: str               # 恐慌抄底 / 套利低吸 / 确认追强 / 价量突破
     entry_trigger_price: float
     stop_loss: float               # 系统自动计算
     target_type: str               # 主升持有 / 冲高止盈 / 持有观察
@@ -57,6 +57,12 @@ class EntrySignal:
     kline_patterns: List[Dict] = field(default_factory=list)
     tech_data: Dict = field(default_factory=dict)
     execution_plan: Dict = field(default_factory=dict)
+    # 【一】可证伪假说（X/Y/Z/W 四要素，出厂检查已通过才到达这里）
+    hypothesis: Dict = field(default_factory=dict)
+    # 【三】信号事件 ID（生命周期链接，回执后转 triggered）
+    event_id: str = ""
+    # 【三】受众：empty=仅空仓者成立 / holding=持仓者加仓参考
+    audience: str = "empty"
 
 
 @dataclass
@@ -64,7 +70,7 @@ class ExitSignal:
     """出场信号"""
     stock_code: str
     stock_name: str
-    exit_type: str                 # 破位止损 / 破位预警 / 冲高止盈 / MA5压制 / 技术走弱 / 板块退潮
+    exit_type: str                 # 破位止损 / 破位预警 / 冲高止盈 / MA5压制 / 技术走弱 / 板块退潮 / 策略兑现 / 信号作废 / 信号过期
     trigger_price: float
     stop_loss_price: float
     reason: str
@@ -74,6 +80,9 @@ class ExitSignal:
     sector_name: str = ""
     sw_level3: str = ""
     tech_data: Dict = field(default_factory=dict)
+    # 【四】配对出场标记：paired=策略原生 Z/W 硬触发 / system=旧系统兜底（降观察）
+    source: str = "system"
+    paired_strategy: str = ""
 
 @dataclass
 class StopLossCalc:
@@ -116,6 +125,26 @@ DEFAULT_TIMING_CONFIG = {
     },
     "volume_breakout": {
         "require_rs_above_ma": True,
+        "require_event_boundary": True,   # 【三】事件边界：昨收在昨日MA25下方且今价站上MA25才诞生
+        "require_bullish_close": True,    # 【三】诞生条件：当日收阳（两条腿缺一不可）
+    },
+    "hypothesis_gate": {
+        "enabled": True,                  # 【一】可证伪性出厂检查总开关
+        "z_atr_mult": 1.5,               # Z 距结构位的最小 ATR 缓冲（宽度由波动率决定）
+        "z_pct_buffer": 0.005,           # Z 距结构位的最小百分比缓冲
+        "min_z_buffer_pct": 0.01,        # ATR 缺失时 Y-Z 最小百分比宽度
+    },
+    "data_guard": {
+        "turnover_threshold_pct": 10.0,   # 【二】换手/量级一致性：换手阈值（%）
+        "max_volume_shares": 1.0e9,       # 【二】换手<阈值且量>此值 → 脏数据拦截
+    },
+    "signal_lifecycle": {
+        "valid_days": 5,                  # 【三】回踩买点有效期（N日）
+    },
+    "strategy_stats": {
+        "min_trades_for_stats": 30,       # 【六】分层统计最小样本
+        "kill_rolling_window": 50,        # 【六】滚动窗口
+        "kill_min_trades": 50,            # 【六】下线判定的最小样本
     },
     "exit": {
         "breakdown": {
@@ -271,6 +300,23 @@ class TimingEngine:
         self._market_cache: Optional[Dict] = None
         self._cache_lock = threading.Lock()
 
+        # 【三】信号生命周期（状态→事件）：实盘用 DB 跨日去重，回测/无DB用内存
+        from .signal_lifecycle import SignalLifecycle, InMemorySignalEventStore
+        if backtest_mode:
+            store = InMemorySignalEventStore()
+        else:
+            try:
+                from .signal_lifecycle import DbSignalEventStore
+                store = DbSignalEventStore()
+            except Exception as e:
+                logger.warning("DB事件存储不可用，退化为内存生命周期: %s", e)
+                store = InMemorySignalEventStore()
+        self._lifecycle = SignalLifecycle(
+            store, valid_days=int(self._cfg("signal_lifecycle", "valid_days", default=5))
+        )
+        # 【一】出厂拒绝留痕（供 unified_engine 采集 → signal_rejections 表）
+        self._entry_rejections: Dict[str, Dict] = {}
+
         # 回测模式上下文
         self._backtest_mode = backtest_mode
         self._backtest_kline: Dict[str, List[Dict]] = {}
@@ -327,6 +373,7 @@ class TimingEngine:
             self._tech_data_full.clear()
             self._exit_diagnostics.clear()
             self._market_cache = None
+            self._entry_rejections.clear()
 
     # ============================================================
     # 大盘数据预取
@@ -574,7 +621,8 @@ class TimingEngine:
         # 获取技术数据 + 止损价
         tech_data = self._fetch_tech_data(stock_code, market_mode)
         from .signal_plan import build_volume_snapshot
-        volume_snapshot = build_volume_snapshot(tech_data)
+        data_guard = self._cfg("data_guard") or None
+        volume_snapshot = build_volume_snapshot(tech_data, guard=data_guard)
         if volume_snapshot.dirty:
             tech_data["volume_data_valid"] = False
             tech_data["volume_snapshot"] = volume_snapshot.as_dict()
@@ -586,6 +634,19 @@ class TimingEngine:
         # 入场检查先落缓存，保证未触发买入时诊断用的是同一份完整数据
         self._tech_data_full[stock_code] = tech_data
         stop_loss_calc = self.calculate_stop_loss(stock_code, tech_data)
+
+        # 【三】事件生命周期去重：同股同策略的活跃事件（valid）只诞生一次，
+        # 不再原样重播（沃尔德连续两天推同一"站上MA25"的状态信号 → 事件化后消失）。
+        # 活跃事件的演化路径（回踩有效/失效撤单/过期）由 evaluate_signal_events 处理。
+        active_events = self._lifecycle.get_active_events(stock_code)
+        active_types = {e.entry_type for e in active_events}
+        if active_types:
+            self._tech_data_full[stock_code] = tech_data
+            logger.debug(
+                "%s 存在活跃信号事件 %s，跳过重复生成（事件生命周期内）",
+                stock_code, active_types,
+            )
+            return []
 
         # 独立检查四种进场策略
         raw_signals = []
@@ -604,6 +665,12 @@ class TimingEngine:
 
         # 合并为一条综合信号
         merged = self._merge_entry_signals(raw_signals, tech_data, market_mode, sector_status)
+
+        # 【一】可证伪假说构建 + 出厂检查（配对 Z/W 锚定，X/Y/Z/W 缺一即拒绝）
+        from .hypothesis import build_entry_hypothesis, calc_atr_from_kline
+        atr = calc_atr_from_kline(tech_data.get("kline") or [], period=14)
+
+        valid_signals: List[EntrySignal] = []
         for sig in merged:
             sig.tech_data = tech_data
             from .signal_plan import build_execution_plan
@@ -612,21 +679,81 @@ class TimingEngine:
                 if tech_data.get("ma10") and float(tech_data.get("ma10")) > 0
                 else sig.entry_trigger_price
             )
+            # 【四】配对止损：Z = X 的直接否定（结构位 - 波动率缓冲），
+            # 替换原"现价锚定的支撑位止损"（沃尔德 9/4 倒挂根源：止损锚现价、
+            # 买点锚 MA10，两个锚点错位 → 93.94 > 93.88）
+            hyp = build_entry_hypothesis(
+                entry_type=sig.entry_type,
+                tech_data=tech_data,
+                benchmark_price=main_tier_price,
+                target_range=sig.target_range,
+                trigger_reason=sig.trigger_reason,
+                atr=atr,
+                config=self._tc,
+                stop_loss_fallback=sig.stop_loss,
+            )
+            sig.stop_loss = hyp.exit_z
             plan = build_execution_plan(
                 entry_type=sig.entry_type,
                 benchmark_price=main_tier_price,
-                stop_loss=sig.stop_loss,
+                stop_loss=hyp.exit_z,
                 target_range=sig.target_range,
                 tech_data=tech_data,
                 sector_status=sector_status,
                 sector_name=getattr(sig, "sector_name", "") or getattr(sig, "sw_level2", ""),
+                hypothesis_x=hyp.reason_x,
+                hypothesis=hyp.as_dict(),
+                atr=atr,
+                data_guard=data_guard,
+                gate_config=self._tc,
             )
             sig.execution_plan = plan.as_dict()
+            if plan.hypothesis_rejected:
+                # 【一】出厂拒绝：不进调度不推送，留痕供审计（signal_rejections 表）
+                self._entry_rejections[stock_code] = {
+                    "stock_code": stock_code,
+                    "stock_name": stock_name,
+                    "entry_type": sig.entry_type,
+                    "benchmark_price": plan.benchmark_price,
+                    "stop_loss": plan.stop_loss,
+                    "target_range": plan.target_range,
+                    "reasons": list(plan.rejection_reasons),
+                    "hypothesis": plan.hypothesis,
+                }
+                logger.warning(
+                    "信号出厂被拒 %s %s: %s",
+                    stock_code, sig.entry_type, "; ".join(plan.rejection_reasons),
+                )
+                continue
             sig.confidence = plan.confidence
             sig.benchmark_price = plan.benchmark_price
             sig.rrr_low = plan.rrr_low
             sig.rrr_high = plan.rrr_high
-        return merged
+            sig.hypothesis = plan.hypothesis
+            valid_signals.append(sig)
+
+        if not valid_signals:
+            return []
+
+        # 【三】事件诞生：通过出厂检查的信号注册生命周期
+        # （N 日内回踩买点有效；收盘跌回突破位/板块退潮 → 立即撤单）
+        for sig in valid_signals:
+            try:
+                event = self._lifecycle.register_event(
+                    stock_code=sig.stock_code,
+                    stock_name=sig.stock_name,
+                    entry_type=sig.entry_type,
+                    breakout_level=sig.hypothesis.get("z_reference") or sig.hypothesis.get("z", 0),
+                    entry_price=sig.hypothesis.get("y") or main_tier_price,
+                    stop_loss=sig.hypothesis.get("z") or sig.stop_loss,
+                    target_low=(sig.hypothesis.get("w") or [0, 0])[0],
+                    target_high=(sig.hypothesis.get("w") or [0, 0])[-1],
+                    hypothesis=sig.hypothesis,
+                )
+                sig.event_id = event.event_id
+            except Exception as e:
+                logger.debug("事件注册失败 %s: %s", sig.stock_code, e)
+        return valid_signals
 
     def _check_panic_bottom(self, code, name, tech_data, stop_loss, mode, sector) -> Optional[EntrySignal]:
         """
@@ -934,9 +1061,37 @@ class TimingEngine:
         if not all([current, ma25, prev_close]):
             return None
 
-        # 站上 MA25（不要求"首次突破"，已站上的也算趋势延续）
-        # 原条件 prev_close <= ma25_prev 太严格，只在首次突破当天触发
-        # 新条件：当前价站上 MA25 即可（趋势中或突破都算）
+        # 【三】事件边界（状态 → 事件）：
+        # "站上 MA25"是状态——今天为真、明天也为真，导致同一信号连发两天。
+        # 事件化：昨收在昨日 MA25 下方（或贴线），今日站上今日 MA25 → 突破当日诞生。
+        # 注意 _fetch_tech_data 已算好 ma25_prev（昨日 MA25），此前被刻意弃用。
+        require_event_boundary = self._cfg(
+            "volume_breakout", "require_event_boundary", default=True
+        )
+        if require_event_boundary:
+            ma25_prev = tech_data.get("ma25_prev")
+            if ma25_prev and prev_close:
+                crossed_today = prev_close <= ma25_prev * 1.002 and current > ma25
+                if not crossed_today:
+                    return None
+            else:
+                # 无昨日数据无法判定事件边界 → 拒绝（宁可漏过，不可重播）
+                return None
+
+        # 【三】诞生双腿之一：当日收阳（日内以 现价>今开 近似收盘态）
+        require_bullish = self._cfg(
+            "volume_breakout", "require_bullish_close", default=True
+        )
+        if require_bullish:
+            today_open = tech_data.get("today_open") or 0
+            if not today_open:
+                kline = tech_data.get("kline") or []
+                if kline:
+                    today_open = float(kline[-1].get("开盘", kline[-1].get("open", 0)) or 0)
+            if today_open and current <= today_open:
+                return None
+
+        # 事件有效期内价格仍需站上 MA25（跌回突破位的由生命周期失效逻辑撤单）
         price_above_ma25 = current > ma25
         if not price_above_ma25:
             return None
@@ -959,7 +1114,7 @@ class TimingEngine:
         from .signal_plan import build_volume_snapshot
 
         # 触发、置信度和分档必须读同一份量能快照，避免原始字段和分位口径分裂。
-        volume_snapshot = build_volume_snapshot(tech_data)
+        volume_snapshot = build_volume_snapshot(tech_data, guard=self._cfg("data_guard") or None)
         if volume_snapshot.volume_vs_ma60 is None:
             return None
         volume_breakout = (
@@ -971,7 +1126,7 @@ class TimingEngine:
 
         vol_ratio = volume_snapshot.volume_vs_ma60 or 0
         conditions = [
-            f"站上MA25({ma25:.2f})",
+            f"突破MA25(昨收{prev_close:.2f}在昨日MA25下方，今价{current:.2f}站上{ma25:.2f})",
             f"量能突破60日均量({vol_ratio:.1f}倍)" if volume_breakout else f"涨停豁免量能(涨幅{(current-prev_close)/prev_close*100:.1f}%)",
         ]
 
@@ -1025,6 +1180,22 @@ class TimingEngine:
 
         current_price = tech_data.get("current_price", 0)
 
+        # ============================================================
+        # 【四】Block 0: 策略配对出场——读取该持仓的入场假说（X/Y/Z/W）
+        # 每个策略在定义买入的那一刻就定义卖出：Z 是 X 的直接否定（硬触发），
+        # W 是兑现位（价位触发，与进场同颗粒度）；旧漂移止损+投票门降为辅助观察。
+        # 持仓策略未知（无回执记录）时退回旧系统兑底逻辑。
+        # ============================================================
+        paired_position = self._get_paired_position(stock_code)
+        paired_strategy = (paired_position or {}).get("entry_type") or ""
+        if paired_position and (paired_position.get("paired_z") or 0) > 0:
+            # C1 破位止损锚定到配对 Z（X 的直接否定），
+            # 不再用"现价锚定支撑位"的漂移止损（沃尔德式两个锚点错位根源）
+            stop_loss_calc.stop_loss_price = float(paired_position["paired_z"])
+            paired_ref = float(paired_position.get("z_reference") or 0)
+            if paired_ref > 0:
+                stop_loss_calc.chosen_support = paired_ref
+
         # 技术指标投票 + K 线形态
         tech_vote = tech_data.get("tech_signals", {}).get("vote", "中性")
         tech_score = tech_data.get("tech_signals", {}).get("vote_score", 0)
@@ -1046,7 +1217,11 @@ class TimingEngine:
             heavy_vol_thresh = self._cfg("exit", "breakdown", "heavy_volume_ratio", default=1.3)
 
             # C1: 硬触发，不再要求三重确认
-            reason = f'跌破{stop_loss_calc.chosen_support:.2f}(止损{stop_loss_calc.stop_loss_price:.2f})，硬触发'
+            if paired_position:
+                reason = (f'跌破配对止损Z={stop_loss_calc.stop_loss_price:.2f}'
+                          f'（[{paired_strategy}]买入理由的直接否定，X 被证伪），硬触发')
+            else:
+                reason = f'跌破{stop_loss_calc.chosen_support:.2f}(止损{stop_loss_calc.stop_loss_price:.2f})，硬触发'
             # 量能/投票作为附加信息（不影响触发，只影响推送级别描述）
             if vol_ratio > heavy_vol_thresh:
                 reason += f'，放量破位(量比{vol_ratio:.2f})'
@@ -1280,6 +1455,50 @@ class TimingEngine:
                 if '吞没' in pat or '乌云' in pat:
                     exhaustion.append(('medium', f'K线:{pat}'))
 
+        # ============================================================
+        # 【四】Block 6: 策略配对 W（兑现离场）—— 价位硬触发 + 确认追强动能耗尽
+        # 买卖敏感度对称：进场精确到 0.1% 挂单，出场同样在价位上触发，
+        # 不再等 8~10% 外加四重投票。
+        # ============================================================
+        if paired_position:
+            w_low = float(paired_position.get("paired_w_low") or 0)
+            w_high = float(paired_position.get("paired_w_high") or 0)
+            if w_low > 0 and current_price >= w_low:
+                kline_raw_pw = tech_data.get('kline', [])
+                recent_5d_low = (
+                    min(float(k.get('最低', k.get('low', 999999))) for k in kline_raw_pw[-5:])
+                    if len(kline_raw_pw) >= 5 else current_price
+                )
+                trailing = round(max(recent_5d_low * 1.02, w_low), 2)  # trailing跟随近5日低
+                hit_high = w_high > 0 and current_price >= w_high
+                action = "清仓兑现" if hit_high else "减半+trailing跟随"
+                signals.append(ExitSignal(
+                    stock_code=stock_code, stock_name=stock_name,
+                    exit_type='策略兑现', trigger_price=current_price,
+                    stop_loss_price=min(trailing, current_price),
+                    reason=(f'[{paired_strategy}] 兑现条件W触发: 现价{current_price:.2f}'
+                            f'触及兑现位{w_low:.2f}'
+                            + (f'~{w_high:.2f}' if w_high > w_low else '')
+                            + f'，{action}；trailing {trailing:.2f}（价位触发，非投票门）'),
+                    urgency='紧急' if hit_high else '重要', mode_constrained=False,
+                    sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
+                    source='paired', paired_strategy=paired_strategy,
+                ))
+            elif paired_strategy == '确认追强' and exhaustion:
+                strong_ex = sum(1 for lvl, _ in exhaustion if lvl == 'strong')
+                if strong_ex >= 1:
+                    labels = '; '.join(lbl for _, lbl in exhaustion)
+                    signals.append(ExitSignal(
+                        stock_code=stock_code, stock_name=stock_name,
+                        exit_type='策略兑现', trigger_price=current_price,
+                        stop_loss_price=stop_loss_calc.stop_loss_price,
+                        reason=f'[确认追强] 兑现条件W(动能耗尽): {labels}——提前分批兑现',
+                        urgency='重要', mode_constrained=False,
+                        sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
+                        source='paired', paired_strategy=paired_strategy,
+                    ))
+
+
         # === 推送 ===
         # 三类信号分别推送：冲高止盈 / MA5压制 / 技术走弱
         strong_min = self._cfg("exit", "exhaustion", "strong_signal_min_count", default=2)
@@ -1398,6 +1617,17 @@ class TimingEngine:
                 ))
 
 
+        # ============================================================
+        # 【四】配对优先：已知持仓策略时，旧系统出场信号降级为辅助观察
+        # （配对 Z/W 是硬触发；破位止损作为系统安全网保留硬触发）
+        # 注：必须放在旧信号全部生成之后（推送段之后）再统一降级。
+        # ============================================================
+        if paired_position:
+            for sig in signals:
+                if getattr(sig, 'source', 'system') == 'system' and sig.exit_type != '破位止损':
+                    sig.urgency = '观察'
+                    sig.reason = f"[辅助观察·非策略配对出场] {sig.reason}"
+
         # 合并同类 + 追加推导链
         if not signals:
             if not tech_data:
@@ -1442,6 +1672,58 @@ class TimingEngine:
             sig.reason += "\n  推导: " + derivation
 
         return list(merged.values())
+
+    # ============================================================
+    # 【四】配对持仓读取 / 【三】事件生命周期评估
+    # ============================================================
+
+    def _get_paired_position(self, stock_code: str) -> Optional[Dict]:
+        """读取该持仓的入场假说（来源：回执闭环 trade_logs executed 买入行）。
+
+        返回 dict: entry_type / paired_z / paired_w_low / paired_w_high /
+        z_reference / entry_price / hypothesis_sentence 等；无持仓返回 None。
+        回测模式不读 DB，直接返回 None（回测引擎自管出场）。
+
+        实盘/复盘使用 `get_paired_position`：已回执持仓优先，
+        未回执的买入信号只要有配对假说也跟踪出场；真实持仓聚合仍只认 executed。
+        """
+        if self._backtest_mode:
+            return None
+        try:
+            from ..feedback.trade_logger import get_trade_logger
+            position = get_trade_logger().get_paired_position(stock_code)
+            return position if position else None
+        except Exception as e:
+            logger.debug("配对持仓读取失败 %s: %s", stock_code, e)
+            return None
+
+    def evaluate_signal_events(
+        self,
+        stock_code: str,
+        current_price: float = 0,
+        sector_status: str = "",
+    ) -> List[Dict]:
+        """【三】评估该股活跃信号事件的状态迁移（失效撤单/过期），返回通知列表。
+
+        由 unified_engine 在出场扫描后调用；返回的 dict 直接并入 batch.exits
+        （engine.py 已支持 dict 型出场信号推送）。
+        """
+        try:
+            return self._lifecycle.evaluate_events(
+                stock_code,
+                current_price=current_price,
+                sector_status=sector_status,
+            )
+        except Exception as e:
+            logger.debug("事件评估失败 %s: %s", stock_code, e)
+            return []
+
+    def lifecycle_status_note(self, stock_code: str, current_price: float = 0) -> str:
+        """【三】观察卡用：活跃事件状态（回踩买点是否有效/第几天）"""
+        try:
+            return self._lifecycle.event_status_note(stock_code, current_price)
+        except Exception:
+            return ""
 
     # ============ 止损价计算 ============
 
@@ -1852,6 +2134,9 @@ class TimingEngine:
             data["change_pct"] = realtime.get("change_pct", 0)
             if realtime.get("quote", {}).get("turnover_rate"):
                 data["turnover_rate"] = realtime["quote"]["turnover_rate"]
+            # 【三】今日开盘价（事件诞生收阳判定用）
+            if realtime.get("quote", {}).get("today_open"):
+                data["today_open"] = realtime["quote"]["today_open"]
             # 量比：优先用行情接口返回字段（与同花顺/腾讯一致），
             # 不用 K 线均量近似值；无接口数据（回测/停牌/接口缺失）时才用 K 线兜底
             if realtime.get("volume_ratio"):

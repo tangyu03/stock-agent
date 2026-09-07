@@ -249,6 +249,63 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_board_component_date_code "
                    "ON board_component(snapshot_date, stock_code)")
 
+    # 【三】信号事件表（生命周期：诞生/有效期/失效/触发）
+    # "站上MA25"是状态——今天为真、明天也为真；事件化后每个信号只诞生一次，
+    # N 日内回踩买点有效，收盘跌回突破位或板块退潮立即撤单作废。
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS signal_events (
+        event_id TEXT PRIMARY KEY,
+        stock_code TEXT NOT NULL,
+        stock_name TEXT,
+        entry_type TEXT NOT NULL,
+        born_date TEXT NOT NULL,
+        expire_date TEXT,
+        breakout_level REAL,
+        entry_price REAL,
+        stop_loss REAL,
+        target_low REAL,
+        target_high REAL,
+        hypothesis_x TEXT,
+        hypothesis_y TEXT,
+        hypothesis_z TEXT,
+        hypothesis_w TEXT,
+        status TEXT DEFAULT 'valid',
+        invalid_reason TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_signal_events_code_status "
+                   "ON signal_events(stock_code, status)")
+
+    # 【一】出厂拒绝留痕表（可证伪性检查拦下的信号：不进调度不推送，但可审计）
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS signal_rejections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        time TEXT,
+        stock_code TEXT,
+        stock_name TEXT,
+        entry_type TEXT,
+        missing_fields TEXT,
+        reason TEXT,
+        detail TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # 【六】策略状态表（记录闭环 → 自动下线）
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS strategy_status (
+        strategy TEXT PRIMARY KEY,
+        status TEXT DEFAULT 'active',
+        reason TEXT,
+        stats_json TEXT,
+        since TEXT,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
     conn.commit()
     _migrate()
     logger.info("Database initialized successfully at %s", DB_PATH)
@@ -267,6 +324,35 @@ def _migrate():
             logger.info("迁移: trade_logs 新增 shares 列")
     except Exception as e:
         logger.error("迁移 trade_logs.shares 失败: %s", e)
+
+    # 【六】记录闭环：假说四要素 / 配对 Z/W / 事件链接 / 归因四行日志
+    try:
+        cols = {r[1] for r in cursor.execute("PRAGMA table_info(trade_logs)")}
+        additions = {
+            "hypothesis_x": "TEXT",
+            "hypothesis_y": "TEXT",
+            "hypothesis_z": "TEXT",
+            "hypothesis_w": "TEXT",
+            "hypothesis_sentence": "TEXT",
+            "paired_z": "REAL",
+            "paired_w_low": "REAL",
+            "paired_w_high": "REAL",
+            "z_reference": "REAL",
+            "event_id": "TEXT",
+            "zw_triggered": "TEXT",
+            "exit_price": "REAL",
+            "exit_date": "TEXT",
+            "pnl_pct": "REAL",
+            "review_outcome": "TEXT",
+            "review_note": "TEXT",
+        }
+        for column, col_type in additions.items():
+            if column not in cols:
+                cursor.execute(f"ALTER TABLE trade_logs ADD COLUMN {column} {col_type}")
+                conn.commit()
+                logger.info("迁移: trade_logs 新增 %s 列", column)
+    except Exception as e:
+        logger.error("迁移 trade_logs 假说列失败: %s", e)
 
 
 if __name__ == "__main__":

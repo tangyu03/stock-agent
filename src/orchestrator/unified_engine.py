@@ -30,6 +30,11 @@ class UnifiedSignalBatch:
     entries: List[EntrySignal] = field(default_factory=list)
     exits: List[ExitSignal] = field(default_factory=list)
 
+    # 【一】出厂拒绝留痕（假说四要素不完整的信号，不推送但可审计）
+    rejected: List[Dict] = field(default_factory=list)
+    # 【三】信号事件状态迁移通知（失效撤单/过期）
+    event_notices: List[Dict] = field(default_factory=list)
+
 
 def _build_sector_for_stock(code: str, sector_map: Dict[str, str],
                               stock_sector_map: Dict[str, str],
@@ -310,14 +315,25 @@ def run_unified_analysis(
             filter_result=filter_result,
             market_score=market_score,
         )
+        # 【一】采集出厂拒绝留痕（假说不完整：缺 X/Y/Z/W、止损倒挂、缓冲不足）
+        rejection = timing._entry_rejections.pop(code, None)
+        if rejection:
+            batch.rejected.append(rejection)
         if signals:
             batch.entries.extend(signals)
             entry_codes.add(code)
         else:
             entry_tech = timing._tech_data_full.get(code, {})
-            batch.entry_diagnostics[code] = _explain_no_entry(
+            diagnostics = _explain_no_entry(
                 market_mode, sector, entry_tech if isinstance(entry_tech, dict) else {}
             )
+            # 【三】观察卡补充活跃事件状态（回踩买点有效/第几天）
+            event_note = timing.lifecycle_status_note(
+                code, float((entry_tech or {}).get("current_price") or 0)
+            )
+            if event_note:
+                diagnostics += f"\n事件状态: {event_note}"
+            batch.entry_diagnostics[code] = diagnostics
 
     # -------- 2. 出场信号（全量扫）--------
     logger.info("--- 统一引擎：出场检查 ---")
@@ -334,6 +350,18 @@ def run_unified_analysis(
             sector_name=stock_sector_name,
         )
         batch.exits.extend(exit_sigs)
+
+        # 【三】信号事件生命周期评估：收盘跌回突破位/板块退潮 → 立即撤单；
+        # 超期 → 作废。通知作为 dict 型出场信号进入推送。
+        current_price = float(
+            (timing._tech_data_full.get(code) or {}).get("current_price") or 0
+        )
+        notices = timing.evaluate_signal_events(
+            code, current_price=current_price, sector_status=sector
+        )
+        if notices:
+            batch.exits.extend(notices)
+            batch.event_notices.extend(notices)
 
     # -------- 3. 注入板块信息到信号 --------
     # 复用 sector_ranker 已有数据（stock_sector + ranker_result），不触发额外 API 调用
