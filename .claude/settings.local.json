@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(grep -a -vE \"^\\\\s*$\" /tmp/render_out.txt)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(iconv -f UTF-8 -t UTF-8 -c /tmp/render_out.txt)",
+      "Read(//c/Users/15831/.claude/projects/C--Users-15831-Documents-code-stock-agent/memory//**)",
+      "Read(//c/Users/15831/.claude/projects/C--Users-15831-Documents-code-stock-agent/memory/**)",
+      "Bash(PYTHONIOENCODING=utf-8 python *)"
+    ]
+  }
+}

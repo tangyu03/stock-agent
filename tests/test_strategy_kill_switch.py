@@ -290,6 +290,42 @@ class TestTradeLogHypothesis:
         # 无持仓
         assert tl.get_open_position("688999") is None
 
+    def test_pending_buy_signal_is_usable_for_paired_exit(self, monkeypatch):
+        """未回执的信号也是可证伪假说：配对出场无需用户手动 --execute。"""
+        import src.db as db
+        from src.feedback.trade_logger import get_trade_logger
+
+        from pathlib import Path
+
+        monkeypatch.setattr(db, "DB_PATH", Path(":memory:"))
+        if hasattr(db._thread_local, "conn"):
+            try:
+                db._thread_local.conn.close()
+            except Exception:
+                pass
+            db._thread_local.conn = None
+        db.init_db()
+
+        tl = get_trade_logger()
+        tl.log_signal(
+            signal_type="buy", stock_code="002975", stock_name="博杰股份",
+            signal_data={
+                "entry_type": "价量突破", "trigger_price": 102.28,
+                "stop_loss": 98.48, "target_price": 110.46,
+                "paired_z": 98.48, "paired_w_low": 110.46, "paired_w_high": 117.62,
+                "hypothesis": {"x": "放量突破MA25", "y": 102.28, "z": 98.48,
+                               "w": [110.46, 117.62]},
+            },
+            shares=2400,
+        )
+        paired = tl.get_paired_position("002975")
+        assert paired is not None
+        assert paired["user_action"] == "pending"
+        assert paired["paired_z"] == 98.48
+        # pending 只用于配对出场，不进入真实持仓聚合
+        assert tl.get_open_position("002975") is None
+        assert tl.get_current_holdings() == []
+
 
 class TestRejectionLogging:
     """【一】出厂拒绝留痕表"""

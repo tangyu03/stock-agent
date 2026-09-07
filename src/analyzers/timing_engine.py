@@ -1695,17 +1695,20 @@ class TimingEngine:
     # ============================================================
 
     def _get_paired_position(self, stock_code: str) -> Optional[Dict]:
-        """读取该持仓的入场假说（来源：回执闭环 trade_logs executed 买入行）。
+        """读取可用于配对出场的持仓或买入信号。
 
         返回 dict: entry_type / paired_z / paired_w_low / paired_w_high /
         z_reference / entry_price / hypothesis_sentence 等；无持仓返回 None。
         回测模式不读 DB，直接返回 None（回测引擎自管出场）。
+
+        实盘/复盘使用 `get_paired_position`：已回执持仓优先，
+        未回执的买入信号只要有配对假说也跟踪出场；真实持仓聚合仍只认 executed。
         """
         if self._backtest_mode:
             return None
         try:
             from ..feedback.trade_logger import get_trade_logger
-            position = get_trade_logger().get_open_position(stock_code)
+            position = get_trade_logger().get_paired_position(stock_code)
             return position if position else None
         except Exception as e:
             logger.debug("配对持仓读取失败 %s: %s", stock_code, e)

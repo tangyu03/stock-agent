@@ -381,6 +381,45 @@ class TradeLogger:
             logger.error("读取开仓持仓失败 %s: %s", code, e)
             return None
 
+    def get_paired_position(self, code: str) -> Optional[Dict]:
+        """读取可用于配对出场的最新买入信号。
+
+        优先读取已回执持仓；没有回执时退回最近的 pending 买入信号。
+        这使信号服务模式下的假说出场无需用户手动回执；实际持仓统计仍
+        只使用 `get_open_position` / executed 记录，不会把 pending 当成真实持仓。
+        """
+        try:
+            position = self.get_open_position(code)
+            if position:
+                return position
+            with get_conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """SELECT * FROM trade_logs
+                       WHERE stock_code=? AND user_action='pending'
+                       AND signal_type IN ('buy','t0_buy')
+                         AND (paired_z > 0 OR stop_loss > 0)
+                       ORDER BY date DESC, time DESC, id DESC
+                       LIMIT 1""",
+                    (code,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                position = dict(row)
+                position["log_id"] = position.get("id")
+                position["entry_price"] = float(
+                    (position.get("actual_price") or 0)
+                    or (position.get("trigger_price") or 0)
+                )
+                # 旧信号可能只有 stop_loss，没有新的 paired_z 列。
+                if not (position.get("paired_z") or 0):
+                    position["paired_z"] = position.get("stop_loss") or 0
+                return position
+        except Exception as e:
+            logger.error("读取配对信号失败 %s: %s", code, e)
+            return None
+
     def get_closed_trades(self) -> List[Dict]:
         """【六】已平仓交易列表（回执联动的配对结果，供分层统计/下线判定）。
 
