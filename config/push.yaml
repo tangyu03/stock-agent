@@ -1,0 +1,11 @@
+version: "1.0"
+
+pushplus:
+  token: "bf2b6f5b05884e36a5d4ec10878a0537"
+  daily_limit: 200
+  template_style: "compact"
+
+levels:
+  routine: "🔵 常规"
+  important: "🟡 重要"
+  urgent: "🔴 紧急"

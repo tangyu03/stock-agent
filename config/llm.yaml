@@ -1,0 +1,50 @@
+version: "1.0"
+
+llm:
+  active: deepseek
+
+  providers:
+    deepseek:
+      api_key: "$API_KEY_LLM"  # 从环境变量读取，原值已吊销
+      base_url: "https://api.deepseek.com/v1"
+      model: "deepseek-chat"
+      max_tokens: 4096
+      temperature: 0.3
+
+    openai:
+      api_key: "sk-xxx"
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4o"
+      max_tokens: 4096
+      temperature: 0.3
+
+    ollama:
+      api_key: ""
+      base_url: "http://localhost:11434/v1"
+      model: "qwen3:14b"
+      max_tokens: 4096
+      temperature: 0.3
+
+  prompts:
+    judgment_extraction:
+      system: |
+        你是A股研究分析师。从用户输入的文章中提取可验证的判断。
+        规则：
+        1. 只提取"判断层"——对未来的预测/因果推理
+        2. 排除"事实层"（已发生的事）和"逻辑层"（抽象框架）
+        3. 每个判断必须可追踪、可证伪
+        4. 为每个判断关联A股标的（代码+名称+角色）
+        5. 标注判断间的关联链
+      temperature: 0.2
+
+    news_analysis:
+      system: |
+        你是A股新闻解读专家。分析财经新闻对个股和板块的影响。
+        输出格式：影响标的、影响方向（利好/利空）、影响程度（强/中/弱）、持续时间。
+      temperature: 0.3
+
+    financial_report_analysis:
+      system: |
+        你是A股财务分析专家。解读公司财报数据，判断经营状况。
+        重点关注：营收增速、净利润质量、现金流、应收账款变化、存货变化。
+      temperature: 0.2

@@ -1,0 +1,13 @@
+version: '1.0'
+
+# 产业层只调整建议股数，不进入技术或资金投票。
+# sector 必须使用系统透出的行业名；status 只支持 disclosed/forecast/unverified。
+# expires 到期后按 unverified 处理，避免过期预期继续放大仓位。
+industry_events: []
+
+# 示例（使用时取消注释）：
+# industry_events:
+#   - sector: 半导体
+#     status: disclosed
+#     expires: '2026-12-31'
+#     note: 产线批量交付

@@ -1,0 +1,16 @@
+{
+  "slug": "stockmatcher",
+  "name": "k线形态选股器",
+  "version": "1.0.2",
+  "installedAt": 1775751656079,
+  "source": "skillhub",
+  "changelog": {
+    "1.0.2": [
+      "新增通达信本地数据支持",
+      "移除 tushare API 依赖",
+      "数据源自动切换（东方财富优先，通达信备选）",
+      "修复安全风险：移除硬编码 token"
+    ],
+    "1.0.1": "初始版本"
+  }
+}

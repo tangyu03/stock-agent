@@ -1,0 +1,93 @@
+version: "2.0"
+
+# 板块扫描配置 v2 — 增强：行业轮动 + 资金流
+classification:
+  main_trend:
+    name: "主线热点"
+    conditions:
+      - metric: "sector_change_3d"
+        operator: ">="
+        threshold: 0.03
+        desc: "板块3日涨幅 >= 3%"
+      - metric: "sector_fund_flow_5d"
+        operator: ">"
+        threshold: 0
+        desc: "板块5日资金净流入 > 0"
+      - metric: "limit_up_count"
+        operator: ">="
+        threshold: 2
+        desc: "板块内涨停股 >= 2"
+      - metric: "sector_above_ma20"
+        operator: "=="
+        threshold: true
+        desc: "板块指数站上MA20"
+      # 轮动增强：连续站稳MA5 >= 3天 → 主线上涨有持续性
+      - metric: "consecutive_above_ma5"
+        operator: ">="
+        threshold: 3
+        desc: "连续站稳MA5 >= 3天"
+      # 轮动增强：内部热度 >= 3% → 不是孤例，有扩散效应
+      - metric: "internal_heat"
+        operator: ">="
+        threshold: 0.03
+        desc: "板块内部热度 >= 3%"
+    match_logic: "at_least_3"  # 6个条件满足至少3个
+
+  rotational:
+    name: "支线轮动"
+    conditions:
+      - metric: "sector_change_3d"
+        operator: ">="
+        threshold: 0.01
+        desc: "板块3日涨幅 >= 1%"
+      - metric: "sector_fund_flow_5d"
+        operator: "between"
+        threshold: [-200000000, 500000000]
+        desc: "板块5日资金净流入 -2亿~5亿"
+      - metric: "sector_ma_position"
+        operator: "between_ma10_ma20"
+        desc: "板块指数在MA10~MA20之间"
+      # 轮动增强：内部热度 >= 1%（板块有些许活跃度）
+      - metric: "internal_heat"
+        operator: ">="
+        threshold: 0.01
+        desc: "板块内部热度 >= 1%"
+    match_logic: "at_least_2"  # 4个条件满足至少2个
+
+  retreating:
+    name: "退潮"
+    conditions:
+      - metric: "sector_change_5d"
+        operator: "<"
+        threshold: -0.02
+        desc: "板块5日涨幅 < -2%"
+      - metric: "sector_fund_flow_5d"
+        operator: "<"
+        threshold: -300000000
+        desc: "板块5日资金净流出 > 3亿"
+      - metric: "sector_above_ma20"
+        operator: "=="
+        threshold: false
+        desc: "板块指数跌破MA20"
+      # 轮动增强：MA空头排列 → 退潮确认
+      - metric: "ma_alignment"
+        operator: "=="
+        threshold: "bearish"
+        desc: "均线空头排列"
+    match_logic: "at_least_2"  # 4个条件满足至少2个
+
+# 交叉诊断矩阵
+cross_diagnosis:
+  # 格式: [板块状态][操作模式] -> 行为
+  main_trend:
+    attack: "hold_or_add"
+    defend: "hold_observe"
+    retreat: "hold_observe"
+  rotational:
+    attack: "observe_arbitrage_only"
+    defend: "observe_no_push"
+    retreat: "no_push"
+  retreating:
+    attack: "reduce_signal"
+    defend: "reduce_signal"
+    retreat: "clear_signal_enhanced"

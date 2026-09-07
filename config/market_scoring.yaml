@@ -1,0 +1,162 @@
+version: "1.0"
+
+# 大盘评分配置 - 修复#4：加权评分 + 趋势加速度
+scoring:
+  weights:
+    index_trend: 0.25
+    ma_alignment: 0.20
+    volume: 0.20
+    advance_decline: 0.15
+    limit_stats: 0.10
+    sentiment: 0.10
+
+  dimensions:
+    index_trend:
+      max_score: 10
+      rules:
+        - condition: "above_ma20"
+          score: 10
+          desc: "站上20日均线"
+        - condition: "near_ma20"
+          score: 5
+          desc: "20日均线附近震荡(±2%)"
+        - condition: "below_ma20"
+          score: 0
+          desc: "跌破20日均线"
+
+    ma_alignment:
+      max_score: 10
+      rules:
+        - condition: "bullish"
+          score: 10
+          desc: "MA5>MA10>MA20 多头排列"
+        - condition: "converging"
+          score: 5
+          desc: "均线粘合(间距<1%)"
+        - condition: "bearish"
+          score: 0
+          desc: "空头排列"
+
+    volume:
+      max_score: 10
+      rules:
+        - condition: "above_1t"
+          score: 10
+          desc: "沪深成交 > 1万亿"
+        - condition: "between_8k_1t"
+          score: 5
+          desc: "8000亿~1万亿"
+        - condition: "below_8k"
+          score: 0
+          desc: "< 8000亿"
+
+    advance_decline:
+      max_score: 10
+      rules:
+        - condition: "ratio_above_2"
+          score: 10
+          desc: "涨/跌比 > 2"
+        - condition: "ratio_between"
+          score: 5
+          desc: "涨/跌比 0.8~2"
+        - condition: "ratio_below_08"
+          score: 0
+          desc: "涨/跌比 < 0.8"
+
+    limit_stats:
+      max_score: 10
+      rules:
+        - condition: "strong"
+          score: 10
+          desc: "涨停>50 且 跌停<10"
+        - condition: "moderate"
+          score: 5
+          desc: "涨停30~50"
+        - condition: "weak"
+          score: 0
+          desc: "涨停<30"
+
+    sentiment:
+      max_score: 10
+      rules:
+        - condition: "greedy"
+          score: 10
+          desc: "恐慌贪婪指数>70"
+        - condition: "neutral"
+          score: 5
+          desc: "恐慌贪婪指数30~70"
+        - condition: "fearful"
+          score: 0
+          desc: "恐慌贪婪指数<30"
+
+  # 趋势加速度：连续评分下降即使总分尚可也倾向保守
+  momentum:
+    consecutive_decline_days: 3
+    penalty_per_day: 0.5
+    max_penalty: 2.0
+
+# 外围市场扰动配置
+external_market:
+  enabled: true
+  # VIX 恐慌指数阈值
+  vix:
+    severe: 30       # >30 严重恐慌
+    moderate: 25     # 25-30 中度恐慌
+    mild: 20         # 20-25 轻度不安
+  # 美股跌幅阈值（标普500隔夜涨跌幅，百分比值：-2.0 表示 -2%）
+  us_decline:
+    severe: -2.0     # 跌超2% 严重
+    moderate: -1.0   # 跌1-2% 中度
+  # 模式降级规则：外围扰动严重时的降级目标
+  mode_downgrade:
+    severe: "retreat"    # 严重扰动 → 强制 retreat
+    moderate: "defend"   # 中度扰动 → 降为 defend
+    mild: "same"         # 轻度扰动 → 不降级
+
+  # ══════════════════════════════════════════════════════════
+# 4 组投票阈值 — 趋势/动量/形态/量能
+# 这些阈值用于个股信号的技术面投票，需通过 A 股历史数据回测验证
+# ══════════════════════════════════════════════════════════
+voting:
+  volume:
+    surge_ratio: 1.5        # 放量：当日量 / 5日均量 > 此值 → 放量
+    shrink_ratio: 0.7       # 缩量：当日量 / 5日均量 < 此值 → 缩量
+    stagnation_pct: 0.01    # 滞涨：放量但涨幅 < 此值 → 放量滞涨(看空)
+    period: 5               # 均量计算周期（日）
+  rsi:
+    overbought: 70          # 超买阈值（RSI > 此值 → 超买）
+    oversold: 30            # 超卖阈值（RSI < 此值 → 超卖）
+  adx:
+    strong_trend: 25        # 趋势强劲阈值（ADX > 此值 → 趋势明确）
+    weak_trend: 20          # 趋势弱势阈值（ADX < 此值 → 无趋势）
+  mode_weights:
+    attack:
+      trend: 1.5
+      momentum: 0.7
+      pattern: 1.0
+      volume: 1.0
+    defend:
+      trend: 1.0
+      momentum: 1.0
+      pattern: 1.0
+      volume: 1.0
+    retreat:
+      trend: 0.5
+      momentum: 1.3
+      pattern: 1.0
+      volume: 1.0
+
+# 总分映射
+  mode_mapping:
+    attack:
+      min: 8
+      max: 10
+      position_limit: 0.8
+    defend:
+      min: 4
+      max: 7
+      position_limit: 0.5
+    retreat:
+      min: 0
+      max: 3
+      position_limit: 0.1
