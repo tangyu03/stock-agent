@@ -336,6 +336,7 @@ class Orchestrator:
         from ..analyzers.timing_engine import get_timing_engine
         te = get_timing_engine()
         observation_batch = []
+        data_missing_batch = []
         for code, stock_info in holdings_map.items():
             if code in signaled_codes:
                 continue  # 已有买卖信号，跳过
@@ -346,6 +347,23 @@ class Orchestrator:
             td = te._tech_data_full.get(code, {})
             if not isinstance(td, dict):
                 td = {}
+            try:
+                current_price = float(td.get("current_price", 0) or 0)
+            except (TypeError, ValueError):
+                current_price = 0.0
+            if current_price <= 0:
+                # 无价不是观察结论：技术、买卖门控都没有输入，必须显式暴露。
+                missing_reason = (
+                    te._exit_diagnostics.get(code)
+                    or "现价未取到，卖出/观察判定未执行"
+                )
+                data_missing_batch.append({
+                    "stock_name": name,
+                    "stock_code": code,
+                    "actual_holding": code in held_codes,
+                    "reason": missing_reason,
+                })
+                continue
             position_hint = ""
             if code in held_codes:
                 position_hint = "持仓建议: 持有（无买卖信号触发）"
@@ -380,9 +398,19 @@ class Orchestrator:
                         + " | 卖出: "
                         + te._exit_diagnostics.get(code, "未参与卖出检查（数据缺失）"),
             })
-        logger.info("信号汇总: 买入%d 卖出%d 观察%d (自选%d, 有信号%d)",
+        if data_missing_batch:
+            logger.warning(
+                "数据未取到: %s",
+                ", ".join(
+                    f"{item.get('stock_name', item.get('stock_code'))}"
+                    f"({item.get('stock_code')})"
+                    for item in data_missing_batch
+                ),
+            )
+        env["data_missing"] = data_missing_batch
+        logger.info("信号汇总: 买入%d 卖出%d 观察%d 数据缺失%d (自选%d, 有信号%d)",
                     len(entry_batch), len(exit_batch), len(observation_batch),
-                    len(all_holdings), len(signaled_codes))
+                    len(data_missing_batch), len(all_holdings), len(signaled_codes))
 
         # ---- 4.5 P3: 实盘信号调度器（信号服务模式 + 受众分流 + 假说门 + 策略下线）----
         # 【三】受众：holdings 已在上文回执闭环聚合；

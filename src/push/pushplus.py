@@ -232,6 +232,7 @@ class PushPlus:
           - 买入信号 → "买入" 板块
           - 卖出信号 → "卖出" 板块（不再按 urgency 拆分，卖出就是卖出）
           - 无买卖信号的持仓股 → "观察" 板块
+          - 现价未取到的标的 → "数据未取到" 板块，不得降级为观察结论
 
         Args:
             environment: 环境评估数据
@@ -245,6 +246,7 @@ class PushPlus:
         entries = entries or []
         exits = exits or []
         observations = observations or []
+        data_missing = environment.get("data_missing") or []
 
         from .templates import (
             _esc,
@@ -266,6 +268,8 @@ class PushPlus:
             title_parts.append(f"卖{len(exits)}")
         if observations:
             title_parts.append(f"观察{len(observations)}")
+        if data_missing:
+            title_parts.append(f"数据缺失{len(data_missing)}")
         title = " | ".join(title_parts)
 
         # 内容：环境总览 + 信号
@@ -315,6 +319,17 @@ class PushPlus:
                 f"<b>撮合计数</b><br/>&nbsp;&nbsp;{_esc(str(virtual_counts))}<br/>"
             )
 
+        if data_missing:
+            content += f"<b>数据未取到 ({len(data_missing)}条)</b><br/>"
+            for item in data_missing:
+                holding_hint = " | 持仓" if item.get("actual_holding") else ""
+                reason = item.get("reason") or "现价未取到"
+                content += (
+                    f"&nbsp;&nbsp;{_esc(stock_identity(item))}{holding_hint}"
+                    f" | {_esc(reason)}<br/>"
+                )
+            content += "<br/>"
+
         # 【P1-5】候梯前排：按差几个条件排序，直接回答接下来盯谁。
         watch_ladder = environment.get("watch_ladder") or []
         if watch_ladder:
@@ -355,7 +370,9 @@ class PushPlus:
 
         # 级别
         has_urgent = any(s.get("urgency") == "紧急" for s in exits)
-        level = "紧急" if has_urgent else ("重要" if (entries or exits) else "常规")
+        level = "紧急" if has_urgent else (
+            "重要" if (entries or exits or data_missing) else "常规"
+        )
 
         return self.send(title, content, level=level)
 
