@@ -19,6 +19,13 @@ def _esc(s) -> str:
         return ""
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+
+def stock_identity(data) -> str:
+    """独立推送的稳定首行标识：标的名称(代码)。"""
+    name = str((data or {}).get("stock_name") or "").strip() or "未知标的"
+    code = str((data or {}).get("stock_code") or "").strip() or "未知代码"
+    return f"{name}({code})"
+
 def _fund_amount(amount: float) -> str:
     """格式化资金流向金额（元→亿/万），如 1.50亿流入, -3200万流出"""
     if amount is None:
@@ -335,6 +342,19 @@ def _institutional(data) -> str:
             change_text = f"，变化{change:+.2f}pct" if change is not None else ""
             parts.append(f"前十大机构{latest_ratio:.2f}%{change_text}")
 
+    # 【P2-2】资金拆层：慢变量（主力3日/股东报告期）单独计票，
+    # 不参与当日价格投票——时间尺度错配不再污染当日判定。
+    layering = inst.get("fund_layering")
+    if isinstance(layering, dict) and layering.get("enabled"):
+        slow_names = {"main_force": "主力", "shareholder": "股东"}
+        slow_bits = []
+        for src, vote in (layering.get("sources") or {}).items():
+            arrow = "↑" if (vote or 0) > 0 else ("↓" if (vote or 0) < 0 else "→")
+            slow_bits.append(f"{slow_names.get(src, src)}{arrow}")
+        parts.append(
+            f"慢变量计票:{'/'.join(slow_bits)}({layering.get('score', 0):+d}，拆层不投票)"
+        )
+
     # 【Phase3】研报共识旁路（资金是节奏、研报是方向，不混票）
     analyst = inst.get("analyst_consensus")
     if isinstance(analyst, dict) and analyst.get("total"):
@@ -457,7 +477,7 @@ def _render_compact_observation_signal(data):
     sector_name = data.get("sector_name", "")
     if sector_name:
         env_parts.append(f"板块:{sector_name}({_sector_label(data.get('sector_status', ''))})")
-    env_parts.append("闸门:" + {"attack": "全策略可用", "defend": "禁追强,低吸可用", "retreat": "只减不加"}.get(mode, "常规"))
+    env_parts.append("闸门:" + {"attack": "全策略可用", "defend": "追强降仓可用(三重门),低吸可用", "retreat": "只减不加"}.get(mode, "常规"))
     content += f"<b>环境</b><br/>&nbsp;&nbsp;{_esc(' | '.join(env_parts))}<br/><br/>"
 
     trend = categories.get("trend") or {}
@@ -516,8 +536,30 @@ def _render_compact_observation_signal(data):
     fundamental_text = _fundamental_line(data)
     if fundamental_text:
         content += f"&nbsp;&nbsp;⑦基本面:{_esc(fundamental_text)}<br/>"
+    # 【P3-2】第八问驱动源：系统不能只看到价格表象
+    driver_text = _driver_line(data)
+    if driver_text:
+        content += f"&nbsp;&nbsp;⑧驱动源:{_esc(driver_text)}<br/>"
     content += "<br/>"
     return title, content
+
+
+def _driver_line(data) -> str:
+    """【P3-2】第八问驱动源行：业绩/板块/资金/价格驱动（买入卡与观察卡共用）。"""
+    driver = None
+    if isinstance(data, dict):
+        driver = (data.get("hypothesis") or {}).get("driver")
+        if not driver:
+            driver = ((data.get("execution_plan") or {}).get("hypothesis") or {}).get("driver")
+    if not isinstance(driver, dict):
+        return ""
+    try:
+        from ..analyzers.driver_attribution import driver_line
+        return driver_line(driver)
+    except Exception:
+        label = driver.get("dual") or driver.get("label") or ""
+        evidence = driver.get("evidence") or ""
+        return f"{label}（{evidence}）" if evidence else label
 
 
 def _render_compact_entry_signal(data):
@@ -550,7 +592,7 @@ def _render_compact_entry_signal(data):
     sector_name = data.get("sector_name", "") or data.get("sw_level2", "")
     if sector_name:
         env_parts.append(f"板块:{sector_name}({_sector_label(data.get('sector_status', ''))})")
-    env_parts.append("闸门:" + {"attack": "全策略可用", "defend": "禁追强,低吸可用", "retreat": "只减不加"}.get(mode, "常规"))
+    env_parts.append("闸门:" + {"attack": "全策略可用", "defend": "追强降仓可用(三重门),低吸可用", "retreat": "只减不加"}.get(mode, "常规"))
     content += f"<b>环境</b><br/>&nbsp;&nbsp;{_esc(' | '.join(env_parts))}<br/><br/>"
 
     content += "<b>决策</b><br/>"
@@ -608,6 +650,20 @@ def _render_compact_entry_signal(data):
         )
     elif shares:
         content += f"<b>建议仓位</b><br/>&nbsp;&nbsp;{int(shares):,}股<br/>"
+
+    # 【仓位层→账户层】预算披露透出：调度 note 的预算披露（预算基数/
+    # 单笔风险敞口/账户口径/反推隐含账户）此前被 ⑤触发 按" | 调度: "
+    # 切掉，买入推送看不到绝对值（蘅东光 9/8 验收：300股×88.56=26,568
+    # 敞口→隐含 265 万账户——公式对了，参数是黑箱）
+    note_text = str(data.get("note") or "")
+    budget_marker = "预算基数"
+    if budget_marker in note_text:
+        budget_idx = note_text.find(budget_marker)
+        start = note_text.rfind(" | ", 0, budget_idx)
+        budget_block = note_text[start + 3:] if start >= 0 else note_text
+        content += (
+            f"<b>预算披露</b><br/>&nbsp;&nbsp;{_esc(budget_block)}<br/><br/>"
+        )
     return title, content
 
 def _hypothesis_block(data):

@@ -49,7 +49,7 @@ def _load_theme_map(refresh: bool = False) -> Dict:
     with _lock:
         if _theme_map_cache is not None and not refresh and now - _theme_map_ts < 300:
             return _theme_map_cache
-    data: Dict = {"enabled": False, "themes": {}, "overrides": {}}
+    data: Dict = {"enabled": False, "themes": {}, "overrides": {}, "version": ""}
     try:
         from pathlib import Path
         import yaml
@@ -60,12 +60,22 @@ def _load_theme_map(refresh: bool = False) -> Dict:
             data["enabled"] = bool(loaded.get("enabled", True))
             data["themes"] = loaded.get("themes") or {}
             data["overrides"] = {str(k).zfill(6): str(v) for k, v in (loaded.get("overrides") or {}).items()}
+            data["version"] = str(loaded.get("version") or "")
     except Exception as e:
         logger.warning("主题映射表加载失败（按原行业链路）: %s", str(e)[:80])
     with _lock:
         _theme_map_cache = data
         _theme_map_ts = now
     return data
+
+
+def get_theme_version() -> str:
+    """【P2-1】板块分类版本戳：9/4→9/7 分类整体换血，历史统计断裂——
+    版本化让每个信号/交易记录携带分类口径版本，统计可按版本切分。
+    （作废条件：若新分类经一季度验证区分度优于申万锚，反向采纳新体系。）
+    """
+    tm = _load_theme_map()
+    return tm.get("version") or "v0-unversioned"
 
 
 def _strictest_status(statuses: List[Optional[str]]) -> Optional[str]:

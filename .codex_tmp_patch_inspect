@@ -1,0 +1,82 @@
+diff --git a/src/analyzers/timing_engine.py b/src/analyzers/timing_engine.py
+index 3c8937c..fdffa2a 100644
+--- a/src/analyzers/timing_engine.py
++++ b/src/analyzers/timing_engine.py
+@@ -1,76 +1 @@
+-# ============================================================
+-# 【层间接口修复】策略层 → 分档层：Y（主档基准价）随策略定位
+-# ============================================================
+-# 原实现：main_tier_price 一律取 MA10（低吸策略的 Y 语义）——
+-# 蘅东光 9/8 实证：确认追强 Y=498.26(MA10) 距现价 555.25 达 10.3%，
+-# 罗博特科趋势延续 Y=577.99(MA10) 距现价 656.10 达 13.5%——
+-# 策略层在讲追强（突破当日跟进）的语言，分档层却给低吸（回踩均线）
+-# 的价格。RRR 0.96 就是 Y 挂在下档的产物。
+-# 修复：主买点不再共用“MA10 低吸模板”。确认追强挂触发位下方 2%；
+-# 价量突破挂突破日最低价；趋势延续挂 MA5。低吸类保留 MA10 深档。
+-CHASE_STRATEGIES = frozenset({"确认追强", "价量突破", "趋势延续"})
+-DIP_STRATEGIES = frozenset({"恐慌抄底", "套利低吸"})
+-
+-
+-def _number_or_none(value: Any) -> Optional[float]:
+-    try:
+-        number = float(value)
+-    except (TypeError, ValueError):
+-        return None
+-    return number if number == number else None
+-
+-
+-def _nested_config(config: Optional[Dict], *path, default=None):
+-    node = config or {}
+-    for key in path:
+-        if not isinstance(node, dict) or key not in node:
+-            return default
+-        node = node[key]
+-    return node
+-
+-
+-def entry_main_tier_price(
+-    entry_type: str,
+-    trigger_price: float,
+-    tech_data: Dict,
+-    config: Optional[Dict] = None,
+-) -> float:
+-    """策略感知的主档基准价 Y（分档层与策略层语言对齐）。
+-
+-    确认追强：Y = 触发位下方 2%（例如 555.25 → 544.15），当日浅回踩可成交；
+-    价量突破：Y = 突破日最低价（优先 breakout_low，否则取最新 K 线 low）；
+-    趋势延续：Y = MA5（延续结构回踩位）；
+-    低吸类：Y = MA10（深回踩承接）。
+-    """
+-    trigger = float(trigger_price or 0)
+-    ma5 = tech_data.get("ma5")
+-    ma10 = tech_data.get("ma10")
+-    ma10_ok = ma10 is not None and float(ma10) > 0
+-    if entry_type in DIP_STRATEGIES and ma10_ok:
+-        return float(ma10)
+-    if entry_type == "确认追强" and trigger > 0:
+-        pullback_pct = float(
+-            _nested_config(config, "tiering", "chase_pullback_pct", default=0.02)
+-        )
+-        return round(trigger * (1.0 - pullback_pct), 2)
+-    if entry_type == "价量突破" and trigger > 0:
+-        breakout_low = _number_or_none(tech_data.get("breakout_low"))
+-        if breakout_low is None:
+-            kline = tech_data.get("kline") or []
+-            for bar in reversed(kline):
+-                breakout_low = _number_or_none(bar.get("最低", bar.get("low")))
+-                if breakout_low is not None:
+-                    break
+-        # 突破日最低价必须仍在触发位下方；脏数据回到触发位兜底。
+-        if breakout_low is not None and 0 < breakout_low <= trigger:
+-            return round(float(breakout_low), 2)
+-        return round(trigger, 2)
+-    if entry_type == "趋势延续" and trigger > 0:
+-        if ma5 is not None and float(ma5) > 0:
+-            # MA5 若因盘中上穿触发位，不能反向追价。
+-            return round(min(float(ma5), trigger), 2)
+-        return round(trigger * 0.98, 2)
+-    # 未知策略/数据缺失：回退原口径（MA10 优先，触发位兜底）
+-    if ma10_ok:
+-        return float(ma10)
+-    return trigger
++# placeholder

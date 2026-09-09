@@ -152,7 +152,7 @@ class TradeLogger:
         """更新用户操作（回执脚本调用）。
 
         【六】回执联动：
-          - buy executed 且带 event_id → 信号事件转 triggered（受众分流/生命周期）
+          - buy executed 且带 event_id → 信号事件转 filled/已成交（受众分流/生命周期）
           - sell executed → 自动回填开仓行的 exit_price/exit_date/pnl_pct/zw_triggered
             （四行日志的第二、三行自动闭环）
         """
@@ -177,7 +177,7 @@ class TradeLogger:
             if not row:
                 return True
             if user_action == "executed" and row.get("signal_type") in ("buy", "t0_buy"):
-                self._mark_event_triggered(row)
+                self._mark_event_filled(row)
             elif pending_position and user_action == "executed":
                 exit_price = actual_price or float(row.get("trigger_price") or 0)
                 self._link_exit_to_position(row, exit_price, pending_position)
@@ -196,16 +196,16 @@ class TradeLogger:
             logger.error("读取日志失败 #%s: %s", log_id, e)
             return None
 
-    def _mark_event_triggered(self, row: Dict) -> None:
-        """买入回执 → 信号事件转 triggered（后续按配对出场跟踪）"""
+    def _mark_event_filled(self, row: Dict) -> None:
+        """买入回执 → 信号事件转 filled/已成交（后续按配对出场跟踪）"""
         event_id = row.get("event_id") or ""
         if not event_id:
             return
         try:
-            from ..analyzers.signal_lifecycle import DbSignalEventStore
-            DbSignalEventStore().update_status(event_id, "triggered", "回执成交，转入配对出场跟踪")
+            from ..analyzers.signal_lifecycle import DbSignalEventStore, SignalLifecycle
+            SignalLifecycle(DbSignalEventStore()).mark_filled(event_id, "回执成交，转入持仓配对出场")
         except Exception as e:
-            logger.debug("事件转 triggered 失败 %s: %s", event_id, e)
+            logger.debug("事件转 filled 失败 %s: %s", event_id, e)
 
     def _link_exit_to_position(self, sell_row: Dict, exit_price: float, position: Optional[Dict] = None) -> None:
         """卖出回执 → 回填开仓行的离场四行日志（实际出入场/ZW触发/盈亏）。"""

@@ -183,12 +183,22 @@ class MarketModeAdaptive:
     # ================================================================
 
     @staticmethod
-    def _count_distribution_days(kline_data: List[Dict], window: int = 25) -> Dict:
+    def _count_distribution_days(
+        kline_data: List[Dict],
+        window: int = 25,
+        ref_date: Optional[str] = None,
+        stale_calendar_days: int = 7,
+    ) -> Dict:
         """
         统计滚动窗口内的派发日数量（IBD 市场暴露模型核心指标）
 
         派发日定义：收盘跌 >0.2% 且成交量 > 前一日成交量。
         机构在放量下跌日出货，散户在缩量下跌日抛售——前者才是真正的派发信号。
+
+        附数据新鲜度审计（派发日“仍是 4/25 未刷新”第五轮）：返回数据末根
+        日期 last_date 与相对 ref_date 的滞后天数；滞后超过 stale_calendar_days
+        时标记 stale=True——模式判定不得基于过期派发日（作废条件：数据源恢复
+        真实刷新后，stale 标记自然消失，无需回退）。
         """
         recent = kline_data[-window:] if len(kline_data) >= window else kline_data
         dist_days = []
@@ -213,10 +223,26 @@ class MarketModeAdaptive:
                     "vol_ratio": round(curr_vol / prev_vol, 2) if prev_vol > 0 else 0,
                 })
 
+        last_date = str(recent[-1].get("date", ""))[:10] if recent else ""
+        stale = False
+        stale_days = 0
+        if ref_date and last_date:
+            try:
+                from datetime import datetime as _dt
+                ref = _dt.strptime(str(ref_date)[:10], "%Y-%m-%d")
+                last = _dt.strptime(last_date, "%Y-%m-%d")
+                stale_days = (ref - last).days
+                stale = stale_days > stale_calendar_days
+            except (ValueError, TypeError):
+                pass
+
         return {
             "count": len(dist_days),
             "window": len(recent),
             "days": dist_days,
+            "last_date": last_date,
+            "stale": stale,
+            "stale_days": max(stale_days, 0),
         }
 
     @staticmethod
@@ -363,14 +389,23 @@ class MarketModeAdaptive:
         dimensions.append({"key": "breadth", "name": "市场宽度", "condition": b_cond, "status": b_status, "advance_decline": ad})
 
         # --- 维度 5: 派发日统计（IBD 核心指标） ---
-        dist = self._count_distribution_days(history)
-        if dist["count"] <= 4:
+        dist = self._count_distribution_days(history, ref_date=date)
+        if dist.get("stale"):
+            # 数据过期（派发日“仍是 4/25 未刷新”）：口径必须披露，不参与模式判定
+            d_status = "neutral"
+            d_cond = (
+                f"派发日 {dist['count']}/{dist['window']}（数据截至{dist.get('last_date', '?')}，"
+                f"已滞后{dist.get('stale_days', 0)}天，过期数据不参与模式判定）"
+            )
+        elif dist["count"] <= 4:
             d_status = "bullish"
+            d_cond = f"派发日 {dist['count']}/{dist['window']}"
         elif dist["count"] <= 6:
             d_status = "neutral"
+            d_cond = f"派发日 {dist['count']}/{dist['window']}"
         else:
             d_status = "bearish"
-        d_cond = f"派发日 {dist['count']}/{dist['window']}"
+            d_cond = f"派发日 {dist['count']}/{dist['window']}"
         dimensions.append({"key": "dist_days", "name": "派发日统计", "condition": d_cond, "status": d_status, "dist_detail": dist})
 
         # --- 双创技术位（展示但不参与模式判定） ---
@@ -417,6 +452,16 @@ class MarketModeAdaptive:
                 reasons.append("均线未多头排列")
             if dist_count >= 5:
                 reasons.append(f"派发日{dist_count}/{dist['window']}≥5(辅助)")
+
+        # 【派发日新鲜度】数据过期时模式不采信（防御：过期派发日曾把模式
+        # 钉在旧读数上——第五轮“仍是 4/25 未刷新”）。过期 → 一律 defend，
+        # 并显式披露数据截至日。
+        if dist.get("stale"):
+            mode_before = "defend"
+            reasons.append(
+                f"派发日数据过期(截至{dist.get('last_date', '?')}，"
+                f"滞后{dist.get('stale_days', 0)}天)，模式降级防守"
+            )
 
         # 外围扰动降级（仅实时）
         from datetime import datetime as dt
@@ -515,6 +560,11 @@ class MarketModeAdaptive:
         """
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
+        # 惰性初始化（__new__ 构造或旧对象可能缺属性）
+        if not hasattr(self, "_gem_sci_tech_date"):
+            self._gem_sci_tech_date = None
+        if not hasattr(self, "_gem_sci_tech_result"):
+            self._gem_sci_tech_result = None
         if not force_refresh and self._gem_sci_tech_date == today and self._gem_sci_tech_result:
             return self._gem_sci_tech_result
         try:
@@ -581,20 +631,47 @@ class MarketModeAdaptive:
     # 综合环境评估（供盘前/盘中调用）
     # ================================================================
 
+    @staticmethod
+    def _is_index_kline_stale(records: List[Dict], stale_calendar_days: int = 7) -> bool:
+        """指数 K 线新鲜度：末根距今天（仅交易日）超过阈值即视为过期。
+
+        派发日“仍是 4/25 未刷新”的根因：数据源返回“成功但过期”的 K 线
+        时，_call_with_fallback 不校验新鲜度，直接当成功用。这里对
+        每个候选源做新鲜度校验，过期则换下一个源。
+        """
+        if not records:
+            return True
+        from datetime import datetime as _dt
+        last = str(records[-1].get("date", ""))[:10]
+        today = _dt.now().strftime("%Y-%m-%d")
+        try:
+            gap = (_dt.strptime(today, "%Y-%m-%d") - _dt.strptime(last, "%Y-%m-%d")).days
+        except (ValueError, TypeError):
+            return True
+        # 周末/节假日最多滞后数日；超过阈值即过期（交易日判定从宽，防误杀长假）
+        return gap > stale_calendar_days
+
     def _fetch_index_kline(self) -> List[Dict]:
-        """获取上证指数日K线（P1-14: 优先用AKShareAdapter，fallback直调）"""
+        """获取上证指数日K线（P1-14: 优先用AKShareAdapter，fallback直调）。
+
+        新鲜度守卫：候选源返回过期 K 线（派发日仍停在 4/25 的旧病）时
+        继续换源，全部过期则返回并交由 _assess_market 降级 defend。
+        """
         # 优先走 adapter（带超时+熔断）
         try:
             from ..data_layer.akshare_adapter import get_akshare_adapter
             adapter = get_akshare_adapter()
             result = adapter.get_index_data("000001")
             if result.success and result.data:
-                return [
+                records = [
                     {"date": str(row.get("date", ""))[:10],
                      "close": float(row.get("close", 0)),
                      "volume": float(row.get("volume", 0))}
                     for row in result.data
                 ]
+                if not self._is_index_kline_stale(records):
+                    return records
+                logger.warning("指数K线过期(截至%s)，尝试备用源", records[-1].get("date", ""))
         except Exception as e:
             logger.warning("指数K线获取失败(adapter): %s", e)
         # fallback: 直接调 akshare
@@ -602,11 +679,14 @@ class MarketModeAdaptive:
             import akshare as ak
             df = ak.stock_zh_index_daily(symbol="sh000001")
             if df is not None and len(df) > 0:
-                return [
+                records = [
                     {"date": str(row["date"])[:10], "close": float(row["close"]),
                      "volume": float(row.get("volume", 0))}
                     for _, row in df.iterrows()
                 ]
+                if not self._is_index_kline_stale(records):
+                    return records
+                logger.warning("指数K线备用源仍过期(截至%s)，交给模式判定降级", records[-1].get("date", ""))
         except Exception as e:
             logger.warning("指数K线获取失败(akshare直调): %s", e)
         return []

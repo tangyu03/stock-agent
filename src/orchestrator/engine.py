@@ -15,6 +15,9 @@ from ..analyzers.market_scorer import get_market_scorer
 from ..decision.aggregator import get_aggregator
 from ..push.pushplus import get_pushplus
 # templates 渲染已移至 pushplus.send_intraday_report 内部调用
+from ..push.templates import stock_identity
+from ..analyzers.signal_lifecycle import localize_display_enums
+# templates 渲染已移至 pushplus.send_intraday_report 内部调用
 from ..feedback.trade_logger import get_trade_logger
 from ..feedback.daily_review import get_daily_review
 from ..feedback.weekly_report import get_weekly_report
@@ -25,6 +28,15 @@ from ..loop.data_freshness import find_recent_trading_day
 
 # logger = logging.getLogger(__name__)  # 原代码
 logger = get_structured_logger(__name__)
+
+
+def _stock_push_line(item: Dict) -> str:
+    """独立推送必须以标的标识开头，同时隐藏内部枚举。"""
+    lead = stock_identity(item)
+    note = localize_display_enums((item or {}).get("note", ""))
+    if not note:
+        return lead
+    return lead + " " + note if not note.startswith(lead) else note
 
 
 # ================================================================
@@ -421,9 +433,59 @@ class Orchestrator:
                 'stock_name': s.stock_name,
                 'exit_type': s.exit_type,
                 'trigger_price': s.trigger_price,
+                'stop_loss_price': getattr(s, 'stop_loss_price', 0),
                 'reason': s.reason,
                 'urgency': s.urgency,
             })
+
+        # 【P1-3/P1-5/P2-8】输出端摘要：拦截的信号要有名字，候梯要能排序，
+        # 板块集中只做一行提醒。这里只组装展示数据，不做资金管理。
+        score_gate_items = []
+        for bucket in ('buy_score_gate', 'buy_ev_gate'):
+            for item in scheduled['skipped'].get(bucket, []):
+                score_gate_items.append(
+                    f"{item.get('stock_name', item.get('stock_code'))}"
+                    f"({item.get('stock_code')})"
+                )
+        if score_gate_items:
+            env['score_gate'] = {
+                'count': len(score_gate_items),
+                'detail': ' '.join(score_gate_items),
+            }
+
+        sector_counts: Dict[str, int] = {}
+        for s in scheduled['buy']:
+            orig = next(
+                (e for e in entry_batch if e.get('stock_code') == s.stock_code),
+                {},
+            )
+            sector_name = str(orig.get('sector_name') or '未知板块')
+            sector_counts[sector_name] = sector_counts.get(sector_name, 0) + 1
+        top_sector, top_count = max(
+            sector_counts.items(), key=lambda item: item[1], default=('', 0)
+        )
+        if top_count >= 2:
+            env['sector_concentration'] = {
+                'line': (
+                    f"今日买入信号{len(scheduled['buy'])}条中"
+                    f"{top_count}条同属{top_sector}"
+                )
+            }
+
+        try:
+            from ..feedback.event_tracker import (
+                build_watch_ladder,
+                build_virtual_fill_counts,
+                collect_in_flight_events,
+            )
+            in_flight_events = collect_in_flight_events(lookback_days=30)
+            env['watch_ladder'] = build_watch_ladder(
+                batch.entry_diagnostics, all_holdings,
+                in_flight_events=in_flight_events,
+            )[:5]
+            env['virtual_fill_counts'] = build_virtual_fill_counts(in_flight_events)
+        except Exception as e:
+            logger.debug("候梯排序构建失败: %s", e)
 
         # 记录调度日志
         schedule_summary = format_scheduled_summary(scheduled)
@@ -476,7 +538,52 @@ class Orchestrator:
 
         # ---- 5. 合并推送（环境 + 调度后买卖信号 + 观察一条消息）----
         # 推送调度后的信号（而非原始全量信号）
+        # 【P1-2】观察卡排序：再入场待命队列置顶（蘅东光 9/7 创新高应在
+        # 待命队列头部而非观察区中部）
+        standby_codes = {item.get("stock_code") for item in getattr(batch, "standby_queue", []) or []}
+        if standby_codes:
+            observation_batch.sort(
+                key=lambda obs: 0 if obs.get("stock_code") in standby_codes else 1
+            )
         self._pushplus.send_intraday_report(env, scheduled_entry_batch, scheduled_exit_batch, observation_batch)
+
+        # 【P1-1】踏空成本台账推送：防守模式未放行的创新高+放量标的
+        # （回退禁用后继续留档——这份数据是防守模式是否值得存在的证据）
+        chase_missed = getattr(batch, "chase_missed", []) or []
+        if chase_missed:
+            try:
+                missed_lines = []
+                for item in chase_missed[:10]:
+                    missed_lines.append(f"  {_stock_push_line(item)}")
+                missed_lines.append(
+                    "  （30笔滚动胜率<30%且期望<0 → 回退禁用；台账继续记录，"
+                    "作废条件与踏空成本同时留档供审计）"
+                )
+                self._pushplus.send(
+                    "防守追强踏空台账",
+                    f"<pre>{chr(10).join(missed_lines)}</pre><p>代码版本 {_get_git_head()}</p>",
+                    level="常规",
+                )
+            except Exception:
+                pass
+
+        # 【P1-3】再入场待命队列推送：创新高/收复Z线的止损后续标的
+        standby_queue = getattr(batch, "standby_queue", []) or []
+        if standby_queue:
+            try:
+                standby_lines = []
+                for item in standby_queue[:10]:
+                    standby_lines.append(f"  {_stock_push_line(item)}")
+                standby_lines.append(
+                    "  （待完整触发条件重新确认后入场；同一标的再入场上限 2 次）"
+                )
+                self._pushplus.send(
+                    "再入场待命队列",
+                    f"<pre>{chr(10).join(standby_lines)}</pre><p>代码版本 {_get_git_head()}</p>",
+                    level="常规",
+                )
+            except Exception:
+                pass
 
         # 额外推送调度摘要（让用户知道哪些信号被跳过及原因）
         if scheduled['skipped'] and any(scheduled['skipped'].values()):
@@ -503,11 +610,26 @@ class Orchestrator:
             key = (s.stock_code, "buy", s.entry_type or "")
             if key in pending_keys:
                 continue
-            hyp = s.hypothesis or {}
+            hyp = dict(s.hypothesis or {})
             w_range = [v for v in (hyp.get("w") or []) if v]
             if not w_range:
                 plan_targets = (s.execution_plan or {}).get("target_range") or [0]
                 w_range = [plan_targets[0] or 0]
+            # 【P0-2/P2-1/P1-1】假说携带审计元数据：Z线模式/板块版本/
+            # 防守降仓标记（统计对照函数按这些键切分样本）
+            try:
+                from ..analyzers.timing_engine import get_timing_engine as _gte
+                _gate_cfg = _gte()._cfg("hypothesis_gate") or {}
+                hyp.setdefault("z_line_mode", _gate_cfg.get("z_line_mode", "bare_structure"))
+            except Exception:
+                hyp.setdefault("z_line_mode", "bare_structure")
+            try:
+                from ..analyzers.theme_attribution import get_theme_version as _gtv
+                hyp.setdefault("sector_version", _gtv())
+            except Exception:
+                hyp.setdefault("sector_version", "v0-unversioned")
+            if getattr(s, "market_mode", "") == "defend" or (s.execution_plan or {}).get("defensive_chase"):
+                hyp.setdefault("defensive_chase", True)
             self._trade_logger.log_signal(
                 signal_type="buy",
                 stock_code=s.stock_code,

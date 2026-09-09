@@ -39,7 +39,66 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # 调度参数（与 Step0 / position.yaml 一致）
 # ============================================================
-BUDGET_PER_STOCK = 250_000      # 单股参考仓位，仅用于建议股数，不用于拦截信号
+# 【仓位层→账户层】预算绝对值显式化：预算基数与账户口径不再藏在
+# 模块常量里（蘅东光 9/8 验收：300股×88.56=26,568 单笔风险敞口，按 1%
+# 风险预算反推隐含 265 万账户——公式对了，绝对值是黑箱）。全部走
+# config/timing.yaml position_budget，推送/参数附录一并披露。
+def _position_budget_cfg() -> Dict:
+    try:
+        from ..config_models import load_config
+        timing = (load_config("timing.yaml") or {}).get("timing", {}) or {}
+        return (timing or {}).get("position_budget") or {}
+    except Exception:
+        return {}
+
+
+def _budget_per_stock() -> float:
+    return float(_position_budget_cfg().get("budget_per_stock", 250_000))
+
+
+def _account_value() -> float:
+    return float(_position_budget_cfg().get("account_value", 1_000_000))
+
+
+def _budget_disclosure_note(
+    shares: int,
+    position_price: float,
+    stop_price: float,
+    risk_budget_pct: float = 0.01,
+) -> str:
+    """建议仓位的可审计披露：金额/单笔风险敞口/账户口径。
+
+    蘅东光 9/8 审计实证：300股×单股风险88.56=26,568 元敞口，若按
+    risk_budget_pct(1%) 反推隐含账户 = 26,568÷1% ≈ 265 万——此前预算
+    基数 25 万与 1% 风险预算并存，账户绝对值从不披露。
+    """
+    budget = _budget_per_stock()
+    account = _account_value()
+    amount = shares * position_price
+    risk_per_share = position_price - stop_price
+    risk_exposure = shares * risk_per_share if risk_per_share > 0 else None
+    parts = [
+        f"建议{shares:,}股×{position_price:.2f}={amount:,.0f}元(预算基数{budget/10000:.0f}万)"
+    ]
+    if risk_exposure is not None:
+        parts.append(f"单笔风险敞口{risk_exposure:,.0f}元({shares:,}股×{risk_per_share:.2f})")
+        implied = risk_exposure / risk_budget_pct if risk_budget_pct > 0 else None
+        pct_of_account = risk_exposure / account * 100 if account > 0 else None
+        parts.append(
+            f"账户{account/10000:.0f}万(1%预算={account*risk_budget_pct:,.0f}元，"
+            f"敞口占{pct_of_account:.1f}%)" if pct_of_account is not None
+            else f"账户{account/10000:.0f}万"
+        )
+        if implied is not None:
+            parts.append(f"按{risk_budget_pct*100:.0f}%风险预算反推隐含账户{implied/10000:.0f}万")
+    return " | ".join(parts)
+
+
+def _positive_price(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 # 入场类型优先级（调度排序用，值越大越优先；纯类型偏好，非收益预测）
 ENTRY_PRIORITY = {
@@ -59,6 +118,7 @@ class ScheduledSignal:
     entry_type: str = ''
     exit_type: str = ''
     trigger_price: float = 0.0
+    stop_loss_price: float = 0.0
     shares: int = 0
     reason: str = ''
     urgency: str = '常规'
@@ -122,11 +182,14 @@ def schedule_live_signals(
     stats = {
         'entry_in': len(entry_signals),
         'sell_in': len(exit_signals),
+        'sell_skipped_invalid_price': 0,
         'buy_executed': 0, 'sell_executed': 0,
         'buy_skipped_no_budget': 0,
         'buy_skipped_dust_order': 0,
         'buy_skipped_low_confidence': 0,
         'buy_hypothesis_rejected': 0,
+        'buy_score_gate': 0,
+        'buy_ev_gate': 0,
         'buy_strategy_offline': 0,
         'position_advice': 0,
     }
@@ -135,6 +198,8 @@ def schedule_live_signals(
         'buy_dust_order': [],
         'buy_low_confidence': [],
         'buy_hypothesis_rejected': [],
+        'buy_score_gate': [],
+        'buy_ev_gate': [],
         'buy_strategy_offline': [],
     }
     holdings = holdings or []
@@ -144,16 +209,33 @@ def schedule_live_signals(
         if code:
             held_map[code] = h
     offline_set = set(offline_strategies or [])
+    budget_per_stock = _budget_per_stock()
+    account_value = _account_value()
 
     # ---- 第1步：卖出信号全量输出（信号服务模式：持仓由用户管理，不校验）----
     scheduled_sells = []
     for sig in exit_signals:
+        trigger_price = _positive_price(
+            sig.get('trigger_price') or sig.get('current_price')
+        )
+        stop_loss_price = _positive_price(
+            sig.get('stop_loss_price') or sig.get('stop_loss')
+        )
+        if trigger_price <= 0 and stop_loss_price <= 0:
+            # 双 0 是数据缺失，不是卖出证据；但有效止损价保留，避免误杀真实信号。
+            stats['sell_skipped_invalid_price'] += 1
+            logger.warning(
+                "卖出信号缺少有效价位，跳过: %s %s",
+                sig.get('stock_code', ''), sig.get('exit_type', ''),
+            )
+            continue
         scheduled_sells.append(ScheduledSignal(
             stock_code=sig.get('stock_code', ''),
             stock_name=sig.get('stock_name', sig.get('stock_code', '')),
             action='sell',
             exit_type=sig.get('exit_type', ''),
-            trigger_price=sig.get('trigger_price', 0),
+            trigger_price=trigger_price,
+            stop_loss_price=stop_loss_price,
             reason=sig.get('reason', ''),
             urgency=sig.get('urgency', '常规'),
             market_mode=market_mode,
@@ -186,6 +268,34 @@ def schedule_live_signals(
     for sig, entry_type, _prio in buy_with_prio:
         code = sig.get('stock_code', '')
         plan = sig.get('execution_plan') or {}
+
+        # 旧计划/外部信号兜底：评分层 ≤1 时不得进入买入区。
+        # 新计划已带 ev_gate；这里保证历史计划也不能绕过输出端闸门。
+        try:
+            confidence_score = int(plan.get('confidence_score', -1))
+        except (TypeError, ValueError):
+            confidence_score = -1
+        if not plan.get('ev_gate') and 0 <= confidence_score <= 1:
+            skipped['buy_score_gate'].append({
+                'stock_code': code,
+                'stock_name': sig.get('stock_name', code),
+                'entry_type': entry_type,
+                'reason': f'评分闸门: 综合评分{confidence_score}≤1，已触发未放行',
+            })
+            stats['buy_score_gate'] += 1
+            continue
+
+        # 【评分层→决策层】期望值闸门（防御纵深：0/6 低置信/EV<0 不进调度）
+        ev_verdict = plan.get('ev_gate') or {}
+        if ev_verdict.get('rejected'):
+            skipped['buy_ev_gate'].append({
+                'stock_code': code,
+                'stock_name': sig.get('stock_name', code),
+                'entry_type': entry_type,
+                'reason': str(ev_verdict.get('reason') or '期望值闸门拒绝'),
+            })
+            stats['buy_ev_gate'] += 1
+            continue
 
         # 【一】假说门（防御纵深：timing_engine 已在生成阶段拒绝，此处兜底）
         if plan.get('execute') is False or plan.get('hypothesis_rejected'):
@@ -256,11 +366,51 @@ def schedule_live_signals(
             industry_multiplier
             * float(plan.get('combined_risk_multiplier', 1.0) or 1.0)
         )
-        shares = int((BUDGET_PER_STOCK / position_price * risk_multiplier) // 100) * 100
+        shares = int((budget_per_stock / position_price * risk_multiplier) // 100) * 100
+        base_shares = int((budget_per_stock / position_price) // 100) * 100
+
+        # 【P1-1】防守模式确认追强降仓放行：试探仓比例 = 单笔风险预算 ÷ 止损距离
+        # （出处是风险预算，不是惯例：中波动 1%÷3.5%≈29%≈1/3；
+        #   蘅东光类高波动标的止损距离~10% → 仓位~10%）。
+        defensive_chase_flag = bool(
+            sig.get('defensive_chase') or (hypothesis or {}).get('defensive_chase')
+        )
+        if market_mode == 'defend' and defensive_chase_flag and position_price > 0:
+            try:
+                from ..analyzers.signal_plan import compute_risk_budget_position
+                _z = float((hypothesis or {}).get('z') or sig.get('stop_loss') or 0)
+                _dc_config = None
+                try:
+                    from ..analyzers.timing_engine import get_timing_engine
+                    _dc_config = {'defensive_chase': get_timing_engine()._cfg('defensive_chase') or {}}
+                except Exception:
+                    _dc_config = None
+                budget = compute_risk_budget_position(position_price, _z, config=_dc_config)
+                shares = int((budget_per_stock * budget['ratio'] / position_price) // 100) * 100
+                if shares <= 0:
+                    # 试探仓地板：预算仓位不足 1 手时按 1 手试探
+                    # （比例语义保留在 risk_budget_note，仓位出处可审计）
+                    shares = 100
+                # 【仓位层→账户层】风险预算 note 追加敞口/账户披露
+                # （蘅东光 9/8：300股×88.56=26,568 敞口→隐含 265 万账户，
+                #   绝对值不再黑箱）
+                _budget_pct = float(budget.get('budget_pct') or 0.01)
+                _disclosure = _budget_disclosure_note(
+                    shares, position_price, _z, _budget_pct,
+                )
+                _budget_note = f"{budget['note']} | {_disclosure}"
+                plan['risk_budget_note'] = _budget_note
+                plan['defensive_chase'] = True
+                for _tier in plan.get('execution_tiers', []):
+                    _tier['risk_budget_note'] = _budget_note
+                sig['defensive_chase'] = True  # 统计分层键：确认追强@防守
+                if isinstance(hypothesis, dict):
+                    hypothesis['defensive_chase'] = True   # 落库假说携带标记
+            except Exception as exc:
+                logger.debug('风险预算仓位计算失败（回退常规乘数）: %s', str(exc)[:60])
+        plan['base_shares'] = base_shares
         if shares <= 0:
             continue
-        base_shares = int((BUDGET_PER_STOCK / position_price) // 100) * 100
-        plan['base_shares'] = base_shares
         plan['suggested_shares'] = shares
         for tier in plan.get('execution_tiers', []):
             if tier.get('role') == 'main':
@@ -293,7 +443,11 @@ def schedule_live_signals(
                 f'Z认错{hypothesis.get("z", 0) or sig.get("stop_loss", 0):.2f} | '
                 f'产业系数{industry_multiplier:.2f} | '
                 f'风险系数{plan.get("combined_risk_multiplier", 1.0):.2f} | '
-                f'主档{position_price:.2f} | 建议{shares}股'
+                f'主档{position_price:.2f} | 建议{shares}股 | '
+                + _budget_disclosure_note(
+                    shares, position_price,
+                    float(hypothesis.get("z") or sig.get("stop_loss") or position_price),
+                )
             ),
         ))
         stats['buy_executed'] += 1
@@ -302,11 +456,12 @@ def schedule_live_signals(
     # "减仓/止损"（出场信号）由 engine.py 观察卡/卖出推送负责，此处只补"加仓"。
 
     logger.info(
-        "实盘信号调度: 买入 %d/%d (假说拒 %d, 策略下线 %d), 持仓建议 %d, 卖出 %d/%d",
+        "实盘信号调度: 买入 %d/%d (假说拒 %d, 策略下线 %d), 持仓建议 %d, 卖出 %d/%d (无效价位 %d)",
         stats['buy_executed'], stats['entry_in'],
         stats['buy_hypothesis_rejected'], stats['buy_strategy_offline'],
         stats['position_advice'],
         stats['sell_executed'], stats['sell_in'],
+        stats['sell_skipped_invalid_price'],
     )
 
     return {
@@ -329,7 +484,10 @@ def format_scheduled_summary(scheduled: Dict[str, Any]) -> str:
         f"策略下线 {stats.get('buy_strategy_offline', 0)}, "
         f"低置信度转观察 {stats['buy_skipped_low_confidence']})"
     )
-    lines.append(f"  卖出: {stats['sell_executed']}/{stats['sell_in']}")
+    lines.append(
+        f"  卖出: {stats['sell_executed']}/{stats['sell_in']} "
+        f"(无效价位 {stats.get('sell_skipped_invalid_price', 0)})"
+    )
     if stats.get('position_advice'):
         lines.append(f"  持仓建议(加仓评估): {stats['position_advice']}")
     lines.append("")

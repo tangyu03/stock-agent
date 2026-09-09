@@ -127,6 +127,50 @@ def cmd_strategies():
         print(f"  {strategy} [{flag}] {row.get('reason') or ''}")
 
 
+def cmd_zmode():
+    """【P0-2】Z 线双模式对照（作废条件判定材料：30笔起步）"""
+    from src.feedback.strategy_stats import z_mode_comparison
+    comparison = z_mode_comparison()
+    if not comparison:
+        print("暂无携带 z_line_mode 的闭合样本")
+        return
+    print("Z线模式对照（裸结构位 vs ATR缓冲——作废条件：缓冲版期望显著更高时切换）：")
+    for mode, info in comparison.items():
+        print(f"  {mode}: {info.get('note', '')}")
+
+
+def cmd_sensitivity():
+    """【P0-3】分级 OR 过敏感统计（周触发>5次 → 回调结构位距离参数而非回退AND）"""
+    from src.feedback.strategy_stats import graded_exit_sensitivity
+    report = graded_exit_sensitivity()
+    print(f"近7日止损类触发: {report.get('week_triggers', 0)}次")
+    if report.get("note"):
+        print(f"  判定: {report['note']}")
+    for row in report.get("recent") or []:
+        print(f"  {row.get('exit_date')} {row.get('stock_name', row.get('stock_code'))} "
+              f"{row.get('exit_type')} @{row.get('exit_price')}")
+
+
+def cmd_sector_versions():
+    """【P2-1】板块版本化统计（历史统计按分类口径版本切分）"""
+    from src.feedback.strategy_stats import sector_version_breakdown
+    counts = sector_version_breakdown()
+    print("闭合样本按板块分类版本分布（9/4→9/7 分类换血，新旧口径不互污）：")
+    for version, count in sorted(counts.items()):
+        print(f"  {version}: {count}笔")
+
+
+def cmd_projection_errors():
+    """【P0-1】外推误差记录表（作废条件：10:30后误差持续>15% → 换标的池分位表）"""
+    from src.analyzers.volume_projection import projection_error_report
+    report = projection_error_report()
+    print("量能外推误差记录（收盘 vs 盘中外推，误差进记录表）：")
+    print(f"  样本: {report.get('samples', 0)}个（10:30后口径）")
+    if report.get("mean_error_pct") is not None:
+        print(f"  平均误差: {report['mean_error_pct']}% | 最大: {report['max_error_pct']}%")
+    print(f"  判定: {report.get('note', '')}")
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="P1-3 + 记录闭环 交易回执 CLI")
     g = p.add_mutually_exclusive_group(required=True)
@@ -139,6 +183,11 @@ if __name__ == "__main__":
                    help="事后归因（logic_right/luck/logic_wrong）")
     g.add_argument("--stats", action="store_true", help="策略分层统计（胜率/盈亏比/期望）")
     g.add_argument("--strategies", action="store_true", help="策略在线状态")
+    # 【Phase4】决策记录作废条件的审计入口（每周复盘逐条对照）
+    g.add_argument("--zmode", action="store_true", help="Z线双模式对照（P0-2 作废条件）")
+    g.add_argument("--sensitivity", action="store_true", help="分级OR过敏感统计（P0-3 作废条件）")
+    g.add_argument("--sector-versions", action="store_true", help="板块版本分布（P2-1）")
+    g.add_argument("--projection-errors", action="store_true", help="外推误差记录表（P0-1 作废条件）")
     p.add_argument("--outcome-value", choices=["logic_right", "luck", "logic_wrong"],
                    default=None, help="归因取值（--outcome 用）")
     p.add_argument("--note", default="", help="归因备注（--outcome 用）")
@@ -166,3 +215,11 @@ if __name__ == "__main__":
         cmd_stats()
     elif a.strategies:
         cmd_strategies()
+    elif a.zmode:
+        cmd_zmode()
+    elif a.sensitivity:
+        cmd_sensitivity()
+    elif a.sector_versions:
+        cmd_sector_versions()
+    elif a.projection_errors:
+        cmd_projection_errors()

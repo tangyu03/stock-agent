@@ -109,6 +109,21 @@ class TestBreakoutEventBoundary:
         second = te.check_entry_signals("688028", "沃尔德", "defend")
         assert second == []                     # 同一事件生命周期内不重发
 
+    def test_active_filled_event_blocks_new_entry_generation(self, monkeypatch):
+        """价量突破已成交后，恐慌抄底等新信号不得同标的双份建仓。"""
+        from src.analyzers.timing_engine import get_backtest_timing_engine
+        te = get_backtest_timing_engine()
+        tech = _breakout_day_tech()
+        monkeypatch.setattr(te, "_fetch_tech_data", lambda code, mode="defend": tech)
+
+        first = te.check_entry_signals("688028", "沃尔德", "defend")
+        assert len(first) == 1
+        te._lifecycle.mark_filled(first[0].event_id)
+        assert te._lifecycle.get_active_events("688028")[0].status == "filled"
+
+        second = te.check_entry_signals("688028", "沃尔德", "defend")
+        assert second == []
+
     def test_event_boundary_can_be_disabled(self, monkeypatch):
         """require_event_boundary=False → 回到旧"状态"行为（留给回溯对照）"""
         from src.analyzers.timing_engine import get_backtest_timing_engine
@@ -145,7 +160,7 @@ class TestLifecycleInvalidation:
         notices = te.evaluate_signal_events("688028", current_price=86.5, sector_status="rotational")
         assert len(notices) == 1
         assert notices[0]["exit_type"] == "信号作废"
-        assert "跌回突破位" in notices[0]["reason"]
+        assert "回踩失败已撤单" in notices[0]["reason"]
         assert "撤单" in notices[0]["reason"]
         assert te._lifecycle.get_active_events("688028") == []   # 已失效
 
@@ -161,6 +176,41 @@ class TestLifecycleInvalidation:
         assert len(notices) == 1
         assert "退潮" in notices[0]["reason"]
         assert te._lifecycle.get_active_events("688028") == []
+
+    def test_daily_close_state_machine(self):
+        """日内低点触及 Y 且收盘守住 Y → 成交；收盘破 Y → 回踩撤单。"""
+        from src.analyzers.signal_lifecycle import (
+            InMemorySignalEventStore,
+            SignalLifecycle,
+        )
+        store = InMemorySignalEventStore()
+        lifecycle = SignalLifecycle(store, valid_days=5)
+        event = lifecycle.register_event(
+            "688028", "沃尔德", "价量突破",
+            breakout_level=88.0, entry_price=89.50, stop_loss=83.50,
+            target_low=96.0, target_high=102.0,
+            hypothesis={"x": "放量突破MA25"},
+        )
+        notices = lifecycle.evaluate_events(
+            "688028", current_price=90.0, day_high=91.0,
+            day_low=89.40, close_price=90.10,
+        )
+        assert event.status == "filled"
+        assert "虚拟成交" in notices[0]["reason"]
+
+        lifecycle = SignalLifecycle(InMemorySignalEventStore(), valid_days=5)
+        failed = lifecycle.register_event(
+            "688029", "博杰", "价量突破",
+            breakout_level=88.0, entry_price=102.77, stop_loss=91.44,
+            target_low=112.89, target_high=120.21,
+            hypothesis={"x": "放量突破MA25"},
+        )
+        notices = lifecycle.evaluate_events(
+            "688029", current_price=100.91, day_high=104.0,
+            day_low=101.50, close_price=100.91,
+        )
+        assert failed.status == "invalidated"
+        assert "回踩失败已撤单" in notices[0]["reason"]
 
     def test_event_expires_after_valid_days(self, monkeypatch):
         """N 日内回踩买点有效，超期作废"""
@@ -234,3 +284,78 @@ class TestAudienceRouting:
         assert len(scheduled["buy"]) == 1
         assert scheduled["buy"][0].audience == "empty"
         assert scheduled["position_advice"] == []
+
+
+class TestForwardOnlyState:
+    """同一事件不能被另一个模块拉回旧状态；filled 是唯一成交语义。"""
+
+    def _event(self, status="valid"):
+        from src.analyzers.signal_lifecycle import SignalEvent
+        return SignalEvent(
+            event_id="evt-20260907112434-002975-价量突破",
+            stock_code="002975", stock_name="博杰股份",
+            entry_type="价量突破", born_date="2026-09-07",
+            expire_date="2026-09-12", breakout_level=99.39,
+            entry_price=102.77, stop_loss=99.39,
+            status=status,
+        )
+
+    def test_filled_cannot_roll_back_to_valid_or_triggered(self):
+        from src.analyzers.signal_lifecycle import (
+            InMemorySignalEventStore,
+            can_transition_status,
+            normalize_status,
+        )
+        store = InMemorySignalEventStore()
+        event = self._event("filled")
+        store.save(event)
+
+        event.status = "valid"
+        store.save(event)
+        store.update_status(event.event_id, "triggered")
+
+        assert store.events[event.event_id].status == "filled"
+        assert can_transition_status("filled", "valid") is False
+        # triggered 是旧库别名；作为目标值必须归一成 filled，不能新开状态。
+        assert can_transition_status("filled", "triggered") is True
+        assert normalize_status("triggered") == "filled"
+
+    def test_price_below_buypoint_invalidates_without_close_or_low(self):
+        from src.analyzers.signal_lifecycle import (
+            InMemorySignalEventStore,
+            SignalLifecycle,
+        )
+        lifecycle = SignalLifecycle(InMemorySignalEventStore(), valid_days=5)
+        event = lifecycle.register_event(
+            "002975", "博杰股份", "价量突破",
+            breakout_level=99.39, entry_price=102.77, stop_loss=99.39,
+            target_low=112.89, target_high=120.21,
+            hypothesis={"x": "放量突破MA25"},
+        )
+        notices = lifecycle.evaluate_events("002975", current_price=100.43)
+
+        assert event.status == "invalidated"
+        assert "回踩失败已撤单" in notices[0]["reason"]
+
+    def test_active_filled_event_is_not_reentry_candidate(self):
+        from src.analyzers.signal_lifecycle import reentry_status
+        store = self._store_with_event("filled")
+        status = reentry_status("002975", store=store)
+
+        assert status["standby"] is False
+        assert status["reason"] == "已成交事件在跟踪"
+        assert status["event_id"].endswith("价量突破")
+
+    def test_active_valid_event_is_not_reentry_candidate(self):
+        from src.analyzers.signal_lifecycle import reentry_status
+        store = self._store_with_event("valid")
+        status = reentry_status("002975", store=store)
+
+        assert status["standby"] is False
+        assert status["reason"] == "已触发事件在跟踪"
+
+    def _store_with_event(self, status):
+        from src.analyzers.signal_lifecycle import InMemorySignalEventStore
+        store = InMemorySignalEventStore()
+        store.save(self._event(status))
+        return store

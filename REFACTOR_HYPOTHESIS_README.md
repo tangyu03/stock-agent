@@ -341,3 +341,312 @@ python -m pytest tests/ -q          # 216 passed / 2 skipped / 2 failed(基线�
 | `tests/test_theme_attribution.py` | 主题归属修正：错配股改判 / 代理状态最严格 / 引擎闸门接线 |
 | `tests/test_data_source_fixes.py` | 两融兜底与口径区分 / 股东户数滞后 / 主力噪音降权 / 七问渲染 |
 | `tests/test_valuation_lens.py` | 估值透镜：兆易冲突双标签 / 长光华芯泡沫 veto / 中科飞测战略亏损 / 芯原模式亏损分型 / 中际旭创闸门冲突披露 / 出厂拒绝流 / 单位归一化 / 优雅降级 |
+
+---
+
+# 第四阶段：决策记录落地（P0/P1 全量 + P2/P3 简表）
+
+本阶段把《决策记录（12 条带审计链的改造建议）》逐条落进实现。每条建议
+自带依据 / 反方 / 作废条件 / 验证四要素——**每个数字有出处，每条规则
+有反方，每个建议有死亡条件**，作废条件的判定数据全部留档可查。
+
+## P0（最高优先级）
+
+### P0-1 量能外推口径（`src/analyzers/volume_projection.py`）
+
+依据：蘅东光 9/7 的 1.02x 拦截——盘中累计量对比全天均量，午前结构性
+小于 1 是数学必然（分子只走了半天），外推口径下同一数据为 2.0x。
+
+- 外推全天量 = 累计量 ÷ U 型分位（默认表：午前 52%，可整体覆盖）；
+- 反方对冲已内置：10:00 前禁用（开盘冲量高估）、封板禁用（按代码的
+  涨跌停幅度，北交所 30%）、14:45 后退化累计量、回测/日频禁用；
+- 触发口径：实际 >1.0 或 外推 ≥1.2（外推阈值更严，防假放量）任一成立；
+- 误差记录表 `volume_projection_log`：盘中记录外推快照，收盘回填实际
+  全天量（`daily_review` 自动执行），`projection_error_report()` 判定
+  作废条件（10:30 后误差持续 >15% → 换标的池分位数表，框架保留参数重校）；
+- CLI：`python scripts/trade_feedback.py --projection-errors`。
+
+### P0-2 Z 线统一（`hypothesis.py` + `signal_plan.py`）
+
+依据：博杰 9/7 止损线 85.54 与当日跌停价 85.53 吻合到分——用制度边界
+充当结构破位判定，污染 RRR/置信度/仓位三层输出。
+
+- `z_line_mode: bare_structure`（默认）：执行止损 = 假说结构位本体
+  （博杰重算：Z=99.39，RRR 0.59→2.99≈3.0，置信度 3/6→4/6）；
+- `z_line_mode: atr_buffer`：回退族（结构位−1.5×ATR，Phase1 行为保留）；
+- Z 宽度检查仅在 atr_buffer 模式生效（裸结构位的宽度由市场结构决定）；
+- RRR 质量票：RRR≥2.5 → 置信度 +1（出处：隐含胜率 28.6%，非惯例）；
+- 落库假说携带 `z_line_mode`，`z_mode_comparison()` 按模式分层对照
+  期望值（作废条件的判定材料，30 笔起步）；
+- CLI：`python scripts/trade_feedback.py --zmode`。
+
+### P0-3 卖出条件分级 OR（`timing_engine.check_exit_signals`）
+
+依据：两天 30+ 次卖出检查零触发，汇成真空 -6% 无响应——AND 门在
+数学上近乎永不开启。
+
+- 止损类（价格破 Z 线、技术走弱 medium≥2）任一即出，不容商量；
+- 止盈类（冲高止盈 strong≥2、MA5 压制三条件 AND）保持原有计票——
+  防止 OR 化从"永不触发"摆到"频繁误杀"的另一极；
+- `exit.graded_or.enabled: false` 可回退旧计票；
+- `graded_exit_sensitivity()` 统计周触发（作废条件：>5 次且过半 3 日内
+  回本 → 回调结构位距离参数，而非回退 AND）；
+- CLI：`python scripts/trade_feedback.py --sensitivity`。
+
+## P1（高优先级）
+
+### P1-1 防守模式确认追强降仓可用（`timing_engine._defensive_chase_gates`）
+
+依据：蘅东光 9/7 +14.81%/量比 2.01/ADX 48 却零提示——防守的定义是
+压缩敞口而非禁用策略。
+
+- 三重门全过才放行：门一四确认+时机（创新高/量比/量能外推/ADX/
+  外盘主动/RSI 未过热），门二基本面（净利同比≥30% 且非业绩雷/
+  低基数/模式亏损/筹码分散），门三板块联动（主线）；
+- 试探仓比例 = 单笔风险预算 1% ÷ 止损距离（`compute_risk_budget_position`）：
+  中波动 ≈29%≈1/3，蘅东光类高波动（止损距离~10%）≈10%，封顶 1/3，
+  不足 1 手按 1 手地板（比例语义保留在 `risk_budget_note`）；
+- 9/3 形态（RSI 过热+户数分散）被门一/门二拦截；
+- 踏空成本台账：防守模式未放行的创新高+放量标的入 `chase_missed`
+  推送留档（回退禁用后继续记录——这份数据是防守模式是否值得存在的证据）；
+- 统计分层键 `确认追强@防守`（30 笔滚动胜率<30% 且期望<0 → 回退禁用）。
+
+### P1-2 再入场循环（`signal_lifecycle.py`）
+
+依据：蘅东光 9/4 止损 -5%、9/7 +14.8%，缺的只是第二次入场——止损
+是尝试的结束，不是死刑判决。
+
+- 待命判定 `reentry_status()`：新事件（创新高 / 收复 Z 线）→ 待命
+  队列头部（观察卡置顶 + 独立推送）；显式声明"不携带沉没成本逻辑，
+  待完整触发条件重新确认"；
+- 次数上限 `max_reentries: 2`：用尽后转入长期观察，新事件不再重播
+  （拒绝留痕"再入场上限"）；expired（未入场形态）不计次数；
+- 作废条件数据：再入场样本与首入场样本分层对照（strategy_stats）。
+
+### P1-3 昨日事件追踪表（`src/feedback/event_tracker.py`）
+
+依据：9/3 六条信号 9/4 全灭，系统没有任何回头看的行为——没有记忆的
+系统无法校准任何参数。
+
+- 收盘版（`daily_review`）顶部：近 2 日信号事件 + 闭合交易表
+  （状态：待回踩/已入场/失效撤单/过期作废/了结；了结带浮盈浮亏%与
+  入场→离场链路）；
+- 验收标准内置：每月一次按表校准参数（拒绝无数据的调参）；
+- 本条是其他条目的基础设施，无作废条件。
+
+## P2 / P3（简表，同样带审计链）
+
+| 任务 | 实现 | 作废条件的数据基础设施 |
+|---|---|---|
+| P2 板块版本化 | `theme_map.yaml` 版本戳 + 假说携带 `sector_version` + `sector_version_breakdown()` | `--sector-versions` |
+| P2 资金拆层 | 快源（两融/龙虎榜）投票，慢源（主力/股东）拆层单独计票（`fund_layering` + 渲染独立行） | 拆层开关 `set_fund_layering` |
+| P2 组合预算 | 同板块并发敞口上限 3（`portfolio_budget.py`，超额降级观察并留痕） | `portfolio_budget.enabled` |
+| P3 趋势延续 | 第五策略：突破后 1~10 日延续段回踩不破+再放量（`_check_trend_continuation`，Z=MA10） | `trend_continuation.enabled` |
+| P3 第八问驱动源 | 业绩/板块/资金/价格四分类（`driver_attribution.py`，买卖卡 ⑧行 + 假说留档） | `driver_attribution` 阈值 |
+| P3 参数附录 | 收盘版底部参数出处+验证状态（`param_appendix.py`：RRR 隐含胜率/Z 线模式/外推误差/分级OR敏感度/风险预算） | 附录机制永不作废 |
+
+## 配置与回退
+
+全部新增行为集中在 `config/timing.yaml`，每块都有 `enabled` 开关：
+
+```yaml
+hypothesis_gate.z_line_mode: bare_structure   # P0-2（atr_buffer 回退族）
+volume_projection.enabled: true               # P0-1
+exit.graded_or.enabled: true                  # P0-3
+defensive_chase.enabled: true                 # P1-1（false = 回退禁追强，踏空留档）
+reentry.enabled: true                         # P1-2
+trend_continuation.enabled: true              # P3-1
+portfolio_budget.enabled: true                # P2-3
+confidence.rrr_quality_threshold: 2.5         # P0-2 RRR 质量票
+```
+
+回测链路（loop/）不受影响：回测模式下量能外推禁用（日频口径即全天量），
+其余闸门走同一份配置。
+
+## 测试（Phase4 新增 7 套件 90 用例）
+
+```bash
+python -m pytest tests/ -q --ignore=tests/test_institutional_fund_flow.py
+# 306 passed / 2 skipped（akshare 环境依赖隔离同前）
+```
+
+| 文件 | 锚定的验证项 |
+|---|---|
+| `tests/test_volume_projection.py` | 蘅东光 1.02x@11:27→2.0x / 沃尔德 0.92x→1.8x 触发 / 10:00前·封板·14:45后禁用 / 误差记录表与作废条件 / 回测禁用 |
+| `tests/test_z_line_unification.py` | 博杰 Z=99.39 / RRR 0.59→2.99 / 置信度 3/6→4/6 / 旧模式复现 85.54 病灶 / 双模式对照统计 |
+| `tests/test_graded_exit_or.py` | 汇成真空 -6% 破位止损 / 技术走弱 medium2 分级OR / 冲高止盈 strong1/2 继续持有 / MA5压制三条件保留 / 周触发过敏感统计 |
+| `tests/test_defensive_chase.py` | 蘅东光 9/7 三重门全过+降仓 / 9/3 RSI过热+户数分散拦截 / 风险预算 29%·10%·封顶1/3 / 调度器地板100股 / 拦截披露文案 |
+| `tests/test_reentry_cycle.py` | 创新高待命头部 / 收复Z线 / 次数上限2 / expired不计 / 沉没成本显式免责 |
+| `tests/test_event_tracker.py` | 9/3→9/4 六条信号闭合记录(了结,浮亏-3~-8%) / 收盘版顶部表格 / 生命周期行去重 |
+| `tests/test_phase4_p2p3.py` | 主题版本戳 / 拆层快慢计票 / 半导体设备8只预算拦截 / 沃尔德趋势延续触发 / 博杰业绩+板块双标签 / 参数附录全覆盖 |
+
+旧断言更新（行为变更随决策记录语义）：`test_hypothesis_gate`
+（裸结构位模式宽度检查仅 atr_buffer 生效）、`test_signal_plan`
+（RRR 质量票 5→6）、`test_observation_reasons`/`test_valuation_lens`
+（防守追强三重门文案）、`test_data_source_fixes`（拆层后慢源不再投票）。
+
+---
+
+# 第五阶段：验收回炉（9/8 盘前报告四个新问题）
+
+依据：2026-09-08 08:55 盘前报告验收（蘅东光/博杰/精智达三案例）——
+12 项改动落地 8 项、方向全部正确，但修复引入了四个新问题，全部在本阶段闭环。
+
+## 问题 1：RRR 天文数字以"合法形态"回归（Z 线统一漏了缓冲层）
+
+精智达裸结构位 476.75 距买点 480.77 仅 0.84%，日振幅 8.16% 的十分之一
+即可扫损；RRR=12.30 还给置信度 +1（坏数据给好评）。决策记录 P0-2 原文
+本写"结构位**或**结构位加 1~2 倍 ATR 缓冲"，Phase4 只做了前半句。
+
+修复（`hypothesis.py`）：
+- 新默认 `z_line_mode: buffered_structure`——Z = 结构位 − clamp(k×ATR)：
+  - k 自适应：ATR/结构位 ≥5%（高波动）用 1.5，<5%（低波动）用 2.0；
+  - 下限：max(0.5%, 毫厘噪声)（防 0.84% 类毫厘止损）；
+  - 上限：结构位 ×8%（防 1.5×ATR 拖到跌停价——博杰 9/7 旧病：
+    13.85 缓冲恰好落在 85.54=当日跌停价；现在被压到 7.95，Z=91.44）；
+  - 宽度检查与缓冲上限自洽（min(1.5×ATR, 8%×Y))，高波动标的不再被
+    自己的 cap 与宽度检查夹击拒绝。
+- `bare_structure` 降为对照族，保留防噪下限（止损距离<0.8% 或 <0.3×ATR
+  拒绝出厂）；`atr_buffer` 为 Phase1 回退族，三族同台由
+  `z_mode_comparison` 分层统计（作废条件的数据基础设施）。
+- 验证重算：精智达 Z 476.75→438.61，止损距离 0.84%→8.8%，
+  RRR 12.30→1.17（诚实区间）；博杰 Z 99.39→91.44（不再=跌停价 85.54）。
+
+配套（`signal_plan.py`）：RRR 质量票钳制 `[2.5, 5]`——RRR>5 不加分，
+details 显式标注"止损距离过窄，神话数字嫌疑"（验收：坏数据不配给好评）。
+
+## 问题 2：蘅东光倒在"创新高"上（门一口径 bug）
+
+蘅东光 9/7 盘中 555.10 创历史新高、收盘 549.50，"创新高"判定却未过——
+根因：`recent_high` 含当日高点，判定 `current ≥ recent_high×0.99` 实际
+测度的是"收盘接近日内最高"（549.50 < 555.10×0.99=549.55，差 0.05 元）。
+
+修复（`timing_engine.py`）：
+- 新增 `prior_high`（近 N 日高，剔除当日，`_compute_prior_high`）；
+- 三处判定换锚：门一"创新高"、海龟突破（Donchian）、趋势延续
+  bars_since_high；`reentry_status`/踏空台账同步（`unified_engine.py`）；
+- `prev_high` 语义修正为真昨日高点（旧实现=当日高点，名不副实）；
+- RSI 文案带口径（"RSI14未过热(<67)"）——验收质疑"蘅东光 RSI6=73
+  未拦、罗博特科 RSI6=79.5 拦"实为口径不透明（判定用 RSI14 一致）。
+- 验证：蘅东光 549.50 ≥ 前高 462.30×0.99 → 门一创新高通过、三重门
+  全过、确认追强降仓放行（不再是零提示）；光力科技式（未破前高）仍拦。
+
+## 问题 3：推导栏与闸门栏新旧并存
+
+- 推导栏 defend 文案由"禁用:确认追强"改为
+  "可用:恐慌抄底/套利低吸/价量突破/趋势延续 | 追强降仓需三重门"
+  （与环境闸门栏同口径——两处表述相反时，执行以谁为准的审计问题）；
+- 推导栏置信度优先取执行计划的评分口径（"中(2/6)"），
+  消除"置信度:高" vs "2/6 中"的矛盾（点名四轮的老问题）。
+
+## 问题 3b：存量事件与新规则双轨未标注
+
+博杰事件仍带旧 Z=85.54（9/7 生成，规则冻结合理），但报告未注明——
+审计者会误以为 Z 线统一没做。修复（`signal_lifecycle.py`）：
+- `SignalEvent.rule_version` 字段（DB 幂等补列），`register_event` 记录
+  生成时的 `z_line_mode`；
+- 事件状态行渲染版本：旧模式事件标"Z按bare_structure(旧版)"，
+  旧库空版本标"Z按旧版规则(版本未记录)"，当前版显示规则名。
+
+## 问题 4：风险系数随机出现（规则化）
+
+验收实证：精智达振幅 8.16%、风险系数 1.00；博杰反而 0.60——
+风险乘数与波动率无关等于随机数。修复（`signal_plan.py`）：
+- `_volatility_tier_multiplier`：max(当日振幅, 近5日平均振幅) 分档，
+  ≥8% → 0.6、≥5% → 0.8、<5% 不降档（换手已有 turnover_hot 单独惩罚）；
+- 配置 `risk.volatility_tier`（enabled/high_amp/mid_amp/window 可调）；
+- 作废条件：strategy_stats 分层统计显示 vol_tier 档期望不低于全样本
+  → 移除分档（高波动不是劣势来源时，规则退场）。
+
+## 测试（Phase5 新增 `tests/test_phase5_rework.py` 28 用例）
+
+```bash
+python -m pytest tests/ -q --ignore=tests/test_institutional_fund_flow.py
+# 339 passed / 2 skipped（2 个 metrics_enrichment 基线遗留与改造无关）
+```
+
+锚定验证项：精智达 buffered 重算（Z/RRR/止损距离/风险乘数四联动）、
+RRR 12.3 不加分且显式标注、[2.5,5] 区间照常加分、博杰防宽（Z≠跌停价）、
+蘅东光门一过/旧口径复现（差 0.05 元）/光力式仍拦/海龟突破/再入场头部、
+prior_high 构建口径、RSI 文案、推导栏同步、执行计划置信度、
+事件版本三类标注、波动分档六分支、试探仓预算反推。
+
+旧断言按新语义更新：`test_z_line_unification`（默认改 buffered，
+bare 转显式对照族）、`test_hypothesis_gate`（毫厘止损三模式全拒、
+裸位防噪下限）、`test_defensive_chase`（RSI14 文案）、
+`test_phase4_p2p3`（趋势延续 buffered Z）。
+
+## Phase5 配置速查
+
+```yaml
+hypothesis_gate.z_line_mode: buffered_structure   # 默认（bare/atr_buffer 为对照/回退族）
+hypothesis_gate.z_buffer_max_pct: 0.08            # 缓冲上限（防拖到跌停价）
+hypothesis_gate.bare_noise_min_pct: 0.008         # 裸位防噪下限
+confidence.rrr_quality_cap: 5.0                   # RRR 质量票上限钳制
+risk.volatility_tier.enabled: true                # 波动率分档风险乘数
+```
+
+# 第六阶段：层间接口缺失修复（9/8 验收）
+
+三处层间接口缺口（策略→分档、评分→决策、仓位→账户）+ 两项老问题复烧：
+
+## 问题 1：策略层 → 分档层（追强的语言，低吸的价格）
+
+追强类策略（确认追强/价量突破/趋势延续）的 Y 一律挂在 MA10，距现价
+10%~13%（蘅东光 Y=498.26 距 555.25 有 10.3%、罗博特科 Y=577.99 距
+656.10 有 13.5%），RRR 被压到 0.96。修复：`timing_engine.entry_main_tier_price()`
+按策略族分化——追强 Y=触发位（浅回踩档=触发位×0.98），低吸类
+（恐慌抄底/套利低吸）维持 MA10 档。分档层档位文案随策略标注
+（追强档/浅回踩档 vs MA10档/MA5档）。
+
+## 问题 2：评分层 → 决策层（0/6 照样放行，评分不连闸门）
+
+0/6 低置信信号不提供胜率证据，不允许假设胜率超过盈亏平衡线。修复：
+`signal_plan._evaluate_ev_gate()`——评分 <1（0/6）直接拒绝；策略统计
+足 30 笔用真实胜率算 EV=W×R−(1−W)，EV<0 拒绝；样本不足用 0.5 保守
+占位。拒绝理由显式写“负期望不出场，空仓是合法输出”。`live_scheduler`
+新增 `buy_ev_gate` 独立拒收桶，不进入 `buy` 列表。
+
+## 问题 3：仓位层 → 账户层（公式对了，预算绝对值黑箱）
+
+仓位公式从未披露预算基数，300 股×88.56=26,568 元敞口隐含 265 万
+账户。修复：`config/timing.yaml position_budget` 显式定义预算基数
+（250,000 元/笔）与账户口径（1,000,000 元），调度 note 与
+`param_appendix` 披露“建议 N 股×价=元(预算基数) | 单笔风险敞口 |
+账户 100 万(1%预算=10,000 元，敞口占 X%) | 按 1% 风险预算反推隐含
+账户”。
+
+## 老问题 A：推导栏与置信度栏矛盾（第五轮）
+
+执行计划建立后统一刷新 `sig.trigger_reason` 的“置信度:”口径为
+“低(0/6)”——与置信度栏同源，不再出现“高/中” vs “0/6 低”并存。
+
+## 老问题 B：派发日仍是 4/25 未刷新（第五轮）
+
+`_count_distribution_days` 返回 `last_date/stale/stale_days`；末根距
+参考日 >7 天判定过期，过期时指数 K 线换源重取，模式判定降级 defend
+并披露“数据截至……已滞后 N 天，过期数据不参与模式判定”。
+
+## 测试（新增 `tests/test_interface_gaps.py` 16 用例）
+
+锚定：追强 Y=触发位 / 低吸 Y=MA10、EV 闸门拒绝与真实胜率路径、
+预算披露字符串、置信度口径同源、派发日 stale 降级与披露。
+
+```bash
+python -m pytest tests/ -q -p no:cacheprovider --basetemp=.\pytest-basetemp
+# 366 passed / 2 skipped
+```
+
+## Phase6 配置速查
+
+```yaml
+hypothesis_gate.ev_gate:
+  enabled: true
+  min_confidence_score: 1        # 0/6 不提供胜率证据 → 拒绝
+  min_trades_for_win_rate: 30    # 足样本才采信真实胜率
+  default_win_rate: 0.5          # 样本不足保守占位
+tiering.chase_probe_pct: 0.02    # 追强浅回踩档 = 触发位 × 0.98
+position_budget:
+  budget_per_stock: 250000       # 单笔预算基数（元）
+  account_value: 1000000         # 账户口径（元，1% 风险预算=10,000 元）
+```

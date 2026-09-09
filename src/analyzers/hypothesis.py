@@ -12,8 +12,19 @@ X、Y、Z、W 四个位置缺一个，这笔交易就没有逻辑，只有冲动
 配对原则（买卖配对）：
 1. Z 必须是 X 的直接否定 —— 突破买入的止损必须在突破位附近；
    底背驰买入的死亡条件就是背驰结构被新低破坏。
-2. Z 的宽度由波动率决定 —— 止损距离至少 1.5~2 倍 ATR，
-   避免沃尔德式 0.3% 乃至负缓冲的档位。
+2. Z 的宽度（决策记录 P0-2，Z 线统一；Phase5 验收回炉）：
+   z_line_mode=buffered_structure（默认）—— 执行止损 = 结构位 −
+   clamped(k×ATR) 自适应缓冲（k 随波动分档 1.5~2.0，缓冲下限防毫厘
+   止损、上限 8% 防拖到制度边界）。验收实证（9/8 精智达）：裸结构位
+   476.75 距买点 480.77 仅 0.84%，日振幅 8.16% 的十分之一就能扫损，
+   RRR 被分母过小抬到 12.3 的神话数字——决策记录写的本就是
+   “结构位**或**结构位加 1~2 倍 ATR 缓冲”，裸用是只做了前半句。
+   z_line_mode=bare_structure —— Z=结构位本体（对照族；防噪下限仍在，
+   止损距离低于日内噪声量级时拒绝出厂）。
+   z_line_mode=atr_buffer —— 结构位 − max(1.5×ATR, 0.5%)（旧 Phase1
+   行为，回退族；无上限钳制，博杰 9/7 曾被拖到 85.54=当日跌停价）。
+   作废条件：strategy_stats z_mode_comparison 分层统计 30 笔后，
+   哪个模式的期望值显著更低，就否决哪个模式（三族同台可审计）。
 3. 买卖敏感度对称 —— 进场精确到 0.1% 挂单，出场就不能等 8~10% 外加四重投票。
 
 四策略配对出场规格（X / Z / W）：
@@ -60,6 +71,15 @@ STRATEGY_EXIT_SPECS: Dict[str, Dict[str, str]] = {
         "z_rule": "跌破趋势线/MA20",
         "z_reference": "ma20",
         "w_rule": "动能耗尽信号（顶背驰+缩量）或到达目标位分批兑现",
+        "w_reference": "recent_high",
+    },
+    # 【Phase4 P3-1】趋势延续：突破后 1~10 日的延续段回踩入场
+    # （沃尔德 9/7 +7.02% 处于突破后延续段，四策略无一覆盖）。
+    # Z = 延续结构的否定（跌破 MA10）；W = 延伸目标位/动能耗尽。
+    "趋势延续": {
+        "z_rule": "跌破MA10（延续结构破位）",
+        "z_reference": "ma10",
+        "w_rule": "到达延伸目标位分批，或动能耗尽（顶背驰+缩量）兑现",
         "w_reference": "recent_high",
     },
 }
@@ -157,6 +177,9 @@ def _structure_reference(entry_type: str, tech_data: Dict) -> Tuple[float, str]:
     if entry_type == "确认追强":
         ref = _num(tech_data.get("ma20"))
         return (ref or 0.0, "趋势线MA20")
+    if entry_type == "趋势延续":
+        ref = _num(tech_data.get("ma10"))
+        return (ref or 0.0, "延续结构MA10")
     if entry_type == "恐慌抄底":
         kline = tech_data.get("kline") or []
         lows = [_num(k.get("最低", k.get("low"))) for k in kline[-10:]]
@@ -187,34 +210,83 @@ def calculate_paired_stop(
     config: Optional[Dict] = None,
 ) -> Tuple[float, float, str]:
     """
-    计算配对止损 Z（X 的直接否定 + 波动率宽度）。
+    计算配对止损 Z（X 的直接否定）。
 
     返回 (z_price, z_reference_price, z_note)。
-    Z = 结构位 - max(z_atr_mult × ATR, 结构位 × z_pct_buffer)
-      - 结构位 = X 死亡的位置（突破位/趋势线/恐慌低点/低吸结构位）
-      - 宽度由波动率决定：至少 1.5×ATR（config hypothesis_gate.z_atr_mult）
-      - ATR 缺失时退化为百分比缓冲（z_pct_buffer）
+
+    z_line_mode（决策记录 P0-2，Z 线统一；Phase5 回炉）:
+      - buffered_structure（默认）: Z = 结构位 − clamp(k×ATR)。
+        k 自适应：ATR/结构位 ≥5%（高波动）用 z_atr_mult(1.5)，
+        <5%（低波动）用 z_atr_mult_low_vol(2.0)；缓冲下限 =
+        max(结构位×z_pct_buffer, min_noise_pct×Y)（防毫厘止损），
+        上限 = 结构位×z_buffer_max_pct(8%)（防 ATR 缓冲拖到制度边界——
+        博杰 9/7 旧病：1.5×ATR=13.85=13.9% 恰好拖到跌停价 85.54）。
+        验收实证：精智达 9/8 裸结构位 476.75 → 缓冲后 ≈442，
+        RRR 从 12.3 童话数字回到诚实区间。
+      - bare_structure: Z = 结构位本体（跌破即逻辑死亡，对照族；
+        博杰 9/7 重算: 结构位 99.39 → RRR 0.59→≈3.0）。
+      - atr_buffer: Z = 结构位 − max(z_atr_mult×ATR, 结构位×z_pct_buffer)
+        （Phase1 旧行为，回退族——仍在 Z 线家族内，无上限钳制）。
     """
     spec = STRATEGY_EXIT_SPECS.get(entry_type, {})
     z_rule = spec.get("z_rule", "跌破买点结构")
     ref, ref_name = _structure_reference(entry_type, tech_data)
 
     z_atr_mult = float(_config_get(config, "hypothesis_gate", "z_atr_mult", default=1.5))
+    z_atr_mult_low_vol = float(
+        _config_get(config, "hypothesis_gate", "z_atr_mult_low_vol", default=2.0)
+    )
+    z_high_vol_ratio = float(
+        _config_get(config, "hypothesis_gate", "z_high_vol_ratio", default=0.05)
+    )
     z_pct_buffer = float(_config_get(config, "hypothesis_gate", "z_pct_buffer", default=0.005))
+    z_buffer_max_pct = float(
+        _config_get(config, "hypothesis_gate", "z_buffer_max_pct", default=0.08)
+    )
+    z_line_mode = str(
+        _config_get(config, "hypothesis_gate", "z_line_mode", default="buffered_structure")
+    )
 
     if ref <= 0:
         ref = float(benchmark_price or 0)
 
-    buffer = 0.0
-    if atr is not None and atr > 0:
-        buffer = max(z_atr_mult * atr, ref * z_pct_buffer)
+    if z_line_mode == "atr_buffer":
+        buffer = 0.0
+        if atr is not None and atr > 0:
+            buffer = max(z_atr_mult * atr, ref * z_pct_buffer)
+        else:
+            buffer = ref * max(z_pct_buffer, 0.02)
+        z_price = ref - buffer
+        if ref > 0:
+            z_price = min(z_price, ref * (1 - z_pct_buffer))  # Z 必须严格在结构位下方
+    elif z_line_mode == "buffered_structure":
+        # 结构位 − clamp(k×ATR)：决策记录“结构位或结构位加 1~2 倍 ATR 缓冲”
+        # 的后半句。k 随标的波动自适应（高波动 1.5 倍 / 低波动 2 倍——
+        # 低波动标的的 ATR 绝对值小，需要更大倍数才够一层噪声缓冲）。
+        k = z_atr_mult_low_vol
+        if atr is not None and atr > 0 and ref > 0 and (atr / ref) >= z_high_vol_ratio:
+            k = z_atr_mult
+        if atr is not None and atr > 0:
+            buffer = k * atr
+        else:
+            # ATR 缺失：百分比兜底（结构位口径，非买点口径）
+            buffer = ref * max(z_pct_buffer, 0.02)
+        # 下限：防毫厘止损（日内噪声量级）
+        min_buffer = ref * z_pct_buffer
+        buffer = max(buffer, min_buffer)
+        # 上限：防拖到制度边界（跌停价）——缓冲不吞掉超过 8% 的结构位
+        if ref > 0:
+            buffer = min(buffer, ref * z_buffer_max_pct)
+        z_price = ref - buffer
     else:
-        buffer = ref * max(z_pct_buffer, 0.02)
+        # 裸结构位：执行止损 = 假说结构位（跌破即逻辑死亡，
+        # 突破策略的定义与“用更大亏损赌回归”的宽止损互斥）
+        z_price = ref
 
-    z_price = ref - buffer
-    if ref > 0:
-        z_price = min(z_price, ref * (1 - z_pct_buffer))  # Z 必须严格在结构位下方
-    z_note = f"{z_rule}({ref_name}{ref:.2f}下方)"
+    mode_note = ""
+    if z_line_mode == "buffered_structure" and ref > 0:
+        mode_note = f"，缓冲{ref - z_price:.2f}({(ref - z_price) / ref * 100:.1f}%)"
+    z_note = f"{z_rule}({ref_name}{ref:.2f}下方{mode_note})"
     return round(z_price, 2), ref, z_note
 
 
@@ -253,6 +325,8 @@ def build_entry_hypothesis(
         y_note = "低位结构缩量承接"
     elif entry_type == "确认追强":
         y_note = "突破确认当日跟进"
+    elif entry_type == "趋势延续":
+        y_note = "延续段回踩MA5/MA10承接"
     else:
         y_note = "主档回踩承接"
 
@@ -305,21 +379,58 @@ def validate_hypothesis(
             "假说自相矛盾"
         )
     if hyp.entry_y > 0 and hyp.exit_z > 0 and hyp.exit_z < hyp.entry_y:
-        z_atr_mult = float(_config_get(config, "hypothesis_gate", "z_atr_mult", default=1.5))
-        min_pct = float(_config_get(config, "hypothesis_gate", "min_z_buffer_pct", default=0.01))
-        if atr is not None and atr > 0:
-            min_width = z_atr_mult * atr
-            source = f"{z_atr_mult:.1f}×ATR({atr:.2f})"
-        else:
-            min_width = hyp.entry_y * min_pct
-            source = f"{min_pct * 100:.1f}%最小缓冲"
-        width = hyp.entry_y - hyp.exit_z
-        if width < min_width:
-            reasons.append(
-                f"止损缓冲不足(Z宽度): 买点-认错价仅{width:.2f}"
-                f"({width / hyp.entry_y * 100:.2f}%)，低于{source}={min_width:.2f}，"
-                "易被正常波动扫损"
+        # 【P0-2 / Phase5 回炉】Z 线宽度检查：
+        # - buffered_structure / atr_buffer：完整宽度检查（止损必须盖住
+        #   一层日内噪声，否则正常波动就能扫损）；
+        # - bare_structure：止损职能是否定买入逻辑，宽度由市场结构决定，
+        #   但仍保留“防噪下限”——止损距离低于日内噪声量级
+        #   （精智达 9/8 实证：0.84% 止损距离 vs 8.16% 日振幅）
+        #   时拒绝出厂，不参与任何模式下的毫厘止损。
+        z_line_mode = str(
+            _config_get(config, "hypothesis_gate", "z_line_mode", default="buffered_structure")
+        )
+        if z_line_mode == "bare_structure":
+            bare_noise_min_pct = float(
+                _config_get(config, "hypothesis_gate", "bare_noise_min_pct", default=0.008)
             )
+            min_width = hyp.entry_y * bare_noise_min_pct
+            if atr is not None and atr > 0:
+                min_width = max(min_width, 0.3 * atr)
+            width = hyp.entry_y - hyp.exit_z
+            if width < min_width:
+                reasons.append(
+                    f"止损距离小于日内噪声(裸结构位防噪): 买点-认错价仅{width:.2f}"
+                    f"({width / hyp.entry_y * 100:.2f}%)，低于下限{min_width:.2f}，"
+                    "正常波动即可扫损，回 buffered_structure 或拒绝"
+                )
+        else:
+            z_atr_mult = float(_config_get(config, "hypothesis_gate", "z_atr_mult", default=1.5))
+            min_pct = float(_config_get(config, "hypothesis_gate", "min_z_buffer_pct", default=0.01))
+            if atr is not None and atr > 0:
+                min_width = z_atr_mult * atr
+                source = f"{z_atr_mult:.1f}×ATR({atr:.2f})"
+            else:
+                min_width = hyp.entry_y * min_pct
+                source = f"{min_pct * 100:.1f}%最小缓冲"
+            # 【Phase5 自洽】buffered 模式下缓冲被 z_buffer_max_pct 上限压缩时，
+            # 宽度下限同步压缩（min(1.5×ATR, Y×上限)）——否则高波动标的
+            # （博杰 ATR/结构位 9.3%）出现“缓冲被 cap 到 8% 但宽度检查
+            # 要 13.5%”的自相矛盾，被自己出厂拒绝。
+            if z_line_mode == "buffered_structure" and atr is not None and atr > 0:
+                z_buffer_max_pct = float(
+                    _config_get(config, "hypothesis_gate", "z_buffer_max_pct", default=0.08)
+                )
+                capped_width = hyp.entry_y * z_buffer_max_pct
+                if capped_width < min_width:
+                    min_width = capped_width
+                    source = f"min({z_atr_mult:.1f}×ATR, {z_buffer_max_pct * 100:.0f}%上限)"
+            width = hyp.entry_y - hyp.exit_z
+            if width < min_width:
+                reasons.append(
+                    f"止损缓冲不足(Z宽度): 买点-认错价仅{width:.2f}"
+                    f"({width / hyp.entry_y * 100:.2f}%)，低于{source}={min_width:.2f}，"
+                    "易被正常波动扫损"
+                )
     w_valid = [v for v in hyp.exit_w if v and v > 0]
     if not w_valid:
         reasons.append("兑现离场缺失(W): 无目标即无兑现纪律")

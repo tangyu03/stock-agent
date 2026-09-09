@@ -36,6 +36,44 @@ class DailyReview:
         lines.append(f"📈 盘后复盘 {today}")
         lines.append("")
 
+        # 0.【P1-3】广播表置顶：状态机说了算，不维护持仓；只对空仓系统
+        # 输出条件句。它取代“27 条止损未触发”的幽灵持仓体检。
+        lines.append("📡 在飞事件:")
+        try:
+            from ..feedback.event_tracker import (
+                collect_in_flight_events,
+                render_in_flight_events,
+            )
+            in_flight = collect_in_flight_events(as_of=date.today(), lookback_days=7)
+            lines.append(render_in_flight_events(in_flight))
+        except Exception as e:
+            lines.append(f"  在飞事件生成失败: {str(e)[:60]}")
+        lines.append("")
+
+        # 0.1 【P1-3】昨日事件追踪表（决策记录：收盘版顶部出现表格——
+        # 没有记忆的系统无法校准任何参数，作废条件的判定都依赖它先存在）
+        lines.append("📅 昨日事件追踪（近2日，含闭合记录）:")
+        try:
+            from ..feedback.event_tracker import (
+                build_event_tracking_table, render_event_tracking_table,
+            )
+            rows = build_event_tracking_table(as_of=date.today(), lookback_days=2)
+            lines.append(render_event_tracking_table(rows))
+        except Exception as e:
+            lines.append(f"  追踪表生成失败: {str(e)[:60]}")
+        lines.append("")
+
+        # 0.5 【P0-1】外推误差回填：收盘比对"外推全天量 vs 实际全天量"，
+        # 误差进记录表（作废条件的数据基础设施）
+        try:
+            from ..analyzers.volume_projection import finalize_day_projection
+            from ..data_layer.stock_data import get_stock_data
+            finalized = finalize_day_projection(self._collect_actual_ratios())
+            if finalized:
+                lines.append(f"  外推误差回填: {finalized} 条（收盘 vs 盘中外推，已入记录表）")
+        except Exception as e:
+            logger.debug("外推误差回填失败: %s", str(e)[:60])
+
         # 1. 今日大盘
         lines.append("📊 大盘表现:")
         market_summary = self._get_market_summary()
@@ -65,8 +103,46 @@ class DailyReview:
         tomorrow_focus = self._get_tomorrow_focus()
         lines.append(tomorrow_focus)
 
+        # 6.【P3-3】参数附录：每个参数的出处与验证状态
+        # （RRR 1.5 隐含 40% 胜率假设七天未验证——参数没有验证状态
+        #   就是拍脑袋的数字；附录机制永不作废）
+        try:
+            from ..feedback.param_appendix import build_param_appendix
+            lines.append("")
+            lines.append(build_param_appendix())
+        except Exception as e:
+            logger.debug("参数附录生成失败: %s", str(e)[:60])
+
         report = "\n".join(lines)
         return report
+
+    def _collect_actual_ratios(self) -> dict:
+        """【P0-1】收盘后取各股实际全天量/60日均量（用于外推误差回填）。"""
+        actual: dict = {}
+        try:
+            codes = [
+                str(s.get("code", ""))
+                for s in (self._logger.get_current_holdings() or [])
+            ]
+        except Exception:
+            codes = []
+        if not codes:
+            return actual
+        try:
+            from ..analyzers.timing_engine import get_timing_engine
+            engine = get_timing_engine()
+            engine.reset_caches()
+            for code in codes[:30]:  # 预算：最多回填 30 只
+                tech = engine._fetch_tech_data(code, "defend")
+                if not isinstance(tech, dict):
+                    continue
+                today_volume = tech.get("today_volume")
+                volume_ma60 = tech.get("volume_ma60")
+                if today_volume and volume_ma60 and volume_ma60 > 0:
+                    actual[code] = float(today_volume) / float(volume_ma60)
+        except Exception as e:
+            logger.debug("实际量口径采集失败: %s", str(e)[:60])
+        return actual
 
     def run_and_push(self):
         """生成并推送复盘"""

@@ -246,7 +246,13 @@ class PushPlus:
         exits = exits or []
         observations = observations or []
 
-        from .templates import render_environment_overview, render_entry_signal, render_exit_signal
+        from .templates import (
+            _esc,
+            render_environment_overview,
+            render_entry_signal,
+            render_exit_signal,
+            stock_identity,
+        )
 
         # 标题
         mode = environment.get("market_mode", "defend")
@@ -264,6 +270,61 @@ class PushPlus:
 
         # 内容：环境总览 + 信号
         content = render_environment_overview(environment)
+
+        # 【P1-4】广播表置顶：在飞事件用信号生命周期驱动；信号系统不读仓位。
+        try:
+            from ..feedback.event_tracker import (
+                collect_in_flight_events,
+                render_in_flight_events,
+            )
+            event_rows = collect_in_flight_events(lookback_days=7)
+            current_prices: Dict[str, float] = {}
+            for signal in [*entries, *exits, *observations]:
+                try:
+                    code = str(signal.get("stock_code", ""))
+                    price = float(signal.get("current_price") or 0)
+                    if code and price > 0:
+                        current_prices[code] = price
+                except (TypeError, ValueError):
+                    continue
+            for row in event_rows:
+                if row.get("stock_code") in current_prices:
+                    row["current_price"] = current_prices[row["stock_code"]]
+            content = render_in_flight_events(event_rows) + content
+        except Exception:
+            pass
+
+        # 【P1-3】评分闸门摘要：已触发但被输出端闸门拦截，不能静默消失。
+        score_gate = environment.get("score_gate") or {}
+        if score_gate:
+            content += (
+                f"<b>评分闸门</b><br/>&nbsp;&nbsp;拦截{score_gate.get('count', 0)}条"
+                f"(评分≤1): {_esc(score_gate.get('detail', ''))}<br/>"
+            )
+
+        # 【P2-8】板块集中只是一行提醒，管理边界仍在执行系统。
+        concentration = environment.get("sector_concentration") or {}
+        if concentration:
+            content += (
+                f"<b>板块提示</b><br/>&nbsp;&nbsp;{concentration.get('line', '')}<br/>"
+            )
+
+        virtual_counts = environment.get("virtual_fill_counts")
+        if virtual_counts:
+            content += (
+                f"<b>撮合计数</b><br/>&nbsp;&nbsp;{_esc(str(virtual_counts))}<br/>"
+            )
+
+        # 【P1-5】候梯前排：按差几个条件排序，直接回答接下来盯谁。
+        watch_ladder = environment.get("watch_ladder") or []
+        if watch_ladder:
+            content += "<b>候梯前排</b><br/>"
+            for item in watch_ladder[:5]:
+                content += (
+                    f"&nbsp;&nbsp;{_esc(stock_identity(item))} | "
+                    f"{_esc(item.get('reason', ''))}<br/>"
+                )
+            content += "<br/>"
 
         if entries:
             content += f"<b>📥 买入信号 ({len(entries)}条)</b><br/><br/>"

@@ -525,6 +525,22 @@ _VOTE_WEIGHTS: Dict[str, float] = {
     "shareholder": 0.5,   # 股东户数：报告期级滞后
 }
 
+# 【P2-2】资金拆层：快变量参与当日价格投票，慢变量单独计票不投票。
+# 依据（决策记录）：股东户数 6/30、主力 3 日快照对“当日价格”投票——
+# 时间尺度错配（博杰 9/7 机构净买入在慢层完全不可见）。
+# 作废条件：若慢变量经回测对 5 日收益有显著预测力，
+# 恢复投票权但单独计票。
+_FUND_LAYERING = {
+    "enabled": True,                          # False = 回退四源同票（Phase2 口径）
+    "fast_sources": ("north_bound", "lhb"),  # 快变量：当日/近日披露
+    "slow_sources": ("main_force", "shareholder"),  # 慢变量：拆层展示
+}
+
+
+def set_fund_layering(enabled: bool) -> None:
+    """【P2-2】拆层开关（测试/运维用）。"""
+    _FUND_LAYERING["enabled"] = bool(enabled)
+
 # 【C-股东户数】报告期级数据时效阈值：统计截止日距今超过该天数 → 不参与投票
 _SHAREHOLDER_STALE_DAYS = 90
 
@@ -1254,7 +1270,37 @@ def score_institutional_holding(
         (v["vote"] or 0) * _VOTE_WEIGHTS.get(src_name, 1.0)
         for src_name, v in votes.items()
     )
-    total_score = int(weighted_total)
+
+    # 【P2-2】资金拆层：快变量（两融/龙虎榜）参与当日价格投票；
+    # 慢变量（主力3日/股东报告期）单独计票，不再对当日价格投票。
+    layering_on = bool(_FUND_LAYERING.get("enabled", True))
+    fast_sources = tuple(_FUND_LAYERING.get("fast_sources") or ())
+    slow_sources = tuple(_FUND_LAYERING.get("slow_sources") or ())
+    if layering_on:
+        fast_total = sum(
+            (votes[src]["vote"] or 0) * _VOTE_WEIGHTS.get(src, 1.0)
+            for src in fast_sources if src in votes
+        )
+        slow_total = sum(
+            (votes[src]["vote"] or 0) * _VOTE_WEIGHTS.get(src, 1.0)
+            for src in slow_sources if src in votes
+        )
+        total_score = int(fast_total)
+        slow_layer = {
+            "enabled": True,
+            "score": int(slow_total),
+            "sources": {
+                src: (votes.get(src) or {}).get("vote", 0) for src in slow_sources
+            },
+            "note": (
+                "慢变量拆层计票(主力/股东不参与当日投票；"
+                "作废条件：慢变量对5日收益有显著预测力时恢复投票权但单独计票)"
+            ),
+        }
+    else:
+        total_score = int(weighted_total)
+        slow_layer = {"enabled": False}
+
     bullish_count = sum(1 for v in vote_scores if v > 0)
     bearish_count = sum(1 for v in vote_scores if v < 0)
     neutral_count = sum(1 for v in vote_scores if v == 0)
@@ -1273,6 +1319,7 @@ def score_institutional_holding(
         vote_label = "资金数据不足(降权)"
 
     # 标签（【Phase3】资金流投票标签——非研报共识）
+    # 【P2-2】拆层模式下标签口径 = 快源投票（当日价格语境）
     if total_score >= 2:
         vote_label = "资金看多"
     elif total_score <= -2:
@@ -1304,6 +1351,8 @@ def score_institutional_holding(
         "weight_note": "主力/股东票降权0.5（拆单算法噪音/报告期滞后）",
         # 【Phase3】标签口径声明（渲染层展示，防止把资金流当研报共识误读）
         "label_scope": "资金流投票(4源,非研报共识)",
+        # 【P2-2】资金拆层：慢变量单独计票结果（渲染层独立展示）
+        "fund_layering": slow_layer,
     }
 
     # 写入 session 缓存

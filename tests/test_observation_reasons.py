@@ -54,5 +54,6 @@ def test_strategy_blockers_are_listed():
     assert '策略检查:' in reason
     assert '恐慌抄底: 正常行情，未触发' in reason
     assert '套利低吸: 周线MACD未向上' in reason
-    assert '确认追强: 仅进攻模式启用' in reason
+    # 【P1-1】防守模式确认追强改为三重门降仓放行（不再“仅进攻模式启用”）
+    assert '确认追强: 防守模式降仓放行需过三重门' in reason
     assert '价量突破: K线不足60日(实际0条)，暂不判断' in reason

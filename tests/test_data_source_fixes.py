@@ -195,9 +195,10 @@ class TestShareholderStaleness:
 class TestVoteWeights:
 
     def test_single_noisy_sources_cannot_flip_total(self, monkeypatch):
-        """两融+1、主力-1、股东-1、龙虎榜0：
-        旧逻辑总分 -1（偏空）；新逻辑加权 1-0.5-0.5=0 → 中性。
-        单靠噪音源（拆单算法/报告期滞后）不再能翻动机构结论。"""
+        """【P2-2 资金拆层后语义】两融+1（快源）、主力-1/股东-1（慢源）、龙虎榜0：
+        拆层下当日投票 = 快源 +1；主力/股东拆层单独计票（-1），
+        对当日价格零票权——时间尺度错配不再拖动当日判定
+        （博杰 9/7 机构净买入在慢层可见、不污染当日票）。"""
         monkeypatch.setattr(_inst, "_fetch_margin_balance",
                             lambda c: {"vote": 1, "detail": "两融增加", "raw": {}})
         monkeypatch.setattr(_inst, "_fetch_lhb_institutional",
@@ -208,7 +209,24 @@ class TestVoteWeights:
                             lambda c: {"vote": -1, "detail": "户数增加", "raw": {}})
         monkeypatch.setattr(_inst, "_fetch_top10_institutional_ratio", lambda c: None)
         result = _REAL_SCORE("603061")
-        assert result["vote_score"] == 0
+        # 快源投票：两融+1，龙虎榜0 → 当日票 +1
+        assert result["vote_score"] == 1
+        # 慢层单独计票：主力-1、股东-1 → -1（展示层可见，不投票）
+        layering = result.get("fund_layering") or {}
+        assert layering.get("enabled") is True
+        assert layering.get("score") == -1
+        assert layering["sources"]["main_force"] == -1
+        assert layering["sources"]["shareholder"] == -1
+        # 回退开关：关闭拆层 → 恢复四源同票（加权 1-0.5-0.5=0 → 中性）
+        try:
+            _inst._reset_institutional_state()
+            _inst.set_fund_layering(False)
+            result_legacy = _REAL_SCORE("603061")
+            assert result_legacy["vote_score"] == 0
+            assert (result_legacy.get("fund_layering") or {}).get("enabled") is False
+        finally:
+            _inst._reset_institutional_state()
+            _inst.set_fund_layering(True)
         assert result["vote_score_weighted"] == 0.0
         assert result["vote_weights"]["main_force"] == 0.5
         assert result["vote_weights"]["shareholder"] == 0.5

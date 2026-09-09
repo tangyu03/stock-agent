@@ -918,6 +918,11 @@ def calc_tech_indicators(
         "volume_ratio": vol_ratio,
     })
     vol_signal = volume_snapshot.label
+    # 【P0-1】外推口径展示：盘中累计量对比全天均量结构性偏小（分子只走了半天），
+    # 报告同时展示外推口径让读者自行校准（仅展示，不改变投票数学）。
+    _proj_note = ""
+    if volume_snapshot.projection_mode == "ok" and volume_snapshot.projected_volume_vs_ma60:
+        _proj_note = f",外推口径{volume_snapshot.projected_volume_vs_ma60:.2f}x"
     vol_stagnation_pct = vol_cfg.get("stagnation_pct", 0.01)
     if volume_snapshot.dirty:
         details_by_cat["volume"].append(volume_snapshot.dirty_reason + "(不投票)")
@@ -1070,21 +1075,21 @@ def calc_tech_indicators(
         details_by_cat["volume"].append(
             f"放量上涨{change_pct*100:+.1f}%"
             f"(量比{volume_snapshot.volume_ratio or 0:.2f}x"
-            f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x)"
+            f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x{_proj_note})"
         )
     elif change_pct < -vol_stagnation_pct:
         vol_vote = -1
         details_by_cat["volume"].append(
             f"放量下跌{change_pct*100:+.1f}%"
             f"(量比{volume_snapshot.volume_ratio or 0:.2f}x"
-            f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x)"
+            f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x{_proj_note})"
         )
     else:
         vol_vote = -1
         details_by_cat["volume"].append(
             f"放量滞涨{change_pct*100:+.1f}%"
             f"(量比{volume_snapshot.volume_ratio or 0:.2f}x"
-            f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x)"
+            f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x{_proj_note})"
         )
 
     # ════════════════════════════════════════════════════════

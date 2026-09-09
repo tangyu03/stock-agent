@@ -304,9 +304,11 @@ class TestChaseBlockedConflictDisclosure:
         blockers = self._blockers("defend", lens)
         chase = [b for b in blockers if b.startswith("确认追强")]
         assert len(chase) == 1
-        assert "仅进攻模式启用" in chase[0]           # 闸门仍是拦截（纪律优先）
+        # 【P1-1】防守模式确认追强改为三重门降仓放行：闸门仍是拦截（纪律优先），
+        # 未过三重门时披露具体卡在哪一关；基本面冲突继续显式披露
+        assert "防守模式降仓放行需过三重门" in chase[0]
         assert "⚠基本面冲突" in chase[0]              # 但冲突必须可见
-        assert "踏空风险" in chase[0]
+        assert "三重门纪律优先" in chase[0]           # 【P1-1】降仓不等于无条件放行
 
     def test_analyst_bullish_chase_block_disclosed(self):
         lens = {
@@ -322,7 +324,9 @@ class TestChaseBlockedConflictDisclosure:
         """基本面弱/无数据 → 维持原 blocker 文案（不制造噪音）。"""
         blockers = self._blockers("defend", None)
         chase = [b for b in blockers if b.startswith("确认追强")]
-        assert chase == ["确认追强: 仅进攻模式启用"]
+        # 【P1-1】三重门文案（未过时披露具体关卡，同样不制造噪音）
+        assert len(chase) == 1
+        assert chase[0].startswith("确认追强: 防守模式降仓放行需过三重门")
 
     def test_attack_mode_unaffected(self):
         """进攻模式不走该分支（原逻辑不变）。"""
@@ -455,8 +459,17 @@ class TestDataLayer:
                             lambda func, period: table if func == "stock_yjkb_em" else {})
         assert fetch_profit_abs("688048") == pytest.approx(0.3034, abs=1e-6)
 
-    def test_fetchers_fail_gracefully_without_akshare(self):
-        """无 akshare 环境：全部返回 None（透镜降级，不抛异常）。"""
+    def test_fetchers_fail_gracefully_without_akshare(self, monkeypatch):
+        """无 akshare 环境：全部返回 None（透镜降级，不抛异常）。
+
+        用 stub 替换 sys.modules['akshare']（而非依赖 CI 网络不可达），
+        保证在 akshare 可用/东财接口可达的环境下测试仍然确定。
+        """
+        class _NoAkShare:
+            def __getattr__(self, name):
+                raise RuntimeError("akshare 不可用（测试 stub）")
+
+        monkeypatch.setitem(sys.modules, "akshare", _NoAkShare())
         assert fetch_valuation_snapshot("688048") is None
         assert vl.fetch_analyst_consensus("688048") is None
         assert vl.fetch_balance_sheet_growth("688048") is None

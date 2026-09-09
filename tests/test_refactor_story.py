@@ -113,6 +113,11 @@ def test_full_closed_loop_story(tmp_db, monkeypatch):
         "hypothesis": hyp, "event_id": sig.event_id,
         "execution_plan": sig.execution_plan,
     }]
+    # 【评分层→决策层】该用例综合评分 2，新规则只拦截评分 ≤1；
+    # 因此应合法放行，并继续验证下游调度/落库/回执/兑现链路。
+    gated = schedule_live_signals(entry_batch, [], holdings=[])
+    assert len(gated["buy"]) == 1
+    assert gated["skipped"]["buy_ev_gate"] == []
     scheduled = schedule_live_signals(entry_batch, [], holdings=[])
     assert len(scheduled["buy"]) == 1
     s = scheduled["buy"][0]
@@ -143,7 +148,7 @@ def test_full_closed_loop_story(tmp_db, monkeypatch):
     with tmp_db.get_conn() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT status FROM signal_events WHERE event_id=?", (sig.event_id,))
-        assert cursor.fetchone()["status"] == "triggered"
+        assert cursor.fetchone()["status"] == "filled"
     position = tl.get_open_position("688028")
     assert position is not None and position["entry_type"] == "价量突破"
 

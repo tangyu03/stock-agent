@@ -37,6 +37,15 @@ class UnifiedSignalBatch:
     # 【二】主题归属修正记录（行业数据库映射 ≠ 市场主题交易，Phase2-B）
     theme_remaps: List[Dict] = field(default_factory=list)
 
+    # 【Phase4 P1-2】再入场待命队列（创新高/收复Z线的头部标的）
+    standby_queue: List[Dict] = field(default_factory=list)
+    # 【Phase4 P1-1】防守模式追强踏空成本台账（回退禁用后继续留档）
+    chase_missed: List[Dict] = field(default_factory=list)
+    # 【Phase4 P2-3】组合预算拦截留痕
+    budget_blocked: List[Dict] = field(default_factory=list)
+    # 【Phase4 P2-1】板块分类版本
+    theme_version: str = ""
+
 
 def _build_sector_for_stock(code: str, sector_map: Dict[str, str],
                               stock_sector_map: Dict[str, str],
@@ -114,7 +123,7 @@ def _strategy_blockers(
     sector_status: str,
     tech_data: Dict,
 ) -> List[str]:
-    """List the entry gate that failed for each of the four strategies."""
+    """List the entry gate that failed for each of the five strategies."""
     if sector_status == "retreating":
         return ["全部策略: 板块退潮，禁止新买入"]
 
@@ -139,13 +148,15 @@ def _strategy_blockers(
         blockers.append("套利低吸: 未出现低吸形态")
 
     if market_mode != "attack":
-        chase_blocker = "确认追强: 仅进攻模式启用"
-        # 【Phase3】闸门冲突披露：防守/撤退模式拦下追强，但个股基本面强
-        # （低估值真增长 / 战略性亏损订单加速 / 研报共识看多）——
-        # 闸门不因个股放开（防守纪律优先，否则模式闸门名存实亡），
-        # 但必须披露冲突：报告看得见踏空风险，模式判断错了可被复盘。
-        # （中际旭创案例：H1 净利 136.5 亿+PE 合理+订单排至 2027，
-        #   被"禁追强"静默拦截，报告零冲突提示。）
+        # 【P1-1】防守模式确认追强：降仓可用（三重门）而非禁用。
+        # 防守的定义是压缩敞口而非对全市场最强动量失明
+        # （蘅东光 9/7 +14.81%/量比2.01/ADX48 却零提示）。
+        # 未过三重门时披露具体卡在哪一关，踏空成本入台账。
+        chase_blocker = "确认追强: 防守模式降仓放行需过三重门(四确认+基本面+板块联动)"
+        gate_detail = _defensive_gate_blocker_text(tech_data, sector_status)
+        if gate_detail:
+            chase_blocker += f"——未过: {gate_detail}"
+        # 【Phase3】闸门冲突披露：防守模式拦下追强，但个股基本面强
         lens = tech_data.get("valuation_lens") or {}
         if isinstance(lens, dict) and lens:
             tags = ((lens.get("verdict") or {}).get("tags")) or []
@@ -159,8 +170,8 @@ def _strategy_blockers(
                 if analyst_bull:
                     hints.append("研报共识看多")
                 chase_blocker += (
-                    f" ⚠基本面冲突({'、'.join(hints)}；防守纪律优先不放开闸门，"
-                    "但踏空风险显式披露供复盘)"
+                    f" ⚠基本面冲突({'、'.join(hints)}；降仓不等于无条件放行，"
+                    "三重门纪律优先）"
                 )
         blockers.append(chase_blocker)
     else:
@@ -175,7 +186,28 @@ def _strategy_blockers(
         if breakout_reason:
             blockers.append(f"价量突破: {breakout_reason}")
 
+    # 【P3-1】趋势延续：第五策略（回踩型，防守模式可用）
+    if market_mode not in ("attack", "defend"):
+        blockers.append("趋势延续: 撤退模式禁用")
+    else:
+        cont_reason = _trend_continuation_blocker(tech_data)
+        if cont_reason:
+            blockers.append(f"趋势延续: {cont_reason}")
+
     return blockers
+
+
+def _defensive_gate_blocker_text(tech_data: Dict, sector_status: str) -> str:
+    """【P1-1】防守追强三重门未过的具体关卡（观察卡展示 + 踏空留档共用）。"""
+    try:
+        from ..analyzers.timing_engine import get_timing_engine
+        engine = get_timing_engine()
+        gate = engine._defensive_chase_gates(tech_data, sector_status)
+        if gate["passed"]:
+            return ""  # 三重门已过 → 实际信号应已生成（此处不展示拦截）
+        return "；".join(gate["evidence"])
+    except Exception:
+        return "三重门评估不可用"
 
 
 def _panic_bottom_blocker(tech_data: Dict) -> str:
@@ -244,11 +276,48 @@ def _volume_breakout_blocker(tech_data: Dict, market_mode: str) -> str:
         return volume_snapshot.dirty_reason
     if volume_snapshot.volume_vs_ma60 is None:
         return "量能数据不足"
+    change_pct = float(tech_data.get("change_pct", 0) or 0)
+    projected = volume_snapshot.projected_volume_vs_ma60
+    projected_ok = (
+        projected is not None
+        and projected >= 1.2
+        and volume_snapshot.projection_mode == "ok"
+    )
     if (
         (volume_snapshot.volume_vs_ma60 is None or volume_snapshot.volume_vs_ma60 <= 1.0)
-        and float(tech_data.get("change_pct", 0) or 0) < 9.5
+        and change_pct < 9.5
+        and not projected_ok
     ):
+        # 【P0-1】外推口径披露：累计量未达标时展示外推判断
+        if projected is not None and volume_snapshot.projection_mode == "ok":
+            return f"量未破60日均量(累计{volume_snapshot.volume_vs_ma60:.2f}x，外推{projected:.2f}x)"
         return "量未破60日均量"
+    return ""
+
+
+def _trend_continuation_blocker(tech_data: Dict) -> str:
+    """【P3-1】趋势延续策略的拦截原因（观察卡展示）。"""
+    ma5 = float(tech_data.get("ma5", 0) or 0)
+    ma10 = float(tech_data.get("ma10", 0) or 0)
+    ma20 = float(tech_data.get("ma20", 0) or 0)
+    ma25 = float(tech_data.get("ma25", 0) or 0)
+    current = float(tech_data.get("current_price", 0) or 0)
+    prev_close = float(tech_data.get("prev_close", 0) or 0)
+    ma25_prev = tech_data.get("ma25_prev")
+    vol_ratio = float(tech_data.get("volume_ratio", 1.0) or 1.0)
+
+    if not all([ma5, ma10, ma20, ma25, current]):
+        return "行情字段不足"
+    if not (ma5 > ma10 > ma20):
+        return "非MA多头排列"
+    if current <= ma25:
+        return "未站上MA25"
+    if not (prev_close and ma25_prev and prev_close > float(ma25_prev)):
+        return "非延续段(突破当日归价量突破)"
+    if current < ma10:
+        return "回踩破MA10"
+    if vol_ratio < 1.2:
+        return f"再度放量不足(量比{vol_ratio:.1f})"
     return ""
 
 
@@ -311,13 +380,15 @@ def run_unified_analysis(
     # 的最严格状态（retreating > main_trend > rotational），代理状态不可得时
     # 沿用原行业状态。修正记录透出到 batch.theme_remaps（调度摘要可审计）。
     try:
-        from ..analyzers.theme_attribution import apply_theme_attribution, make_board_status_lookup
+        from ..analyzers.theme_attribution import apply_theme_attribution, make_board_status_lookup, get_theme_version
         name_by_code = {s.get("code", ""): s.get("name", "") for s in stocks}
         board_status_fn = make_board_status_lookup(sector_map)
         theme_report = apply_theme_attribution(
             stock_sector, stock_sector_status, name_by_code, board_status_fn,
         )
         batch.theme_remaps = theme_report.get("remaps", [])
+        # 【P2-1】板块版本化：分类口径打版本戳，历史统计可按版本切分
+        batch.theme_version = get_theme_version()
     except Exception as e:
         logger.warning("主题归属修正失败（沿用原行业链路）: %s", e)
 
@@ -335,6 +406,8 @@ def run_unified_analysis(
         timing.prefetch_hist_batch(all_codes)
 
     entry_codes = set()
+    # 【P1-1】防守模式追强踏空成本台账（数据本身是“防守模式是否值得存在”的证据）
+    chase_missed_enabled = market_mode == "defend"
 
     # -------- 1. 进场信号（全量扫）--------
     logger.info("--- 统一引擎：进场检查 ---")
@@ -366,8 +439,9 @@ def run_unified_analysis(
             entry_codes.add(code)
         else:
             entry_tech = timing._tech_data_full.get(code, {})
+            entry_tech = entry_tech if isinstance(entry_tech, dict) else {}
             diagnostics = _explain_no_entry(
-                market_mode, sector, entry_tech if isinstance(entry_tech, dict) else {}
+                market_mode, sector, entry_tech,
             )
             # 【三】观察卡补充活跃事件状态（回踩买点有效/第几天）
             event_note = timing.lifecycle_status_note(
@@ -375,6 +449,79 @@ def run_unified_analysis(
             )
             if event_note:
                 diagnostics += f"\n事件状态: {event_note}"
+            # 【P1-2】再入场待命判定：止损后的标的不该掉回观察区中部，
+            # 创新高/收复Z线的进待命队列头部（蘅东光 9/7 应在头部）
+            # 【Phase5 回炉】创新高锄 prior_high（剔除当日高点）——
+            # 蘅东光 9/7 盘中 555.10 创历史新高、收盘 549.50 回落 1%，
+            # 旧口径（含当日）差 0.05 元误拦头部待命。
+            try:
+                active_events = timing._lifecycle.get_active_events(code)
+            except Exception:
+                active_events = []
+            active_event_id = active_events[-1].event_id if active_events else ""
+            try:
+                from ..analyzers.signal_lifecycle import reentry_status
+                current_price = float((entry_tech or {}).get("current_price") or 0)
+                recent_high = float((entry_tech or {}).get("recent_high") or 0)
+                prior_high = float((entry_tech or {}).get("prior_high") or 0)
+                reentry_cfg = timing._cfg("reentry") or {}
+                status = reentry_status(
+                    code, current_price=current_price, recent_high=recent_high,
+                    max_reentries=int(reentry_cfg.get("max_reentries", 2)),
+                    new_high_ratio=float(reentry_cfg.get("new_high_ratio", 0.99)),
+                    store=timing._lifecycle.store,
+                    prior_high=prior_high,
+                )
+                if status.get("standby"):
+                    batch.standby_queue.append({
+                        "stock_code": code, "stock_name": name,
+                        "event_id": active_event_id or status.get("event_id", ""),
+                        "reason": status.get("reason"),
+                        "note": status.get("note"),
+                        "attempts": status.get("attempts", 0),
+                    })
+                    diagnostics = status["note"] + "\n" + diagnostics
+                elif status.get("reason") == "次数用尽":
+                    diagnostics = status["note"] + "\n" + diagnostics
+            except Exception as e:
+                logger.debug("再入场判定失败 %s: %s", code, str(e)[:60])
+            # 【P1-1】防守模式追强被拦 → 踏空成本入台账（四确认里至少创新高+放量
+            # 才登记：不是每只下跌股都算磨空，只有“本可放行却被纪律拦下”的才算）
+            if chase_missed_enabled and sector != "retreating":
+                try:
+                    current_price = float((entry_tech or {}).get("current_price") or 0)
+                    # 【Phase5 回炉】锄 prior_high（剔除当日）：踏空台账的
+                    # “创新高”口径与门一/再入场对齐，蘅东光式盘中新高
+                    # 收盘回落 1% 不再漏登记。
+                    prior_high = float((entry_tech or {}).get("prior_high") or 0)
+                    high_anchor = prior_high or float((entry_tech or {}).get("recent_high") or 0)
+                    volume_ratio = float((entry_tech or {}).get("volume_ratio") or 0)
+                    if (
+                        not active_events
+                        and current_price and high_anchor
+                        and current_price >= high_anchor * 0.99
+                        and volume_ratio >= 1.2
+                    ):
+                        reason = (
+                            "策略未触发(动量条件未满足)" if "确认追强" not in diagnostics
+                            else "三重门未过(纪律拦截)"
+                        )
+                        batch.chase_missed.append({
+                            "stock_code": code, "stock_name": name,
+                            "event_id": active_event_id,
+                            "price": current_price,
+                            "date": entry_tech.get("trade_date") or "",
+                            "volume_ratio": volume_ratio,
+                            "blocked_reason": reason,
+                            "note": (
+                                f"{name}({code}) 现价{current_price:.2f}创近段新高、"
+                                f"量比{volume_ratio:.1f}——防守模式未放行；"
+                                "踏空成本留档（回退禁用后继续记录，"
+                                "这份数据是防守模式是否值得存在的证据）"
+                            ),
+                        })
+                except Exception as e:
+                    logger.debug("踏空台账登记失败 %s: %s", code, str(e)[:60])
             batch.entry_diagnostics[code] = diagnostics
 
     # -------- 2. 出场信号（全量扫）--------
@@ -394,7 +541,8 @@ def run_unified_analysis(
         batch.exits.extend(exit_sigs)
 
         # 【三】信号事件生命周期评估：收盘跌回突破位/板块退潮 → 立即撤单；
-        # 超期 → 作废。通知作为 dict 型出场信号进入推送。
+        # 超期 → 作废。状态通知只进事件通道，不进卖出桶；
+        # “信号成交”不是卖出，“信号作废”也不是卖出指令。
         current_price = float(
             (timing._tech_data_full.get(code) or {}).get("current_price") or 0
         )
@@ -402,7 +550,6 @@ def run_unified_analysis(
             code, current_price=current_price, sector_status=sector
         )
         if notices:
-            batch.exits.extend(notices)
             batch.event_notices.extend(notices)
 
     # -------- 3. 注入板块信息到信号 --------
@@ -420,6 +567,56 @@ def run_unified_analysis(
         if not getattr(sig, "sw_level2", "") and info["sw_level2"]:
             sig.sw_level2 = info["sw_level2"]
 
+    # ============================================================
+    # 【P2-3】组合预算：同板块并发敞口上限（个股纪律齐备，集群不能裸喋）
+    # 9/7 观察 23/24 主线、半导体设备 8 只同标签——超额同板块新信号
+    # 降级为观察并留痕，个股纪律结论保留可审计。
+    # ============================================================
+    try:
+        from ..analyzers.portfolio_budget import apply_portfolio_budget
+        holdings = []
+        try:
+            from ..feedback.trade_logger import get_trade_logger
+            holdings = get_trade_logger().get_current_holdings() or []
+        except Exception:
+            holdings = []
+        timing_cfg = timing._tc or {}
+        budget_result = apply_portfolio_budget(
+            batch.entries, holdings=holdings,
+            config=timing_cfg, sector_of_entry=lambda sig: getattr(sig, "sector_name", ""),
+        )
+        if budget_result["applied"] and budget_result.get("blocked"):
+            batch.entries = [sig for sig in batch.entries
+                             if sig.stock_code not in {b["stock_code"] for b in budget_result["blocked"]}]
+            batch.budget_blocked = budget_result["blocked"]
+            batch.rejected.extend(budget_result["blocked"])
+            for blocked in budget_result["blocked"]:
+                batch.entry_diagnostics[blocked["stock_code"]] = blocked["reason"]
+            logger.info(
+                "组合预算拦截 %d 条同板块新信号: %s",
+                len(budget_result["blocked"]),
+                ", ".join(b["stock_name"] for b in budget_result["blocked"]),
+            )
+    except Exception as e:
+        logger.debug("组合预算应用失败: %s", str(e)[:60])
+
+    # ============================================================
+    # 【P3-2】第八问驱动源归因：每条入场信号带上“为什么涨”
+    # （博杰真实驱动=业绩+PCB联动，系统此前只看到价格表象）
+    # ============================================================
+    for sig in batch.entries:
+        try:
+            from ..analyzers.driver_attribution import classify_driver
+            driver_info = classify_driver(
+                (sig.tech_data or {}),
+                sector_status=sig.sector_status or "",
+                sector_name=sig.sector_name or "",
+            )
+            sig.hypothesis = dict(sig.hypothesis or {})
+            sig.hypothesis["driver"] = driver_info
+        except Exception as e:
+            logger.debug("驱动源归因失败 %s: %s", sig.stock_code, str(e)[:60])
+
     for sig in batch.exits:
         if isinstance(sig, dict):
             continue
@@ -427,8 +624,12 @@ def run_unified_analysis(
         if not getattr(sig, "sector_name", "") and info["sector_name"]:
             sig.sector_name = info["sector_name"]
 
-    logger.info("统一引擎完成: 进场=%d 出场=%d",
-                len(batch.entries), len(batch.exits))
+    logger.info(
+        "统一引擎完成: 进场=%d 出场=%d 待命=%d 踏空留档=%d 预算拦=%d",
+        len(batch.entries), len(batch.exits),
+        len(batch.standby_queue), len(batch.chase_missed),
+        len(batch.budget_blocked),
+    )
 
     # 把板块分类结果存到 batch 上，供 engine.py 构建观察列表用
     batch.stock_sector = stock_sector

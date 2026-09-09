@@ -271,12 +271,31 @@ def init_db():
         hypothesis_w TEXT,
         status TEXT DEFAULT 'valid',
         invalid_reason TEXT,
+        rule_version TEXT DEFAULT '',
+        y_formula TEXT DEFAULT '',
+        y_inputs TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_signal_events_code_status "
                    "ON signal_events(stock_code, status)")
+
+    # 事件状态迁移日志：唯一审计来源，按 evt_id 可回放完整生命周期。
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS signal_event_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL,
+        stock_code TEXT NOT NULL,
+        from_status TEXT NOT NULL,
+        to_status TEXT NOT NULL,
+        reason TEXT DEFAULT '',
+        source TEXT DEFAULT 'signal_lifecycle',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_signal_event_logs_event "
+                   "ON signal_event_logs(event_id, created_at)")
 
     # 【一】出厂拒绝留痕表（可证伪性检查拦下的信号：不进调度不推送，但可审计）
     cursor.execute("""
@@ -315,6 +334,22 @@ def _migrate():
     """增量迁移：为已存在的表补充新增列（SQLite 不支持 ADD COLUMN IF NOT EXISTS）"""
     conn = get_connection()
     cursor = conn.cursor()
+    # signal_events 审计列：Y 的公式版本与输入必须随事件持久化。
+    try:
+        cols = {r[1] for r in cursor.execute("PRAGMA table_info(signal_events)")}
+        if cols:
+            additions = {
+                "rule_version": "TEXT DEFAULT ''",
+                "y_formula": "TEXT DEFAULT ''",
+                "y_inputs": "TEXT DEFAULT ''",
+            }
+            for column, col_type in additions.items():
+                if column not in cols:
+                    cursor.execute(f"ALTER TABLE signal_events ADD COLUMN {column} {col_type}")
+            conn.commit()
+    except Exception as e:
+        logger.error("迁移 signal_events 审计列失败: %s", e)
+
     # trade_logs.shares（P1-3 反馈闭环：记录建议股数，供 executed 后聚合持仓）
     try:
         cols = {r[1] for r in cursor.execute("PRAGMA table_info(trade_logs)")}

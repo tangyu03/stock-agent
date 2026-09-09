@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from src.analyzers.signal_plan import (
     build_execution_plan,
     build_fund_snapshot,
@@ -229,7 +231,9 @@ def test_execution_plan_scores_risk_and_rrr_from_benchmark():
     )
 
     assert plan.confidence == "高"
-    assert plan.confidence_score == 5
+    # 【P0-2】RRR3.0≥2.5 质量票 +1（隐含胜率 28.6%，出处=风险预算非惯例）
+    assert plan.confidence_score == 6
+    assert any("RRR3.00" in d and "+1" in d for d in plan.confidence_details)
     assert plan.applicable_score == 6
     assert plan.risk_pct == 0.05
     assert plan.rrr_low == 3.0
@@ -257,6 +261,11 @@ def test_rrr_below_two_blocks_high_confidence():
 
 
 def test_execution_plan_builds_current_state_tiers():
+    """策略感知分档（层间接口修复）：追强类主档=触发位、试探=浅回踩档。
+
+    旧实现一律 MA10/MA5 模板——确认追强 Y 挂在 MA10 上（蘅东光 9/8
+    距现价 10.3%），策略讲追强、档位给低吸。追强类现在主档贴近触发位。
+    """
     tech_data = {
         "current_price": 177.12,
         "ma5": 178.99,
@@ -272,12 +281,36 @@ def test_execution_plan_builds_current_state_tiers():
     )
 
     tiers = {tier["name"]: tier for tier in plan.execution_tiers}
+    assert tiers["追强档"]["state"] == "上方"
+    assert tiers["追强档"]["trigger"] == "回踩不破173.80"
+    # 浅回踩档 = 触发位下方 2%（173.80×0.98=170.32），MA5 在触发位上方故不用
+    assert tiers["浅回踩档"]["price"] == pytest.approx(170.324, abs=0.01)
+    assert tiers["浅回踩档"]["state"] == "上方"
+    assert tiers["止损"]["state"] == "上方"
+    assert tiers["止损"]["trigger"] == "回踩不破168.58"
+
+
+def test_dip_strategy_keeps_ma_tiers():
+    """低吸类（套利低吸）保留 MA10 主档 + MA5 试探档（均线承接语义）。"""
+    tech_data = {
+        "current_price": 177.12,
+        "ma5": 178.99,
+        "ma10": 173.80,
+    }
+
+    plan = build_execution_plan(
+        entry_type="套利低吸",
+        benchmark_price=173.80,
+        stop_loss=168.58,
+        target_range=[191.38],
+        tech_data=tech_data,
+    )
+
+    tiers = {tier["name"]: tier for tier in plan.execution_tiers}
     assert tiers["MA10档"]["state"] == "上方"
     assert tiers["MA10档"]["trigger"] == "回踩不破173.80"
     assert tiers["MA5档"]["state"] == "已下破"
     assert tiers["MA5档"]["trigger"] == "反弹收复178.99"
-    assert tiers["止损"]["state"] == "上方"
-    assert tiers["止损"]["trigger"] == "回踩不破168.58"
 
 
 def test_scheduler_schedules_low_confidence_for_display_only():

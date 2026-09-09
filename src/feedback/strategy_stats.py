@@ -39,11 +39,18 @@ def _ensure_table(cursor) -> None:
 
 
 def compute_strategy_stats(closed_trades: Optional[List[Dict]] = None) -> Dict[str, Dict]:
-    """按策略分层统计：笔数/胜率/均盈/均亏/盈亏比/期望/归因分布。"""
+    """按策略分层统计：笔数/胜率/均盈/均亏/盈亏比/期望/归因分布。
+
+    【P1-1】防守模式降仓放行的确认追强单独分层（策略键 "确认追强@防守"）：
+    30 笔滚动胜率<30% 且期望<0 → 回退禁用（踏空成本继续留档）。
+    """
     trades = closed_trades if closed_trades is not None else get_trade_logger().get_closed_trades()
     stats: Dict[str, Dict] = {}
     for t in trades:
         strategy = str(t.get("strategy") or "未知策略")
+        # 【P1-1】防守追强单独分层（标记字段由调度器写入）
+        if t.get("defensive_chase") and "@防守" not in strategy:
+            strategy = f"{strategy}@防守"
         pnl = t.get("pnl_pct")
         if pnl is None:
             continue
@@ -232,3 +239,109 @@ def format_strategy_report(offline: Optional[Dict[str, Dict]] = None) -> str:
         )
         lines.append(f"    判定: {info.get('reason', '')}")
     return "\n".join(lines)
+
+
+# ============================================================
+# 【Phase4】决策记录的作废条件数据基础设施
+# ============================================================
+
+def z_mode_comparison(closed_trades: Optional[List[Dict]] = None) -> Dict[str, Dict]:
+    """【P0-2】Z 线双模式对照统计（作废条件判定材料）。
+
+    作废条件原文：若 30 笔以上实盘统计显示结构位止损的期望值显著
+    低于 ATR 缓冲止损（结构位+1~2×ATR），则采用后者——缓冲版仍在
+    Z 线家族内，被否决的只是"裸结构位"。
+
+    口径：trade_logs 的 hypothesis JSON 携带 z_line_mode；
+    本函数按模式分层给出期望值对照（样本不足 30 笔时不下结论）。
+    """
+    trades = closed_trades if closed_trades is not None else get_trade_logger().get_closed_trades()
+    buckets: Dict[str, Dict] = {}
+    for t in trades or []:
+        hyp = t.get("hypothesis")
+        if isinstance(hyp, str):
+            try:
+                import json
+                hyp = json.loads(hyp) if hyp else {}
+            except (ValueError, TypeError):
+                hyp = {}
+        mode = str((hyp or {}).get("z_line_mode") or "unknown")
+        pnl = t.get("pnl_pct")
+        if pnl is None:
+            continue
+        bucket = buckets.setdefault(mode, {"trades": 0, "sum": 0.0, "wins": 0})
+        bucket["trades"] += 1
+        bucket["sum"] += float(pnl)
+        if float(pnl) > 0:
+            bucket["wins"] += 1
+    result: Dict[str, Dict] = {}
+    for mode, bucket in buckets.items():
+        n = bucket["trades"]
+        note = (
+            f"样本{n}笔，期望{bucket['sum'] / n:+.2f}%，胜率{bucket['wins'] / n * 100:.1f}%"
+            if n else "无样本"
+        )
+        if n < 30:
+            note += f"（不足30笔，对照不成立，继续积累）"
+        result[mode] = {"trades": n, "expectancy_pct": round(bucket["sum"] / n, 2) if n else None,
+                        "win_rate": round(bucket["wins"] / n, 4) if n else None,
+                        "note": note}
+    return result
+
+
+def graded_exit_sensitivity(days: int = 7) -> Dict:
+    """【P0-3】分级 OR 过敏感统计（作废条件判定材料）。
+
+    作废条件原文：若 OR 化后止损类触发频率异常（如周触发>5 次且其中
+    过半在 3 日内回本），说明阈值过敏感，回调结构位距离参数，而非回退 AND。
+    本函数给出周触发计数；"3 日内回本"需结合事后价格，由复盘
+    （trade_feedback --outcome）补全——数据先存在，判定按审计节奏执行。
+    """
+    try:
+        with get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT exit_date, stock_code, stock_name, exit_price, pnl_pct, exit_type "
+                "FROM trade_logs WHERE signal_type='sell' AND user_action='executed' "
+                "AND exit_date IS NOT NULL ORDER BY exit_date DESC"
+            )
+            rows = [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        logger.error("过敏感统计读取失败: %s", e)
+        rows = []
+    from datetime import date as _date, timedelta as _timedelta
+    cutoff = (_date.today() - _timedelta(days=days)).isoformat()
+    stop_class = [r for r in rows
+                  if str(r.get("exit_type") or "") in ("破位止损", "技术走弱")
+                  and str(r.get("exit_date") or "") >= cutoff]
+    note = ""
+    if len(stop_class) > 5:
+        note = (
+            f"近{days}日止损类触发{len(stop_class)}次(>5)——按作废条件核查3日内回本率，"
+            "过半回本则回调结构位距离参数（而非回退AND）"
+        )
+    elif stop_class:
+        note = f"近{days}日止损类触发{len(stop_class)}次（未超5次阈值）"
+    return {"week_triggers": len(stop_class), "recent": stop_class[:20], "note": note}
+
+
+def sector_version_breakdown(closed_trades: Optional[List[Dict]] = None) -> Dict[str, int]:
+    """【P2-1】板块版本化统计：闭合样本按分类口径版本计数。
+
+    9/4→9/7 分类整体换血导致历史统计断裂——版本化后统计可按版本切分，
+    新旧口径不再互相污染。若新分类经一季度验证区分度显著优于申万锚，
+    反向采纳新体系（作废条件）。
+    """
+    trades = closed_trades if closed_trades is not None else get_trade_logger().get_closed_trades()
+    counts: Dict[str, int] = {}
+    for t in trades or []:
+        hyp = t.get("hypothesis")
+        if isinstance(hyp, str):
+            try:
+                import json
+                hyp = json.loads(hyp) if hyp else {}
+            except (ValueError, TypeError):
+                hyp = {}
+        version = str((hyp or {}).get("sector_version") or "v0-unversioned")
+        counts[version] = counts.get(version, 0) + 1
+    return counts

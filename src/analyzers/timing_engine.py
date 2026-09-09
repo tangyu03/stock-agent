@@ -18,7 +18,7 @@ import logging
 import threading
 _thread_local = threading.local()
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -67,6 +67,11 @@ class EntrySignal:
     fundamental_note: str = ""
     # 【Phase3】估值透镜摘要（估值泡沫/低基数反转/亏损分型/资金-分析师冲突）
     valuation_note: str = ""
+    # 【Phase4 P1-1】防守模式降仓放行标记（三重门证据 + 外推量能）
+    defensive_chase: Optional[Dict] = None
+    # 事件出生时落审计：Y 不再只给结果，也给公式和输入。
+    entry_y_formula: str = ""
+    entry_y_inputs: Dict = field(default_factory=dict)
 
 
 @dataclass
@@ -87,6 +92,8 @@ class ExitSignal:
     # 【四】配对出场标记：paired=策略原生 Z/W 硬触发 / system=旧系统兜底（降观察）
     source: str = "system"
     paired_strategy: str = ""
+    # 只读引用事件库；卖出信号不得自行描述买入事件的阶段。
+    event_id: str = ""
 
 @dataclass
 class StopLossCalc:
@@ -132,10 +139,72 @@ DEFAULT_TIMING_CONFIG = {
         "require_event_boundary": True,   # 【三】事件边界：昨收在昨日MA25下方且今价站上MA25才诞生
         "require_bullish_close": True,    # 【三】诞生条件：当日收阳（两条腿缺一不可）
     },
+    # 【Phase4 P0-1】量能外推口径：盘中累计量 ÷ U型分位 → 全天量
+    # 蘅东光 9/7 实证：1.02x 拦截 → 外推 2.0x 触发。10:00 前禁用、封板禁用。
+    "volume_projection": {
+        "enabled": True,
+        "start_time": "10:00",
+        "end_time": "14:45",
+        "breakout_threshold": 1.2,        # 外推口径量能突破阈值（比实际口径 1.0 更严）
+        "error_alert_pct": 15.0,          # 作废条件：10:30 后误差持续超此值 → 换标的池分位表
+        "error_check_days": 10,
+    },
+    # 【Phase4 P1-1】防守模式确认追强降仓可用（三重门 + 风险预算仓位）
+    "defensive_chase": {
+        "enabled": True,                   # 关闭 = 回退“防守禁追强”（磨空成本继续留档）
+        "risk_budget_pct": 0.01,          # 单笔风险预算（账户%）
+        "max_probe_ratio": 0.3333,        # 试探仓封顶（中波动近似 1/3）
+        "min_stop_distance_pct": 0.01,    # 防毫厘止损杠杆化
+        "rsi_overheat": 67.0,             # 门一时机：RSI14 ≥ 此值视为过热（蘅东光 9/3 RSI66.6 类）
+        "new_high_ratio": 0.99,           # 门一①：现价 ≥ 近20日高×此值
+        "volume_ratio_min": 1.2,          # 门一②：量比下限
+        "projected_volume_min": 1.2,      # 门一③：外推量能下限（与实际口径取其一）
+        "adx_min": 25.0,                  # 门一④：单边力度（ADX，蘅东光 9/7 实证 48）
+        "profit_yoy_min": 30.0,           # 门二：净利同比下限（%），且非低基数/业绩雷/亏损分型
+        "shareholder_dispersion_max": 0.20,  # 门二：户数增加 >20% = 筹码分散/减持迹象 → 拦
+    },
+    # 【Phase4 P1-2】再入场循环：止损是尝试的结束，不是死刑判决
+    "reentry": {
+        "enabled": True,
+        "max_reentries": 2,               # 同标的再入场次数上限（超过 = 真死刑）
+        "new_high_ratio": 0.99,           # 创新高再入场：现价 ≥ 近20日高×此值
+    },
+    # 【Phase4 P3-1】趋势延续：突破后 1~10 日延续段回踩入场（沃尔德 9/7 类）
+    "trend_continuation": {
+        "enabled": True,
+        "min_bars_since_breakout": 1,     # 突破后第 N 日起可入场（当日归价量突破）
+        "max_bars_since_breakout": 10,    # 超过 N 日视为趋势尾段，不再入场
+        "volume_ratio_min": 1.2,          # 回踩后再放量确认
+        "ma_alignment": True,             # 要求 MA 多头排列
+    },
+    "confidence": {
+        "rrr_quality_threshold": 2.5,     # 【P0-2】RRR≥此值 +1 票（隐含胜率 28.6%）
+        "rrr_quality_cap": 5.0,           # 【Phase5】RRR>此值不加分（分母过小，神话数字嫌疑）
+    },
+    # 【Phase5 回炉】风险乘数波动率分档（验收实证：精智达振幅8.16%拿风险1.00，
+    # 博杰反而 0.60——风险系数必须规则化，不能随机出现）
+    "risk": {
+        "volatility_tier": {
+            "enabled": True,
+            "high_amp": 0.08,              # 振幅≥8% → 0.6（精智达 9/8 实证）
+            "mid_amp": 0.05,               # 振幅≥5% → 0.8
+            "high_mult": 0.6,
+            "mid_mult": 0.8,
+            "window": 5,                   # 近 N 日平均振幅窗口
+        },
+    },
     "hypothesis_gate": {
         "enabled": True,                  # 【一】可证伪性出厂检查总开关
-        "z_atr_mult": 1.5,               # Z 距结构位的最小 ATR 缓冲（宽度由波动率决定）
-        "z_pct_buffer": 0.005,           # Z 距结构位的最小百分比缓冲
+        # 【P0-2 + Phase5 回炉】Z 线默认 buffered_structure：结构位−clamped(k×ATR)
+        # （决策记录“结构位或结构位加 1~2 倍 ATR 缓冲”的后半句；
+        # 精智达 9/8 实证：裸结构位距买点 0.84%，日内噪声十分之一即可扫损）
+        "z_line_mode": "buffered_structure",
+        "z_atr_mult": 1.5,               # 高波动档（ATR/结构位≥5%）的缓冲倍数
+        "z_atr_mult_low_vol": 2.0,       # 低波动档（ATR 绝对值小，倍数补足）
+        "z_high_vol_ratio": 0.05,        # 高/低波动分档线（ATR/结构位）
+        "z_pct_buffer": 0.005,           # 缓冲下限（结构位%，防毫厘止损）
+        "z_buffer_max_pct": 0.08,        # 缓冲上限（结构位%，防拖到跌停价——博杰旧病）
+        "bare_noise_min_pct": 0.008,     # 裸结构位防噪下限（止损距离<0.8%拒绝出厂）
         "min_z_buffer_pct": 0.01,        # ATR 缺失时 Y-Z 最小百分比宽度
     },
     "data_guard": {
@@ -264,6 +333,130 @@ def _deep_merge(base: dict, override: dict) -> dict:
         else:
             result[k] = v
     return result
+
+
+# ============================================================
+# 【层间接口修复】策略层 → 分档层：Y（主档基准价）随策略定位
+# ============================================================
+# 原实现：main_tier_price 一律取 MA10（低吸策略的 Y 语义）——
+# 蘅东光 9/8 实证：确认追强 Y=498.26(MA10) 距现价 555.25 达 10.3%，
+# 罗博特科趋势延续 Y=577.99(MA10) 距现价 656.10 达 13.5%——
+# 策略层在讲追强（突破当日跟进）的语言，分档层却给低吸（回踩均线）
+# 的价格。RRR 0.96 就是 Y 挂在下档的产物。
+# 修复：主买点不再共用“MA10 低吸模板”，事件诞生时记录公式与输入。
+CHASE_STRATEGIES = frozenset({"确认追强", "价量突破", "趋势延续"})
+DIP_STRATEGIES = frozenset({"恐慌抄底", "套利低吸"})
+
+
+def _number_or_none(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number else None
+
+
+def _nested_config(config: Optional[Dict], *path, default=None):
+    node = config or {}
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return default
+        node = node[key]
+    return node
+
+
+def _breakout_day_low(tech_data: Dict) -> Optional[float]:
+    explicit = _number_or_none(tech_data.get("breakout_low"))
+    if explicit is not None:
+        return explicit
+    kline = tech_data.get("kline") or []
+    if not kline:
+        return None
+    bar = kline[-1]
+    return _number_or_none(bar.get("最低", bar.get("low")))
+
+
+def _prev_day_low(tech_data: Dict) -> Optional[float]:
+    explicit = _number_or_none(tech_data.get("prev_day_low"))
+    if explicit is not None:
+        return explicit
+    kline = tech_data.get("kline") or []
+    if len(kline) < 2:
+        return None
+    bar = kline[-2]
+    return _number_or_none(bar.get("最低", bar.get("low")))
+
+
+def entry_buypoint(
+    entry_type: str,
+    trigger_price: float,
+    tech_data: Dict,
+    config: Optional[Dict] = None,
+) -> Tuple[float, str, Dict[str, Any]]:
+    """计算策略专属买点 Y，并返回公式版本与可审计输入。"""
+    trigger = _number_or_none(trigger_price) or 0.0
+    ma5 = _number_or_none(tech_data.get("ma5"))
+    ma10 = _number_or_none(tech_data.get("ma10"))
+
+    if entry_type == "确认追强":
+        if trigger <= 0:
+            return 0.0, "trigger_price", {"trigger_price": 0.0}
+        pullback_pct = float(
+            _nested_config(config, "tiering", "chase_pullback_pct", default=0.02)
+        )
+        return (
+            round(trigger * (1.0 - pullback_pct), 2),
+            "trigger_price*(1-chase_pullback_pct)",
+            {
+                "trigger_price": round(trigger, 2),
+                "chase_pullback_pct": round(pullback_pct, 4),
+            },
+        )
+
+    if entry_type == "价量突破":
+        low = _breakout_day_low(tech_data)
+        if low is not None and 0 < low <= trigger:
+            return round(low, 2), "breakout_day_low", {"breakout_day_low": round(low, 2)}
+        return round(trigger, 2), "trigger_price", {
+            "trigger_price": round(trigger, 2),
+            "fallback": "breakout_day_low_missing",
+        }
+
+    if entry_type == "趋势延续":
+        if ma5 is not None and ma5 > 0:
+            prev_low = _prev_day_low(tech_data)
+            if prev_low is not None and prev_low > 0:
+                return (
+                    round(max(float(ma5), prev_low), 2),
+                    "max(ma5,prev_day_low)",
+                    {
+                        "ma5": round(float(ma5), 2),
+                        "prev_day_low": round(prev_low, 2),
+                    },
+                )
+            return round(float(ma5), 2), "ma5", {"ma5": round(float(ma5), 2)}
+        if trigger > 0:
+            return round(trigger * 0.98, 2), "trigger_price*0.98", {
+                "trigger_price": round(trigger, 2),
+                "fallback": "ma5_missing",
+            }
+
+    if entry_type in DIP_STRATEGIES and ma10 is not None and ma10 > 0:
+        return round(float(ma10), 2), "ma10", {"ma10": round(float(ma10), 2)}
+
+    if ma10 is not None and ma10 > 0:
+        return round(float(ma10), 2), "ma10", {"ma10": round(float(ma10), 2)}
+    return round(trigger, 2), "trigger_price", {"trigger_price": round(trigger, 2)}
+
+
+def entry_main_tier_price(
+    entry_type: str,
+    trigger_price: float,
+    tech_data: Dict,
+    config: Optional[Dict] = None,
+) -> float:
+    """兼容旧调用；需要审计时请用 entry_buypoint 取公式与输入。"""
+    return entry_buypoint(entry_type, trigger_price, tech_data, config)[0]
 
 
 class TimingEngine:
@@ -512,7 +705,7 @@ class TimingEngine:
 
     # ============ 入场信号 ============
 
-    _ENTRY_PRIORITY = ["恐慌抄底", "套利低吸", "确认追强", "价量突破"]
+    _ENTRY_PRIORITY = ["恐慌抄底", "套利低吸", "确认追强", "价量突破", "趋势延续"]
 
     def _merge_entry_signals(self, signals: List[EntrySignal], tech_data: Dict, market_mode: str, sector_status: str = "") -> List[EntrySignal]:
         """合并多条入场信号为一条综合信号，附带策略推导链。"""
@@ -521,13 +714,27 @@ class TimingEngine:
 
         triggered_types = list(dict.fromkeys(s.entry_type for s in signals))
 
+        # 【Phase5 回炉】推导栏置信度优先用执行计划的真实置信度（含分数）：
+        # 验收实证（9/8 精智达）——推导栏“置信度:高”（EntrySignal 硬编码）
+        # 与置信度栏“2/6 中”（评分体系算出）矛盾，同一报告两口径。
+        def _display_confidence(sig) -> str:
+            plan = getattr(sig, "execution_plan", None)
+            if isinstance(plan, dict) and plan.get("confidence"):
+                cs = plan.get("confidence_score")
+                total = plan.get("applicable_score")
+                label = plan.get("confidence")
+                if isinstance(cs, (int, float)) and isinstance(total, (int, float)) and total:
+                    return f"{label}({int(cs)}/{int(total)})"
+                return str(label)
+            return getattr(sig, "confidence", "中")
+
         if len(signals) == 1:
             sig = signals[0]
             derivation = self._build_derivation(
                 tech_data, market_mode,
                 triggered_types=triggered_types,
                 selected_type=sig.entry_type,
-                confidence=getattr(sig, "confidence", "中"),
+                confidence=_display_confidence(sig),
                 signal_direction="entry",
                 sector_status=sector_status,
             )
@@ -555,7 +762,7 @@ class TimingEngine:
             tech_data, market_mode,
             triggered_types=triggered_types,
             selected_type=best_type,
-            confidence=getattr(best, "confidence", "中"),
+            confidence=_display_confidence(best),
             signal_direction="entry",
             sector_status=sector_status,
         )
@@ -564,6 +771,28 @@ class TimingEngine:
         logger.info("入场信号合并: %s %d->1条（主类型=%s）", best.stock_code, len(signals), best_type)
         return [best]
 
+    def _refresh_derivation_confidence(self, trigger_reason: str, plan) -> str:
+        """推导栏置信度与置信度栏对齐（进第五轮的老问题根因）。
+
+        推导在 build_execution_plan 之前生成（_merge_entry_signals 阶段），
+        此时 sig.execution_plan 尚不存在，_display_confidence 只能回退到
+        EntrySignal 硬编码的“高/中”——而置信度栏用评分体系的 0/6。
+        Phase5 只改了 _display_confidence 的取值顺序，没解决时序：
+        报告里仍是 推导栏“高/中” vs 置信度栏“0/6 低” 两口径并存。
+        修复：执行计划建成后刷新 ④ 行的置信度口径。
+        """
+        import re
+        cs = getattr(plan, "confidence_score", None)
+        total = getattr(plan, "applicable_score", None)
+        label = getattr(plan, "confidence", "低")
+        try:
+            if isinstance(cs, (int, float)) and isinstance(total, (int, float)) and total:
+                conf_text = f"{label}({int(cs)}/{int(total)})"
+            else:
+                conf_text = str(label)
+        except (TypeError, ValueError):
+            conf_text = str(label)
+        return re.sub(r"置信度:[^\n|]*", f"置信度:{conf_text}", str(trigger_reason))
 
     def check_entry_signals(
         self,
@@ -624,9 +853,31 @@ class TimingEngine:
 
         # 获取技术数据 + 止损价
         tech_data = self._fetch_tech_data(stock_code, market_mode)
+        # 【P0-1】外推封板判定按代码的涨跌停幅度（北交所 30%/创科 20%/主板 10%）
+        try:
+            try:
+                from ..loop.backtest_engine import get_limit_ratio
+            except ImportError:
+                from src.loop.backtest_engine import get_limit_ratio
+            tech_data.setdefault("projection_limit_ratio", float(get_limit_ratio(stock_code)))
+        except Exception:
+            pass
         from .signal_plan import build_volume_snapshot
         data_guard = self._cfg("data_guard") or None
-        volume_snapshot = build_volume_snapshot(tech_data, guard=data_guard)
+        volume_snapshot = build_volume_snapshot(
+            tech_data, guard=data_guard, projection_config=self._projection_cfg(),
+        )
+        # 【P0-1】外推快照落误差记录表（收盘后回填实际值，作废条件的数据基础设施）
+        if volume_snapshot.projected_volume_vs_ma60 is not None:
+            try:
+                from .volume_projection import record_projection
+                record_projection(
+                    stock_code=stock_code, stock_name=stock_name,
+                    raw_ratio=volume_snapshot.volume_vs_ma60,
+                    projected_ratio=volume_snapshot.projected_volume_vs_ma60,
+                )
+            except Exception as e:
+                logger.debug("外推记录失败 %s: %s", stock_code, str(e)[:60])
         if volume_snapshot.dirty:
             tech_data["volume_data_valid"] = False
             tech_data["volume_snapshot"] = volume_snapshot.as_dict()
@@ -652,13 +903,45 @@ class TimingEngine:
             )
             return []
 
-        # 独立检查四种进场策略
+        # 【P1-2】再入场次数上限：止损是尝试的结束不是死刑判决，
+        # 但同一标的再入场次数用尽（默认 2 次）后也不再重播。
+        # 注意：再入场只由新事件驱动（创新高/收复Z线后策略条件重新满足），
+        # 本检查只做“次数上限”，不携带任何沉没成本逻辑。
+        try:
+            from .signal_lifecycle import reentry_exhausted
+            reentry_cfg = self._cfg("reentry") or {}
+            if reentry_cfg.get("enabled", True) and reentry_exhausted(
+                stock_code, int(reentry_cfg.get("max_reentries", 2)), store=self._lifecycle.store,
+            ):
+                self._tech_data_full[stock_code] = tech_data
+                self._entry_rejections[stock_code] = {
+                    "stock_code": stock_code,
+                    "stock_name": stock_name,
+                    "entry_type": "再入场上限",
+                    "benchmark_price": 0,
+                    "stop_loss": 0,
+                    "target_range": [],
+                    "reasons": [f"再入场次数用尽（上限{int(reentry_cfg.get('max_reentries', 2))}次）："
+                                "新事件不再重播，本标的转入长期观察"],
+                    "hypothesis": {},
+                    "fundamental": None,
+                    "fundamental_rejected": False,
+                    "valuation": None,
+                    "valuation_rejected": False,
+                }
+                logger.info("%s 再入场次数用尽，本标的转入长期观察", stock_code)
+                return []
+        except Exception as e:
+            logger.debug("再入场检查失败 %s: %s", stock_code, str(e)[:60])
+
+        # 独立检查五种进场策略（【P3-1】趋势延续为第五策略）
         raw_signals = []
         for check_fn, _etype in [
             (self._check_panic_bottom, "恐慌抄底"),
             (self._check_arbitrage_entry, "套利低吸"),
             (self._check_momentum_chase, "确认追强"),
             (self._check_volume_breakout, "价量突破"),
+            (self._check_trend_continuation, "趋势延续"),
         ]:
             sig = check_fn(stock_code, stock_name, tech_data, stop_loss_calc, market_mode, sector_status)
             if sig:
@@ -678,11 +961,15 @@ class TimingEngine:
         for sig in merged:
             sig.tech_data = tech_data
             from .signal_plan import build_execution_plan
-            main_tier_price = (
-                float(tech_data.get("ma10"))
-                if tech_data.get("ma10") and float(tech_data.get("ma10")) > 0
-                else sig.entry_trigger_price
+            # 【层间接口修复】主档基准价 Y 随策略定位：
+            # 追强类贴近触发位（突破当日跟进），低吸类保留 MA10 回踩档。
+            # 旧实现一律 MA10 → 蘅东光确认追强 Y 距现价 10.3%、罗博特科
+            # 趋势延续 13.5%，策略讲追强、档位给低吸（RRR 0.96 的病根）。
+            main_tier_price, y_formula, y_inputs = entry_buypoint(
+                sig.entry_type, sig.entry_trigger_price, tech_data, self._tc,
             )
+            sig.entry_y_formula = y_formula
+            sig.entry_y_inputs = y_inputs
             # 【四】配对止损：Z = X 的直接否定（结构位 - 波动率缓冲），
             # 替换原"现价锚定的支撑位止损"（沃尔德 9/4 倒挂根源：止损锚现价、
             # 买点锚 MA10，两个锚点错位 → 93.94 > 93.88）
@@ -765,6 +1052,12 @@ class TimingEngine:
             sig.rrr_low = plan.rrr_low
             sig.rrr_high = plan.rrr_high
             sig.hypothesis = plan.hypothesis
+            # 【推导栏置信度】执行计划建成后刷新 ④ 行：
+            # 推导在 plan 之前生成，旧口径回退 EntrySignal 硬编码的高/中，
+            # 与置信度栏 0/6 低矛盾（进第五轮）——现在两栏同源。
+            sig.trigger_reason = self._refresh_derivation_confidence(
+                sig.trigger_reason, plan,
+            )
             valid_signals.append(sig)
 
         if not valid_signals:
@@ -772,6 +1065,10 @@ class TimingEngine:
 
         # 【三】事件诞生：通过出厂检查的信号注册生命周期
         # （N 日内回踩买点有效；收盘跌回突破位/板块退潮 → 立即撤单）
+        # 【Phase5 回炉】事件携带规则版本（z_line_mode）：存量事件与新规则
+        # 双轨可审计——观察卡显示"Z 按 XX 规则生成"，审计者不再误判
+        # "Z 线统一没做"（博杰 9/7 旧 Z=85.54 实证）。
+        current_z_mode = str(self._cfg("hypothesis_gate", "z_line_mode", default="buffered_structure"))
         for sig in valid_signals:
             try:
                 event = self._lifecycle.register_event(
@@ -784,11 +1081,21 @@ class TimingEngine:
                     target_low=(sig.hypothesis.get("w") or [0, 0])[0],
                     target_high=(sig.hypothesis.get("w") or [0, 0])[-1],
                     hypothesis=sig.hypothesis,
+                    rule_version=current_z_mode,
+                    y_formula=sig.entry_y_formula,
+                    y_inputs=sig.entry_y_inputs,
                 )
                 sig.event_id = event.event_id
             except Exception as e:
                 logger.debug("事件注册失败 %s: %s", sig.stock_code, e)
         return valid_signals
+
+    def _projection_cfg(self) -> Optional[Dict]:
+        """【P0-1】外推配置：回测/日频数据禁用（K 线口径即全天量，外推是口径错配）。"""
+        cfg = dict(self._cfg("volume_projection") or {})
+        if self._backtest_mode:
+            cfg["enabled"] = False
+        return cfg
 
     def _check_panic_bottom(self, code, name, tech_data, stop_loss, mode, sector) -> Optional[EntrySignal]:
         """
@@ -1008,22 +1315,146 @@ class TimingEngine:
             )
         return None
 
+    def _defensive_chase_gates(self, tech_data: Dict, sector_status: str) -> Dict:
+        """【P1-1】防守模式确认追强的三重门（降仓可用，不是无条件放行）。
+
+        门一 四确认+时机：创新高 + 量比 + 量能（外推口径）+ ADX 单边力度
+                          + 外盘主动 + RSI 未过热；
+        门二 基本面验证：净利同比达门槛且非业绩雷/低基数/模式亏损，
+                        筹码无分散（减持迹象）；
+        门三 板块联动：主线板块（主线意味着联动度，非孤立动量）。
+        任何一关不过 → 不放行（回退为禁用，磨空成本由 unified_engine 留档）。
+        """
+        cfg = self._cfg("defensive_chase") or {}
+        evidence: List[str] = []
+
+        # ── 门一：四确认 + 时机 ──
+        current = float(tech_data.get("current_price") or 0)
+        recent_high = float(tech_data.get("recent_high") or 0)
+        volume_ratio = float(tech_data.get("volume_ratio") or 1.0)
+        adx = tech_data.get("adx") or (tech_data.get("tech_signals") or {}).get("adx")
+        rsi = tech_data.get("rsi") or (tech_data.get("tech_signals") or {}).get("rsi")
+        outer = tech_data.get("outer_volume")
+        inner = tech_data.get("inner_volume")
+
+        from .signal_plan import build_volume_snapshot
+        snapshot = build_volume_snapshot(
+            tech_data, guard=self._cfg("data_guard") or None,
+            projection_config=self._projection_cfg(),
+        )
+        projected = snapshot.projected_volume_vs_ma60
+
+        new_high_ratio = float(cfg.get("new_high_ratio", 0.99))
+        volume_ratio_min = float(cfg.get("volume_ratio_min", 1.2))
+        projected_volume_min = float(cfg.get("projected_volume_min", 1.2))
+        adx_min = float(cfg.get("adx_min", 25.0))
+        rsi_overheat = float(cfg.get("rsi_overheat", 67.0))
+
+        # 【Phase5 回炉】“创新高”用 prior_high（近20日高剔除当日）——
+        # 盘中创新高但收盘回落 >1% 的标的（蘅东光 9/7）不再被误拦；
+        # prior_high 缺失时回退 recent_high（兼容旧测试/旧缓存数据）。
+        prior_high = tech_data.get("prior_high") or recent_high
+        gate1_checks = {
+            "创新高": bool(current and prior_high and current >= float(prior_high) * new_high_ratio),
+            "量比": volume_ratio >= volume_ratio_min,
+            "量能(外推或实际)": bool(
+                (projected is not None and projected >= projected_volume_min
+                 and snapshot.projection_mode == "ok")
+                or (snapshot.volume_vs_ma60 or 0) >= 1.0
+            ),
+            "ADX单边力度": bool(adx is not None and float(adx) >= adx_min),
+            "外盘主动": bool(
+                outer is None or inner is None or float(outer or 0) > float(inner or 0)
+            ),  # 内外盘数据缺失时不阻断（东财缺字段 ≠ 无主动盘）
+            # 【Phase5 回炉】文案带口径：验收质疑“蘅东光 RSI6=73 未拦、罗博特科 RSI6=79.5 拦”
+            # 同条件两判定——实际判定用 RSI14（66.4<67 过 / 67.9>67 拦），判定本身一致，
+            # 是文案没写口径造成误读。口径透明化后此类质疑自消。
+            f"RSI14未过热(<{rsi_overheat:.0f})": bool(rsi is None or float(rsi) < rsi_overheat),
+        }
+        gate1_failed = [k for k, v in gate1_checks.items() if not v]
+        if gate1_failed:
+            evidence.append(f"门一未过: {'、'.join(gate1_failed)}")
+
+        # ── 门二：基本面验证 ──
+        fundamental = tech_data.get("fundamental") or {}
+        profit_yoy = None
+        profit_abs = None
+        try:
+            profit_yoy = float(fundamental.get("profit_yoy")) if fundamental.get("profit_yoy") is not None else None
+            profit_abs = float(fundamental.get("profit_abs")) if fundamental.get("profit_abs") is not None else None
+        except (TypeError, ValueError):
+            pass
+        verdict = (fundamental.get("verdict") or {}).get("verdict") if isinstance(fundamental.get("verdict"), dict) else None
+        lens = tech_data.get("valuation_lens") or {}
+        lens_tags = ((lens.get("verdict") or {}).get("tags") or []) if isinstance(lens, dict) else []
+        shareholder_change = None
+        try:
+            votes = (tech_data.get("institutional_holding") or {}).get("votes") or {}
+            raw = (votes.get("shareholder") or {}).get("raw") or {}
+            if raw.get("change_pct") is not None:
+                shareholder_change = float(raw.get("change_pct"))
+        except (TypeError, ValueError, AttributeError):
+            pass
+
+        profit_yoy_min = float(cfg.get("profit_yoy_min", 30.0))
+        dispersion_max = float(cfg.get("shareholder_dispersion_max", 0.20))
+        gate2_checks = {
+            "净利同比达标": bool(profit_yoy is not None and profit_yoy >= profit_yoy_min),
+            "无业绩雷/降级": bool(verdict not in ("veto", "warn")) if verdict else (profit_yoy is not None),
+            "非低基数/模式亏损": not any(t in lens_tags for t in ("low_base", "model_loss")),
+            "筹码无分散": bool(
+                shareholder_change is None or shareholder_change <= dispersion_max
+            ),
+        }
+        gate2_failed = [k for k, v in gate2_checks.items() if not v]
+        if gate2_failed:
+            evidence.append(f"门二未过: {'、'.join(gate2_failed)}")
+
+        # ── 门三：板块联动 ──
+        if sector_status != "main_trend":
+            evidence.append(f"门三未过: 板块非主线({sector_status})")
+
+        return {
+            "passed": not evidence,
+            "evidence": evidence,
+            "projected_volume": projected,
+            "snapshot": snapshot,
+        }
+
     def _check_momentum_chase(self, code, name, tech_data, stop_loss, mode, sector) -> Optional[EntrySignal]:
         """
         确认追强（海龟突破）
+
+        【P1-1】防守模式降仓可用：防守的定义是压缩敞口而非禁用策略
+        （蘅东光 9/7 +14.81%、量比2.01、ADX48 却零提示），
+        但必须过三重门（四确认+基本面+板块联动），仓位由风险预算反推。
         """
-        if mode not in ("attack",):
+        if mode not in ("attack", "defend"):
             return None
         if sector == "retreating":
             return None
 
+        defensive_gate = None
+        if mode == "defend":
+            cfg = self._cfg("defensive_chase") or {}
+            if not cfg.get("enabled", True):
+                return None  # 回退禁用（磨空成本由 unified_engine 留档）
+            defensive_gate = self._defensive_chase_gates(tech_data, sector)
+            if not defensive_gate["passed"]:
+                return None
+
         current = tech_data.get("current_price", 0)
         ma20 = tech_data.get("ma20", 0)
         recent_high = tech_data.get("recent_high", 0)
+        # 【Phase5 回炉】突破判定锚 prior_high（前期高点，剔除当日）：
+        # 旧口径 current≥recent_high(含当日高点)×0.99 实际测度的是
+        # “收盘接近日内最高”——盘中冲高回落 2% 的真突破被误拦
+        # （蘅东光 9/7 类形态）。海龟突破的语义本就是“突破前期高点”。
+        prior_high = tech_data.get("prior_high") or recent_high
         vol_ratio = tech_data.get("volume_ratio", 1.0)
         kline = tech_data.get("kline", [])
 
-        if not all([current, ma20, recent_high]):
+        if not all([current, ma20, prior_high]):
             return None
 
         # MA20趋势向上
@@ -1040,9 +1471,9 @@ class TimingEngine:
         else:
             return None
 
-        # Donchian 20日突破
+        # Donchian 20日突破（锚前期高点）
         breakout_ratio = self._cfg("momentum_chase", "breakout_price_ratio", default=0.99)
-        if current < recent_high * breakout_ratio:
+        if current < float(prior_high) * breakout_ratio:
             return None
 
         # 放量确认
@@ -1051,8 +1482,18 @@ class TimingEngine:
             return None
 
         conditions = [
-            f"海龟突破(MA20趋势向上, 突破{recent_high:.2f}, 放量{vol_ratio:.1f}倍)",
+            f"海龟突破(MA20趋势向上, 突破前高{float(prior_high):.2f}, 放量{vol_ratio:.1f}倍)",
         ]
+        position_level = "spread"
+        applicable_modes = ["attack"]
+        if defensive_gate is not None:
+            # 防守模式降仓放行：三重门全过 + 风险预算仓位（试探仓）
+            position_level = "probe"
+            applicable_modes = ["defend"]
+            conditions.append(
+                "防守降仓放行(三重门全过: 四确认+基本面+板块联动；"
+                "仓位=单笔风险预算÷止损距离，非 1/3 惯例)"
+            )
         return EntrySignal(
             stock_code=code,
             stock_name=name,
@@ -1062,11 +1503,112 @@ class TimingEngine:
             stop_loss=stop_loss.stop_loss_price,
             target_type="突破持有",
             target_range=self._calculate_target_range(tech_data, "确认追强"),
-            position_level="spread",
-            applicable_modes=["attack"],
+            position_level=position_level,
+            applicable_modes=applicable_modes,
             sector_status=sector,
             trigger_reason="；".join(conditions),
             confidence="高",
+            defensive_chase=(defensive_gate or None) and {
+                "evidence": defensive_gate["evidence"],
+                "projected_volume": defensive_gate["projected_volume"],
+            },
+        )
+
+    def _check_trend_continuation(self, code, name, tech_data, stop_loss, mode, sector) -> Optional[EntrySignal]:
+        """
+        【P3-1】趋势延续：突破后 1~10 日的延续段回踩入场
+
+        沃尔德 9/7 +7.02% 处于突破后延续段（MA多头排列、MACD金叉延续、
+        回踩不破 MA10 再放量），四种策略无一覆盖：
+        - 价量突破要求突破当日诞生（事件边界），延续段不再触发；
+        - 确认追强防守禁用（P1-1 仅覆盖创新高当日）；
+        - 套利低吸要求周线 MACD + 缩量回踩形态，延续段是放量非缩量。
+
+        延续段逻辑：趋势已确立，入场点是回踩均线不破 + 再度放量；
+        Z = MA10（延续结构破位即逻辑死亡），W = 延伸目标位。
+        """
+        if mode not in ("attack", "defend"):
+            return None
+        if sector == "retreating":
+            return None
+        cfg = self._cfg("trend_continuation") or {}
+        if not cfg.get("enabled", True):
+            return None
+
+        current = float(tech_data.get("current_price") or 0)
+        ma5 = float(tech_data.get("ma5") or 0)
+        ma10 = float(tech_data.get("ma10") or 0)
+        ma20 = float(tech_data.get("ma20") or 0)
+        ma25 = float(tech_data.get("ma25") or 0)
+        recent_high = float(tech_data.get("recent_high") or 0)
+        vol_ratio = float(tech_data.get("volume_ratio") or 1.0)
+        kline = tech_data.get("kline") or []
+        if not all([current, ma5, ma10, ma20, ma25, recent_high]) or len(kline) < 30:
+            return None
+
+        # ① 趋势结构：MA 多头排列 + 现价在 MA25 上方（趋势内，非突破当日）
+        require_alignment = bool(cfg.get("ma_alignment", True))
+        if require_alignment and not (ma5 > ma10 > ma20):
+            return None
+        if current <= ma25:
+            return None
+
+        # ② 延续段边界：突破不是今日发生（昨收已在 MA25 上方 → 非当日事件），
+        #    且距近 20 日新高在延续窗口内（突破后 1~10 日）
+        prev_close = float(tech_data.get("prev_close") or 0)
+        ma25_prev = tech_data.get("ma25_prev")
+        if prev_close and ma25_prev and prev_close > float(ma25_prev):
+            # 昨日已在 MA25 上方 → 非当日突破，是延续段候选
+            pass
+        else:
+            return None  # 突破当日归价量突破，本策略不重复覆盖
+
+        # ③ 距 20 日新高的距离在延续窗口内（突破后第 1~10 日）
+        # 【Phase5 回炉】锚 prior_high（剔除当日）：当日冲高不再把“距新高天数”
+        # 虚抬高，延续段计数回到真实突破日起算。
+        max_bars = int(cfg.get("max_bars_since_breakout", 10))
+        closes = [
+            float(k.get("收盘", k.get("close", 0)) or 0) for k in kline[-(max_bars + 5):]
+        ]
+        prior_high_ref = float(tech_data.get("prior_high") or recent_high)
+        if not closes or prior_high_ref <= 0:
+            return None
+        bars_since_high = 0
+        for close in reversed(closes[:-1]):
+            if close >= prior_high_ref * float(cfg.get("new_high_ratio", 0.99)):
+                break
+            bars_since_high += 1
+        if bars_since_high < int(cfg.get("min_bars_since_breakout", 1)) - 1:
+            return None
+        if bars_since_high > max_bars:
+            return None
+
+        # ④ 回踩不破 + 再度放量：现价回踩 MA5/MA10 附近但未破 MA10，
+        #    且当日再度放量（延续段的入场确认）
+        vol_min = float(cfg.get("volume_ratio_min", 1.2))
+        if vol_ratio < vol_min:
+            return None
+        if current < ma10:
+            return None
+
+        conditions = [
+            f"突破后延续段(第{bars_since_high + 1}日, MA多头排列, 现价{current:.2f}站上MA10:{ma10:.2f})",
+            f"回踩不破再度放量(量比{vol_ratio:.1f}倍)",
+        ]
+        return EntrySignal(
+            stock_code=code,
+            stock_name=name,
+            entry_type="趋势延续",
+            strategy_summary="趋势延续 — 突破后延续段回踩不破 + 再度放量（沃尔德 9/7 类形态）",
+            entry_trigger_price=current,
+            stop_loss=stop_loss.stop_loss_price,
+            target_type="主升持有",
+            target_range=self._calculate_target_range(tech_data, "确认追强"),
+            position_level="normal",
+            applicable_modes=["attack", "defend"],
+            sector_status=sector,
+            trigger_reason="；".join(conditions),
+            confidence="中",
         )
 
     def _check_volume_breakout(self, code, name, tech_data, stop_loss, mode, sector) -> Optional[EntrySignal]:
@@ -1149,20 +1691,49 @@ class TimingEngine:
         from .signal_plan import build_volume_snapshot
 
         # 触发、置信度和分档必须读同一份量能快照，避免原始字段和分位口径分裂。
-        volume_snapshot = build_volume_snapshot(tech_data, guard=self._cfg("data_guard") or None)
+        # 【P0-1】外推封板判定需按代码的涨跌停幅度（北交所 30%，
+        # 蘅东光 +14.81% 不是封板；主板 10% 才是）。
+        volume_snapshot = build_volume_snapshot(
+            tech_data, guard=self._cfg("data_guard") or None,
+            projection_config=self._projection_cfg(),
+            limit_ratio=get_limit_ratio(code),
+        )
         if volume_snapshot.volume_vs_ma60 is None:
             return None
+
+        # 【P0-1】外推口径：盘中累计量/全天均量结构性偏小（分子只走了半天），
+        # 午前 1.02x 在外推口径下 = 2.0x（蘅东光 9/7 实证）。
+        # 实际口径 >1.0 或 外推口径 ≥阈值（比实际口径更严，对冲开盘冲量高估）
+        # 任一成立即量能确认。
+        projected = volume_snapshot.projected_volume_vs_ma60
+        projected_threshold = float(
+            self._cfg("volume_projection", "breakout_threshold", default=1.2)
+        )
         volume_breakout = (
             volume_snapshot.volume_vs_ma60 is not None
             and volume_snapshot.volume_vs_ma60 > 1.0
         )
-        if not volume_breakout and not is_limit_up_today:
+        projected_breakout = (
+            projected is not None
+            and projected >= projected_threshold
+            and volume_snapshot.projection_mode == "ok"
+        )
+        if not volume_breakout and not projected_breakout and not is_limit_up_today:
             return None
 
         vol_ratio = volume_snapshot.volume_vs_ma60 or 0
+        if volume_breakout:
+            volume_text = f"量能突破60日均量({vol_ratio:.1f}倍)"
+        elif projected_breakout:
+            volume_text = (
+                f"量能突破60日均量(外推口径{projected:.1f}倍，"
+                f"累计{vol_ratio:.2f}x，{volume_snapshot.projection_note})"
+            )
+        else:
+            volume_text = f"涨停豁免量能(涨幅{(current-prev_close)/prev_close*100:.1f}%)"
         conditions = [
             f"突破MA25(昨收{prev_close:.2f}在昨日MA25下方，今价{current:.2f}站上{ma25:.2f})",
-            f"量能突破60日均量({vol_ratio:.1f}倍)" if volume_breakout else f"涨停豁免量能(涨幅{(current-prev_close)/prev_close*100:.1f}%)",
+            volume_text,
         ]
 
         return EntrySignal(
@@ -1214,6 +1785,11 @@ class TimingEngine:
         stop_loss_calc = self.calculate_stop_loss(stock_code, tech_data)
 
         current_price = tech_data.get("current_price", 0)
+        if not current_price or float(current_price) <= 0:
+            # 行情缺失时 0/0 会伪装成破位；宁可漏评一次，也不能生成无效卖出。
+            self._exit_diagnostics[stock_code] = "卖出检查: 现价缺失，数据不足，未评估"
+            logger.warning("卖出检查跳过 %s: 现价缺失", stock_code)
+            return []
 
         # ============================================================
         # 【四】Block 0: 策略配对出场——读取该持仓的入场假说（X/Y/Z/W）
@@ -1246,7 +1822,11 @@ class TimingEngine:
         #   - 现价 ≤ 止损价 → 破位止损（紧急，硬触发）
         #   - 量能/投票信息附加到 reason，但不影响触发决策
         # 帖43"先止损再说"：出场永远比进场果断，不讨价还价
-        stop_triggered = current_price <= stop_loss_calc.stop_loss_price
+        stop_triggered = (
+            current_price > 0
+            and stop_loss_calc.stop_loss_price > 0
+            and current_price <= stop_loss_calc.stop_loss_price
+        )
         if stop_triggered:
             vol_ratio = tech_data.get('volume_ratio', 1.0)
             heavy_vol_thresh = self._cfg("exit", "breakdown", "heavy_volume_ratio", default=1.3)
@@ -1635,14 +2215,32 @@ class TimingEngine:
                 ))
 
         # 3. 技术走弱（投票强烈看空/偏空/布林下轨）
+        # 【P0-3】卖出条件分级 OR：止损类（价格破Z线、技术走弱）任一即出，
+        # 不容商量；止盈类（冲高止盈、MA5压制）保持原有计票。
+        # 原阈值 strong≥1 或 medium≥3 近乎永不开启（两天 30+ 次检查零触发，
+        # 汇成真空 -6% 无响应）→ 分级 OR 下技术走弱 medium≥2 即出（默认）。
         if weakness:
             strong = sum(1 for s in weakness if s[0] == 'strong')
             medium = sum(1 for s in weakness if s[0] == 'medium')
-            # 技术走弱：strong≥1（投票强烈看空）或 medium≥3（多个走弱信号叠加）才推送
-            if strong >= 1 or medium >= 3:
+            graded_or_enabled = bool(
+                self._cfg("exit", "graded_or", "enabled", default=True)
+            )
+            graded_medium_min = int(
+                self._cfg("exit", "graded_or", "weakness_medium_min", default=2)
+            )
+            if graded_or_enabled:
+                weak_trigger = strong >= 1 or medium >= graded_medium_min
+            else:
+                weak_trigger = strong >= 1 or medium >= 3  # 旧 AND 计票行为
+            if weak_trigger:
                 labels = [f'[{lvl}]{lbl}' for lvl, lbl in weakness]
                 reason = '；'.join(labels)
-                urgency = '重要' if strong >= 1 else '观察'
+                if graded_or_enabled and strong == 0 and medium >= graded_medium_min:
+                    reason += (
+                        f'——【分级OR·止损类】技术走弱 medium{medium}/{graded_medium_min}'
+                        '任一即出，不容商量'
+                    )
+                urgency = '重要' if strong >= 1 else '重要'
                 signals.append(ExitSignal(
                     stock_code=stock_code, stock_name=stock_name,
                     exit_type='技术走弱', trigger_price=current_price,
@@ -1676,7 +2274,12 @@ class TimingEngine:
                     f"止损未触发(现价{current_price:.2f}>{stop_loss_calc.stop_loss_price:.2f})",
                     f"冲高止盈(strong {strong_exhaustion}/2)",
                     "MA5压制(未同时满足多头排列/MA5上升/跌破阈值)",
-                    f"技术走弱(strong {strong_weakness}/1, medium {medium_weakness}/3)",
+                    (
+                        f"技术走弱(strong {strong_weakness}/1, "
+                        f"medium {medium_weakness}/2·分级OR止损类)"
+                        if bool(self._cfg("exit", "graded_or", "enabled", default=True))
+                        else f"技术走弱(strong {strong_weakness}/1, medium {medium_weakness}/3)"
+                    ),
                 ]
                 self._exit_diagnostics[stock_code] = "卖出检查: " + "; ".join(parts)
 
@@ -1704,6 +2307,10 @@ class TimingEngine:
             sector_status=sector_status,
         )
         for sig in merged.values():
+            active_events = self._lifecycle.get_active_events(stock_code)
+            triggered = [e for e in active_events if e.status == "triggered"]
+            if triggered:
+                sig.event_id = triggered[-1].event_id
             sig.reason += "\n  推导: " + derivation
 
         return list(merged.values())
@@ -1737,23 +2344,43 @@ class TimingEngine:
     ) -> List[Dict]:
         """【三】评估该股活跃信号事件的状态迁移（失效撤单/过期），返回通知列表。
 
-        由 unified_engine 在出场扫描后调用；返回的 dict 直接并入 batch.exits
-        （engine.py 已支持 dict 型出场信号推送）。
+        由 unified_engine 在出场扫描后调用；返回值只进 batch.event_notices。
+        “信号成交”是买单状态迁移，不是卖出指令；“信号作废”是撤单状态。
         """
         try:
+            tech_data = self._tech_data_full.get(stock_code) or {}
+            kline = tech_data.get("kline") or [] if isinstance(tech_data, dict) else []
+            latest_bar = kline[-1] if kline else {}
+            day_high = _number_or_none(latest_bar.get("最高", latest_bar.get("high")))
+            day_low = _number_or_none(latest_bar.get("最低", latest_bar.get("low")))
+            close_price = _number_or_none(
+                current_price or latest_bar.get("收盘", latest_bar.get("close"))
+            )
             return self._lifecycle.evaluate_events(
                 stock_code,
                 current_price=current_price,
                 sector_status=sector_status,
+                day_high=day_high,
+                day_low=day_low,
+                close_price=close_price,
             )
         except Exception as e:
             logger.debug("事件评估失败 %s: %s", stock_code, e)
             return []
 
     def lifecycle_status_note(self, stock_code: str, current_price: float = 0) -> str:
-        """【三】观察卡用：活跃事件状态（回踩买点是否有效/第几天）"""
+        """【三】观察卡用：活跃事件状态（回踩买点是否有效/第几天）。
+
+        【Phase5 回炉】传入当前 z_line_mode：存量事件与新规则双轨
+        在状态行可见（“Z按bare_structure(旧版)”），审计者不再误判。
+        """
         try:
-            return self._lifecycle.event_status_note(stock_code, current_price)
+            current_mode = str(
+                self._cfg("hypothesis_gate", "z_line_mode", default="buffered_structure")
+            )
+            return self._lifecycle.event_status_note(
+                stock_code, current_price, current_rule_version=current_mode
+            )
         except Exception:
             return ""
 
@@ -1928,7 +2555,10 @@ class TimingEngine:
             if market_mode == "attack":
                 strategy_note = "全部策略可用"
             elif market_mode == "defend":
-                strategy_note = "可用:恐慌抄底/套利低吸 | 禁用:确认追强"
+                # 【Phase5 回炉】与环境闸门栏同步（旧文案“禁用:确认追强”与
+                # 闸门行“追强降仓可用(三重门)”矛盾——两处表述相反时，
+                # 执行以谁为准？审计视角这是 P1 级问题）。
+                strategy_note = "可用:恐慌抄底/套利低吸/价量突破/趋势延续 | 追强降仓需三重门"
             else:
                 strategy_note = "仅恐慌抄底可用"
             lines.append(f"①策略: {mode_cn} → {strategy_note}{sector_note}")
@@ -2057,6 +2687,21 @@ class TimingEngine:
             lines.append(f"④决策: 选取{selected_type} | 置信度:{confidence}")
 
         return "\n  ".join(lines)
+
+    @staticmethod
+    def _compute_prior_high(highs: List, window: int):
+        """【Phase5 回炉】前期高点：近 N 日最高价，剔除当日。
+
+        "创新高/突破"判定的正确锚（含当日高点的旧口径实际测度的是
+        "收盘接近日内最高"——蘅东光 9/7 盘中 555.10 创历史新高、
+        收盘 549.50 回落 1.0%，被 0.99 容差误拦）。
+        """
+        if not highs:
+            return None
+        prior_window = (
+            highs[-(window + 1):-1] if len(highs) >= window + 1 else highs[:-1]
+        )
+        return max(prior_window) if prior_window else None
 
     def _get_realtime_price(self, stock_code: str) -> Optional[Dict]:
         """获取实时价"""
@@ -2261,8 +2906,17 @@ class TimingEngine:
 
                     extreme_window = self._cfg("tech_data", "recent_extreme_window", default=20)
                     data["prev_low"] = min(lows[-extreme_window:]) if len(lows) >= extreme_window else (lows[-1] if lows else None)
-                    data["prev_high"] = highs[-1] if len(highs) >= 1 else None
+                    # 【Phase5 回炉】prev_high 语义修正：真昨日高点（旧实现是当日高点，名不副实）。
+                    # calculate_stop_loss 的 resistance 用途由 recent_high 覆盖，不受影响。
+                    data["prev_high"] = highs[-2] if len(highs) >= 2 else None
                     data["recent_high"] = max(highs[-extreme_window:]) if len(highs) >= extreme_window else max(highs)
+                    # 【Phase5 回炉】prior_high：近 N 日高，剔除当日——“创新高/突破”判定的
+                    # 正确锚。验收实证（9/8 蘅东光）：盘中 555.10 创历史新高、收盘 549.50
+                    # 回落 1.0%，旧口径（含当日高点）判 current≥recent_high×0.99
+                    # 即 549.50≥549.55 差 0.05 元失败——“创新高”被错误实现成
+                    # “收盘接近日内最高”，在它最该放行的标的上失效。
+                    # prior_high=462.30（9/4 涨停价）时 549.50 稳过。
+                    data["prior_high"] = self._compute_prior_high(highs, extreme_window)
 
                     # 收盘量比（当日量/前5日均量）：历史K线无"量比"字段，但收盘时标准量比数学上
                     # 就等于当日量/前5日均量（实测 300843: 0.9325 vs 实时量比 0.93，误差可忽略）
