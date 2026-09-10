@@ -64,6 +64,15 @@ class WeeklyReport:
         lines.append(self._get_insight_summary())
         lines.append("")
 
+        # 5.5 【P3-2】拦截票追踪：含被移出观察列表的票，防幸存者偏差。
+        lines.append("🧪 拦截票追踪:")
+        try:
+            from .observation_tracker import build_intercept_weekly_summary
+            lines.append(build_intercept_weekly_summary())
+        except Exception as e:
+            lines.append(f"  生成失败: {str(e)[:80]}")
+        lines.append("")
+
         # 6. 下周关注
         lines.append("🔮 下周关注:")
         lines.append(self._get_next_week_focus())

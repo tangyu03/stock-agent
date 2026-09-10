@@ -104,7 +104,7 @@ def test_timing_engine_config_loading():
 
     # 验证关键配置项已加载
     assert engine._cfg("panic_bottom", "index_drop_threshold") == 4.0
-    assert engine._cfg("panic_bottom", "stock_drop_threshold") == -5
+    assert engine._cfg("panic_bottom", "stock_drop_threshold") == -7
     assert engine._cfg("arbitrage", "min_trigger_conditions") == 1
     assert engine._cfg("momentum_chase", "volume_confirm_ratio") == 1.2
     assert engine._cfg("exit", "exhaustion", "rsi_overbought") == 70
@@ -134,7 +134,7 @@ def test_params_override():
     assert engine._cfg("panic_bottom", "index_drop_threshold") == 3.0
     assert engine._cfg("stop_loss", "multiplier") == 0.95
     # 未覆盖的应保持原值
-    assert engine._cfg("panic_bottom", "stock_drop_threshold") == -5
+    assert engine._cfg("panic_bottom", "stock_drop_threshold") == -7
     assert engine._cfg("arbitrage", "min_trigger_conditions") == 1
 
     print(f"   覆盖后 panic_bottom.index_drop_threshold = {engine._cfg('panic_bottom', 'index_drop_threshold')}")

@@ -1,0 +1,26 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+-class InMemorySignalEventStore:
++def _default_rule_entry(current: str, target: str, reason: str = "") -> str:
++    """Known lifecycle edges; free-text migration callers get a stable fallback."""
++    current = normalize_status(current)
++    target = normalize_status(target)
++    if current == "none" and target == "valid":
++        return "R1.0事件诞生"
++    if target == "filled":
++        return "R3.2回踩确认"
++    if target == "expired":
++        return "R3.5有效期到期"
++    if target == "invalidated":
++        if "止损" in reason:
++            return "R3.1收盘跌破Z"
++        if "买点" in reason:
++            return "R3.3回踩失败"
++        if "退潮" in reason:
++            return "R3.4环境前提消失"
++    return "R3.0状态迁移"
++
++
++class InMemorySignalEventStore:
+*** End Patch

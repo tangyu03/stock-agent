@@ -22,22 +22,31 @@ from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
 from ..db import get_conn
+from ..rules_version import get_rules_version
 
 logger = logging.getLogger(__name__)
 
 # 状态语义的唯一解释：valid 是“已触发、买单等待回踩”；
 # filled 是“价格已触及买点”；triggered 只是旧库里的 filled 别名。
 TERMINAL_REENTRY_STATUSES = ("invalidated",)
-ACTIVE_EVENT_STATUSES = ("valid", "filled")
+ACTIVE_EVENT_STATUSES = ("valid", "filled", "frozen")
 LEGACY_TRIGGERED_STATUS = "triggered"
-TERMINAL_EVENT_STATUSES = ("invalidated", "expired")
+TERMINAL_EVENT_STATUSES = (
+    "invalidated", "expired", "chase_abandon",
+    "sig_target", "sig_stop", "time_exit",
+)
 
 # 推送层不暴露内部枚举；状态机仍是英文键，展示前统一翻译。
 _STATUS_DISPLAY = {
     "valid": "已触发",
     "filled": "已成交",
+    "frozen": "已冻结",
     "invalidated": "已失效",
     "expired": "已过期",
+    "chase_abandon": "追高放弃",
+    "sig_target": "信号止盈",
+    "sig_stop": "信号止损",
+    "time_exit": "时间离场",
 }
 
 
@@ -53,7 +62,15 @@ def can_transition_status(current: str, target: str) -> bool:
     target = normalize_status(target)
     if current == target:
         return True
-    return current == "valid" and target in ("filled", *TERMINAL_EVENT_STATUSES)
+    if current == "valid":
+        return target in ("filled", "frozen", *TERMINAL_EVENT_STATUSES)
+    if current == "filled":
+        return target in (
+            "frozen", "sig_target", "sig_stop", "time_exit",
+        )
+    if current == "frozen":
+        return target in ("valid", "filled", *TERMINAL_EVENT_STATUSES)
+    return False
 _RULE_VERSION_DISPLAY = {
     "buffered_structure": "结构位加缓冲",
     "bare_structure": "结构位本体",
@@ -68,6 +85,57 @@ def display_status(status: str) -> str:
 
 def display_rule_version(rule_version: str) -> str:
     return _RULE_VERSION_DISPLAY.get(str(rule_version or ""), str(rule_version or ""))
+
+
+def _snapshot_flags(snapshot: dict, maintenance: bool = False) -> List[str]:
+    flags: List[str] = []
+    try:
+        volume_ratio = snapshot.get("volume_ratio")
+        if volume_ratio is not None:
+            text = f"量比{float(volume_ratio):.2f}"
+            if maintenance and float(volume_ratio) < 1.2:
+                text += " △缩量"
+            else:
+                text += "✓"
+            flags.append(text)
+    except (TypeError, ValueError):
+        pass
+    ma = snapshot.get("ma_alignment")
+    if ma is not None:
+        flags.append(("多头排列✓" if ma else "多头排列✗"))
+    rsi = snapshot.get("rsi")
+    if rsi is not None:
+        flags.append(f"RSI{float(rsi):.1f}")
+    sector = snapshot.get("sector_status")
+    if sector:
+        flags.append(f"板块{sector}")
+    return flags
+
+
+def render_entry_and_maintenance(event) -> str:
+    """T0入场条件与当日维持条件分栏，禁止用当日值改写T0事实。"""
+    try:
+        entry = json.loads(event.entry_snapshot or "{}")
+    except Exception:
+        entry = {}
+    try:
+        maintenance = json.loads(event.maintenance_check or "{}")
+    except Exception:
+        maintenance = {}
+    entry_flags = _snapshot_flags(entry)
+    maintenance_flags = _snapshot_flags(maintenance, maintenance=True)
+    if maintenance_flags and entry_flags:
+        weak = any("△" in flag for flag in maintenance_flags)
+        suffix = (
+            "——维持条件走弱，不影响已触发状态，仅提示"
+            if weak else "——维持条件正常"
+        )
+    else:
+        suffix = "——维持检查未评估"
+    return (
+        f"入场(T0 {event.born_date}): {' '.join(entry_flags) or '快照缺失'} | "
+        f"维持(今日): {' '.join(maintenance_flags) or '未评估'}{suffix}"
+    )
 
 
 def localize_display_enums(value) -> str:
@@ -105,6 +173,10 @@ class SignalEvent:
     # 存量事件与新规则双轨审计：旧事件（空串）渲染为“旧版规则”，
     # 避免审计者误判“Z 线统一没做”（博杰 9/7 旧 Z=85.54 实证）。
     rule_version: str = ""
+    rules_version: str = ""
+    frozen_prev_status: str = ""
+    entry_snapshot: str = "{}"
+    maintenance_check: str = "{}"
     y_formula: str = ""
     y_inputs: str = ""
 
@@ -131,6 +203,10 @@ def _ensure_tables(cursor) -> None:
         status TEXT DEFAULT 'valid',
         invalid_reason TEXT,
         rule_version TEXT DEFAULT '',
+        rules_version TEXT DEFAULT '',
+        frozen_prev_status TEXT DEFAULT '',
+        entry_snapshot TEXT DEFAULT '{}',
+        maintenance_check TEXT DEFAULT '{}',
         y_formula TEXT DEFAULT '',
         y_inputs TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -142,6 +218,21 @@ def _ensure_tables(cursor) -> None:
         cursor.execute("ALTER TABLE signal_events ADD COLUMN rule_version TEXT DEFAULT ''")
     except Exception:
         pass  # 列已存在（SQLite 无 ADD COLUMN IF NOT EXISTS）
+
+    try:
+        cursor.execute("ALTER TABLE signal_events ADD COLUMN rules_version TEXT DEFAULT ''")
+    except Exception:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE signal_events ADD COLUMN frozen_prev_status TEXT DEFAULT ''")
+    except Exception:
+        pass
+    for column in ("entry_snapshot", "maintenance_check"):
+        try:
+            cursor.execute(f"ALTER TABLE signal_events ADD COLUMN {column} TEXT DEFAULT '{{}}'")
+        except Exception:
+            pass
 
     # 买点公式审计：事件出生时的 Y 定位必须可回放。
     for column in ("y_formula", "y_inputs"):
@@ -162,11 +253,57 @@ def _ensure_tables(cursor) -> None:
         to_status TEXT NOT NULL,
         reason TEXT DEFAULT '',
         source TEXT DEFAULT 'signal_lifecycle',
+        trigger_data TEXT DEFAULT '{}',
+        rule_entry TEXT DEFAULT '',
+        rules_version TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_signal_event_logs_event "
                    "ON signal_event_logs(event_id, created_at)")
+    for column in ("trigger_data", "rule_entry", "rules_version"):
+        try:
+            default = "'{}'" if column == "trigger_data" else "''"
+            cursor.execute(
+                f"ALTER TABLE signal_event_logs ADD COLUMN {column} TEXT DEFAULT {default}"
+            )
+        except Exception:
+            pass
+
+    from ..feedback.signal_ledger import ensure_signal_ledger_schema
+    ensure_signal_ledger_schema(cursor)
+
+
+def _default_rule_entry(current: str, target: str, reason: str = "") -> str:
+    """Known lifecycle edges; free-text migration callers get a stable fallback."""
+    current = normalize_status(current)
+    target = normalize_status(target)
+    if current == "none" and target == "valid":
+        return "R1.0事件诞生"
+    if target == "filled":
+        return "R3.2回踩确认"
+    if target == "expired":
+        return "R3.5有效期到期"
+    if target == "chase_abandon":
+        return "R3.6追高放弃"
+    if target == "sig_target":
+        return "R3.7信号止盈"
+    if target == "sig_stop":
+        return "R3.8信号止损"
+    if target == "time_exit":
+        return "R3.9时间离场"
+    if target == "frozen":
+        return "R4.1事件冻结"
+    if current == "frozen":
+        return "R4.2事件解冻"
+    if target == "invalidated":
+        if "止损" in reason:
+            return "R3.1收盘跌破Z"
+        if "买点" in reason:
+            return "R3.3回踩失败"
+        if "退潮" in reason:
+            return "R3.4环境前提消失"
+    return "R3.0状态迁移"
 
 
 class InMemorySignalEventStore:
@@ -188,7 +325,8 @@ class InMemorySignalEventStore:
         按诞生日期排序——再入场次数与待命判定的数据源。"""
         prior = [
             e for e in self.events.values()
-            if e.stock_code == stock_code and normalize_status(e.status) != "valid"
+            if e.stock_code == stock_code
+            and normalize_status(e.status) not in ("valid", "frozen")
         ]
         return sorted(prior, key=lambda e: e.born_date)
 
@@ -206,10 +344,18 @@ class InMemorySignalEventStore:
                 "to_status": event.status,
                 "reason": event.invalid_reason,
                 "source": "signal_lifecycle",
+                "trigger_data": {},
+                "rule_entry": _default_rule_entry(from_status, event.status),
+                "rules_version": event.rules_version,
+                "entry_snapshot": event.entry_snapshot,
+                "maintenance_check": event.maintenance_check,
             })
         self.events[event.event_id] = event
 
-    def update_status(self, event_id: str, status: str, reason: str = "") -> None:
+    def update_status(
+        self, event_id: str, status: str, reason: str = "",
+        trigger_data: Optional[Dict] = None, rule_entry: str = "",
+    ) -> None:
         event = self.events.get(event_id)
         if event:
             if not can_transition_status(event.status, status):
@@ -217,6 +363,10 @@ class InMemorySignalEventStore:
             from_status = event.status
             event.status = normalize_status(status)
             event.invalid_reason = reason
+            if event.status == "frozen":
+                event.frozen_prev_status = from_status
+            elif from_status == "frozen":
+                event.frozen_prev_status = ""
             self.logs.append({
                 "event_id": event_id,
                 "stock_code": event.stock_code,
@@ -224,6 +374,9 @@ class InMemorySignalEventStore:
                 "to_status": event.status,
                 "reason": reason,
                 "source": "signal_lifecycle",
+                "trigger_data": trigger_data or {},
+                "rule_entry": rule_entry or _default_rule_entry(from_status, event.status),
+                "rules_version": event.rules_version,
             })
 
 
@@ -250,6 +403,10 @@ class DbSignalEventStore:
             status=normalize_status(row["status"] or "valid"),
             invalid_reason=row["invalid_reason"] or "",
             rule_version=(row["rule_version"] or "") if "rule_version" in row.keys() else "",
+            rules_version=(row["rules_version"] or "") if "rules_version" in row.keys() else "",
+            frozen_prev_status=(row["frozen_prev_status"] or "") if "frozen_prev_status" in row.keys() else "",
+            entry_snapshot=(row["entry_snapshot"] or "{}") if "entry_snapshot" in row.keys() else "{}",
+            maintenance_check=(row["maintenance_check"] or "{}") if "maintenance_check" in row.keys() else "{}",
             y_formula=(row["y_formula"] or "") if "y_formula" in row.keys() else "",
             y_inputs=(row["y_inputs"] or "") if "y_inputs" in row.keys() else "",
         )
@@ -262,13 +419,13 @@ class DbSignalEventStore:
                 if entry_type:
                     cursor.execute(
                         "SELECT * FROM signal_events WHERE stock_code=? "
-                        "AND status IN ('valid','filled','triggered') AND entry_type=?",
+                        "AND status IN ('valid','filled','frozen','triggered') AND entry_type=?",
                         (stock_code, entry_type),
                     )
                 else:
                     cursor.execute(
                         "SELECT * FROM signal_events WHERE stock_code=? "
-                        "AND status IN ('valid','filled','triggered')",
+                        "AND status IN ('valid','filled','frozen','triggered')",
                         (stock_code,),
                     )
                 return [self._row_to_event(r) for r in cursor.fetchall()]
@@ -285,7 +442,7 @@ class DbSignalEventStore:
                 _ensure_tables(cursor)
                 cursor.execute(
                     "SELECT * FROM signal_events WHERE stock_code=? "
-                    "AND status NOT IN ('valid') "
+                    "AND status NOT IN ('valid','frozen') "
                     "ORDER BY born_date",
                     (stock_code,),
                 )
@@ -314,37 +471,47 @@ class DbSignalEventStore:
                     (event_id, stock_code, stock_name, entry_type, born_date, expire_date,
                      breakout_level, entry_price, stop_loss, target_low, target_high,
                      hypothesis_x, hypothesis_y, hypothesis_z, hypothesis_w,
-                     status, invalid_reason, rule_version, y_formula, y_inputs, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     status, invalid_reason, rule_version, rules_version, frozen_prev_status,
+                     entry_snapshot, maintenance_check, y_formula, y_inputs, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     event.event_id, event.stock_code, event.stock_name, event.entry_type,
                     event.born_date, event.expire_date, event.breakout_level, event.entry_price,
                     event.stop_loss, event.target_low, event.target_high,
                     event.hypothesis_x, event.hypothesis_y, event.hypothesis_z, event.hypothesis_w,
-                    event.status, event.invalid_reason, event.rule_version,
+                    event.status, event.invalid_reason, event.rule_version, event.rules_version,
+                    event.frozen_prev_status,
+                    event.entry_snapshot, event.maintenance_check,
                     event.y_formula, event.y_inputs,
                     datetime.now().isoformat(timespec="seconds"),
                 ))
                 if existing is None or from_status != event.status:
                     cursor.execute("""
                         INSERT INTO signal_event_logs
-                        (event_id, stock_code, from_status, to_status, reason, source)
-                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle')
+                        (event_id, stock_code, from_status, to_status, reason, source,
+                         trigger_data, rule_entry, rules_version)
+                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle', ?, ?, ?)
                     """, (
                         event.event_id, event.stock_code, from_status,
                         event.status, event.invalid_reason,
+                        json.dumps({}, ensure_ascii=False, sort_keys=True),
+                        _default_rule_entry(from_status, event.status),
+                        event.rules_version,
                     ))
                 conn.commit()
         except Exception as e:
             logger.error("写入信号事件失败 %s: %s", event.stock_code, e)
 
-    def update_status(self, event_id: str, status: str, reason: str = "") -> None:
+    def update_status(
+        self, event_id: str, status: str, reason: str = "",
+        trigger_data: Optional[Dict] = None, rule_entry: str = "",
+    ) -> None:
         try:
             with get_conn() as conn:
                 cursor = conn.cursor()
                 _ensure_tables(cursor)
                 cursor.execute(
-                    "SELECT stock_code, status FROM signal_events WHERE event_id=?",
+                    "SELECT stock_code, status, rules_version, frozen_prev_status FROM signal_events WHERE event_id=?",
                     (event_id,),
                 )
                 existing = cursor.fetchone()
@@ -353,18 +520,37 @@ class DbSignalEventStore:
                     return False
                 current = normalize_status(existing["status"])
                 target = normalize_status(status)
-                cursor.execute(
-                    "UPDATE signal_events SET status=?, invalid_reason=?, updated_at=? WHERE event_id=?",
-                    (target, reason, datetime.now().isoformat(timespec="seconds"), event_id),
-                )
+                if target == "frozen":
+                    cursor.execute(
+                        "UPDATE signal_events SET status=?, invalid_reason=?, "
+                        "frozen_prev_status=?, updated_at=? WHERE event_id=?",
+                        (target, reason, current,
+                         datetime.now().isoformat(timespec="seconds"), event_id),
+                    )
+                elif current == "frozen":
+                    cursor.execute(
+                        "UPDATE signal_events SET status=?, invalid_reason=?, "
+                        "frozen_prev_status='', updated_at=? WHERE event_id=?",
+                        (target, reason,
+                         datetime.now().isoformat(timespec="seconds"), event_id),
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE signal_events SET status=?, invalid_reason=?, updated_at=? WHERE event_id=?",
+                        (target, reason, datetime.now().isoformat(timespec="seconds"), event_id),
+                    )
                 if current != target:
                     cursor.execute("""
                         INSERT INTO signal_event_logs
-                        (event_id, stock_code, from_status, to_status, reason, source)
-                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle')
+                        (event_id, stock_code, from_status, to_status, reason, source,
+                         trigger_data, rule_entry, rules_version)
+                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle', ?, ?, ?)
                     """, (
                         event_id, existing["stock_code"],
                         current, target, reason,
+                        json.dumps(trigger_data or {}, ensure_ascii=False, sort_keys=True),
+                        rule_entry or _default_rule_entry(current, target, reason),
+                        (existing["rules_version"] or "") if "rules_version" in existing.keys() else "",
                     ))
                 conn.commit()
         except Exception as e:
@@ -418,6 +604,8 @@ class SignalLifecycle:
         rule_version: str = "",
         y_formula: str = "",
         y_inputs: Optional[str | Dict] = None,
+        rules_version: str = "",
+        entry_snapshot: Optional[Dict] = None,
     ) -> SignalEvent:
         hyp = hypothesis or {}
         born = born or date.today()
@@ -438,6 +626,8 @@ class SignalLifecycle:
             hypothesis_z=f"{hyp.get('z_note', '')} Z={hyp.get('z', 0)}",
             hypothesis_w=f"{hyp.get('w_note', '')} W={hyp.get('w', [])}",
             rule_version=str(rule_version or ""),
+            rules_version=str(rules_version or get_rules_version()),
+            entry_snapshot=json.dumps(entry_snapshot or {}, ensure_ascii=False, sort_keys=True),
             y_formula=str(y_formula or ""),
             y_inputs=(
                 y_inputs if isinstance(y_inputs, str)
@@ -454,18 +644,89 @@ class SignalLifecycle:
 
     # ---------- 状态迁移 ----------
 
-    def mark_filled(self, event_id: str, reason: str = "价格触及买点，转入成交跟踪") -> None:
-        self.store.update_status(event_id, "filled", reason)
+    def mark_filled(
+        self, event_id: str, reason: str = "价格触及买点，转入成交跟踪",
+        trigger_data: Optional[Dict] = None,
+    ) -> None:
+        self.store.update_status(
+            event_id, "filled", reason,
+            trigger_data=trigger_data, rule_entry="R3.2回踩确认",
+        )
 
     def mark_triggered(self, event_id: str) -> None:
         """兼容旧调用：旧 triggered 语义等同于 filled。"""
         self.store.update_status(event_id, "filled", "价格触及买点，转入成交跟踪")
 
-    def invalidate(self, event_id: str, reason: str) -> None:
-        self.store.update_status(event_id, "invalidated", reason)
+    def invalidate(
+        self, event_id: str, reason: str,
+        trigger_data: Optional[Dict] = None,
+    ) -> None:
+        self.store.update_status(
+            event_id, "invalidated", reason,
+            trigger_data=trigger_data,
+        )
 
-    def expire(self, event_id: str) -> None:
-        self.store.update_status(event_id, "expired", "回踩买点有效期超期作废")
+    def expire(self, event_id: str, trigger_data: Optional[Dict] = None) -> None:
+        self.store.update_status(
+            event_id, "expired", "回踩买点有效期超期作废",
+            trigger_data=trigger_data, rule_entry="R3.5有效期到期",
+        )
+
+    def mark_chase_abandon(self, event_id: str, trigger_data: Optional[Dict] = None) -> None:
+        self.store.update_status(
+            event_id, "chase_abandon", "价格远离买点，回踩假设失效",
+            trigger_data=trigger_data, rule_entry="R3.6追高放弃",
+        )
+
+    def mark_signal_target(self, event_id: str, trigger_data: Optional[Dict] = None) -> None:
+        self.store.update_status(
+            event_id, "sig_target", "先触及目标价，信号口径赢",
+            trigger_data=trigger_data, rule_entry="R3.7信号止盈",
+        )
+
+    def mark_signal_stop(self, event_id: str, trigger_data: Optional[Dict] = None) -> None:
+        self.store.update_status(
+            event_id, "sig_stop", "先触及止损价，信号口径输",
+            trigger_data=trigger_data, rule_entry="R3.8信号止损",
+        )
+
+    def mark_time_exit(self, event_id: str, trigger_data: Optional[Dict] = None) -> None:
+        self.store.update_status(
+            event_id, "time_exit", "到期未触目标/止损，信号口径平",
+            trigger_data=trigger_data, rule_entry="R3.9时间离场",
+        )
+
+    def set_maintenance_check(self, stock_code: str, data: Dict) -> None:
+        payload = json.dumps(data or {}, ensure_ascii=False, sort_keys=True)
+        for event in self.get_active_events(stock_code):
+            event.maintenance_check = payload
+            self.store.save(event)
+
+    def record_daily_snapshot(
+        self, event_id: str, snapshot_date: str,
+        close_price: Optional[float], status: str,
+    ) -> bool:
+        from ..feedback.signal_ledger import record_daily_snapshot
+        return record_daily_snapshot(event_id, snapshot_date, close_price, status)
+
+    def freeze(
+        self, event_id: str, reason: str,
+        trigger_data: Optional[Dict] = None,
+    ) -> None:
+        self.store.update_status(
+            event_id, "frozen", reason,
+            trigger_data=trigger_data, rule_entry="R4.1事件冻结",
+        )
+
+    def unfreeze(
+        self, event_id: str, target_status: str = "valid",
+        trigger_data: Optional[Dict] = None,
+    ) -> None:
+        self.store.update_status(
+            event_id, target_status,
+            "技术分回升，冻结解除",
+            trigger_data=trigger_data, rule_entry="R4.2事件解冻",
+        )
 
     # ---------- 每轮评估 ----------
 
@@ -478,6 +739,9 @@ class SignalLifecycle:
         day_high: Optional[float] = None,
         day_low: Optional[float] = None,
         close_price: Optional[float] = None,
+        tech_score: Optional[float] = None,
+        volume_ratio: Optional[float] = None,
+        change_pct: Optional[float] = None,
     ) -> List[Dict]:
         """
         评估该股全部活跃事件，返回需要推送的状态迁移通知（dict 出场信号）。
@@ -496,19 +760,17 @@ class SignalLifecycle:
         today = today or date.today()
         notices: List[Dict] = []
         for event in self.get_active_events(stock_code):
-            if event.status != "valid":
-                # filled 属于成交/持仓跟踪；信号状态机不再重复成交/撤单。
-                continue
             close = float(close_price) if close_price is not None else None
             low = float(day_low) if day_low is not None else None
             high = float(day_high) if day_high is not None else None
+            effective_price = close if close is not None else current_price
 
             def _notice(exit_type: str, reason: str, urgency: str) -> Dict:
                 return {
                     "stock_code": stock_code,
                     "stock_name": event.stock_name,
                     "exit_type": exit_type,
-                    "trigger_price": close or current_price,
+                    "trigger_price": effective_price,
                     "stop_loss_price": event.stop_loss,
                     "reason": f"[{event.entry_type}] {reason}",
                     "urgency": urgency,
@@ -516,13 +778,150 @@ class SignalLifecycle:
                     "event_id": event.event_id,
                 }
 
+            if close is not None:
+                self.record_daily_snapshot(
+                    event.event_id, today.isoformat(), close, event.status,
+                )
+
+            try:
+                chase_gap = (
+                    (float(effective_price) / float(event.entry_price) - 1.0)
+                    if effective_price and event.entry_price else None
+                )
+            except (TypeError, ValueError):
+                chase_gap = None
+            if (
+                event.status in ("valid", "frozen")
+                and chase_gap is not None and chase_gap > 0.15
+            ):
+                reason = (
+                    f"现价{float(effective_price):.2f}距买点"
+                    f"{event.entry_price:.2f}超过+15%"
+                    f"({chase_gap:+.1%})，回踩假设失效"
+                )
+                self.mark_chase_abandon(
+                    event.event_id,
+                    trigger_data={
+                        "price": effective_price,
+                        "entry_price": event.entry_price,
+                        "chase_gap": chase_gap,
+                    },
+                )
+                notices.append(_notice("追高放弃", reason, "常规"))
+                continue
+
+            if event.status == "frozen":
+                if event.expire_date and today.isoformat() > event.expire_date:
+                    self.expire(
+                        event.event_id,
+                        trigger_data={
+                            "today": today.isoformat(),
+                            "expire_date": event.expire_date,
+                            "close": effective_price,
+                        },
+                    )
+                    notices.append(_notice("信号过期", "冻结事件超过有效期，自动过期", "常规"))
+                    continue
+                if tech_score is not None and float(tech_score) >= 0:
+                    target = event.frozen_prev_status or "valid"
+                    self.unfreeze(
+                        event.event_id, target,
+                        trigger_data={"tech_score": tech_score},
+                    )
+                    notices.append(_notice(
+                        "事件解冻",
+                        f"技术分{float(tech_score):+.1f}≥0，恢复原状态",
+                        "常规",
+                    ))
+                continue
+            if event.status != "valid":
+                # filled 后仍按信号口径跟踪 W/Z；不会读持仓或成本。
+                if event.status == "filled":
+                    stop = float(event.stop_loss or 0)
+                    target = float(event.target_low or event.target_high or 0)
+                    price = float(effective_price or 0)
+                    low_value = float(low) if low is not None else None
+                    high_value = float(high) if high is not None else None
+                    hit_stop = bool(
+                        stop > 0 and ((low_value is not None and low_value <= stop)
+                                      or (price > 0 and price <= stop))
+                    )
+                    hit_target = bool(
+                        target > 0 and ((high_value is not None and high_value >= target)
+                                        or (price > 0 and price >= target))
+                    )
+                    if hit_stop:
+                        reason = f"先触及止损{stop:.2f}，信号口径认错"
+                        self.mark_signal_stop(
+                            event.event_id,
+                            trigger_data={
+                                "close": effective_price, "day_low": low,
+                                "day_high": high, "stop_loss": stop,
+                            },
+                        )
+                        notices.append(_notice("信号止损", reason, "重要"))
+                        continue
+                    if hit_target:
+                        reason = f"先触及目标{target:.2f}，信号口径兑现"
+                        self.mark_signal_target(
+                            event.event_id,
+                            trigger_data={
+                                "close": effective_price, "day_low": low,
+                                "day_high": high, "target": target,
+                            },
+                        )
+                        notices.append(_notice("信号止盈", reason, "常规"))
+                        continue
+                    if event.expire_date and today.isoformat() > event.expire_date:
+                        self.mark_time_exit(
+                            event.event_id,
+                            trigger_data={
+                                "close": effective_price,
+                                "expire_date": event.expire_date,
+                            },
+                        )
+                        notices.append(_notice("时间离场", "有效期内未触目标或止损", "常规"))
+                        continue
+                continue
+
+            try:
+                should_freeze = (
+                    tech_score is not None
+                    and float(tech_score) <= -1
+                    and volume_ratio is not None
+                    and float(volume_ratio) >= 1.2
+                    and change_pct is not None
+                    and float(change_pct) < 0
+                )
+            except (TypeError, ValueError):
+                should_freeze = False
+            if should_freeze:
+                reason = (
+                    f"技术{float(tech_score):+.1f}"
+                    f"（放量阴线{float(change_pct):+.2f}%，"
+                    f"量比{float(volume_ratio):.2f}）；"
+                    "解冻条件技术分≥0，冻结期间不提示回踩买入"
+                )
+                self.freeze(
+                    event.event_id, reason,
+                    trigger_data={
+                        "tech_score": tech_score,
+                        "volume_ratio": volume_ratio,
+                        "change_pct": change_pct,
+                    },
+                )
+                notices.append(_notice("事件冻结", reason, "重要"))
+                continue
             # 收盘规则优先级：止损是结构死亡 > 买点撤单 > 日内触及成交。
             if close is not None and event.stop_loss and close < event.stop_loss:
                 reason = (
                     f"收盘{close:.2f}跌破止损线{event.stop_loss:.2f}，"
                     "结构失败，买单撤单"
                 )
-                self.invalidate(event.event_id, reason)
+                self.invalidate(
+                    event.event_id, reason,
+                    trigger_data={"close": close, "stop_loss": event.stop_loss},
+                )
                 notices.append(_notice("信号作废", reason, "紧急"))
                 continue
 
@@ -539,14 +938,24 @@ class SignalLifecycle:
                     "回踩失败已撤单"
                     + ("（盘中曾触及买点，不能回补）" if touched else "")
                 )
-                self.invalidate(event.event_id, reason)
+                self.invalidate(
+                    event.event_id, reason,
+                    trigger_data={
+                        "price": effective_current,
+                        "failure_anchor": failure_anchor,
+                        "day_low": low,
+                    },
+                )
                 notices.append(_notice("信号作废", reason, "重要"))
                 continue
 
             # 环境前提消失时不能先确认成交；回撤单优先于虚拟成交。
             if sector_status == "retreating":
                 reason = "板块状态机转为退潮，假说环境前提消失"
-                self.invalidate(event.event_id, reason)
+                self.invalidate(
+                    event.event_id, reason,
+                    trigger_data={"sector_status": sector_status},
+                )
                 notices.append(_notice("信号作废", reason + "——立即撤单", "重要"))
                 continue
 
@@ -556,7 +965,14 @@ class SignalLifecycle:
                 and low <= event.entry_price
                 and (close is None or close >= event.entry_price)
             ):
-                self.mark_filled(event.event_id)
+                self.mark_filled(
+                    event.event_id,
+                    trigger_data={
+                        "day_low": low,
+                        "entry_price": event.entry_price,
+                        "close": close,
+                    },
+                )
                 close_text = f"，收盘{close:.2f}" if close is not None else ""
                 reason = (
                     f"日内最低{low:.2f}触及买点{event.entry_price:.2f}"
@@ -566,7 +982,14 @@ class SignalLifecycle:
                 continue
 
             if event.expire_date and today.isoformat() > event.expire_date:
-                self.expire(event.event_id)
+                self.expire(
+                    event.event_id,
+                    trigger_data={
+                        "today": today.isoformat(),
+                        "expire_date": event.expire_date,
+                        "close": close or current_price,
+                    },
+                )
                 notices.append({
                     "stock_code": stock_code,
                     "stock_name": event.stock_name,
@@ -600,6 +1023,11 @@ class SignalLifecycle:
                 age = f"第{(date.today() - born).days + 1}天"
             except ValueError:
                 pass
+            if e.status == "frozen":
+                notes.append(
+                    f"[{e.entry_type}]已冻结：{e.invalid_reason or '评分仲裁触发'}"
+                )
+                continue
             pullback_ok = "回踩买点有效" if (not current_price or current_price <= e.entry_price * 1.01) else "买点上方待回踩"
             if e.rule_version and current_rule_version and e.rule_version != current_rule_version:
                 ver_note = f",Z按{display_rule_version(e.rule_version)}(旧版)"
@@ -609,10 +1037,16 @@ class SignalLifecycle:
                 ver_note = f",Z规则:{display_rule_version(e.rule_version)}"
             else:
                 ver_note = ""
+            global_version = str(getattr(e, "rules_version", "") or "")
+            global_ver_note = (
+                f",规则:{global_version}" if global_version else ",规则未记录"
+            )
+            audit_note = render_entry_and_maintenance(e)
             notes.append(
                 f"[{e.entry_type}]事件{age}{pullback_ok}"
                 f"(Y={e.entry_price:.2f},Z={e.stop_loss:.2f}{ver_note},"
-                f"有效至{e.expire_date})"
+                f"{global_ver_note.lstrip(',')},有效至{e.expire_date})"
+                f"\n{audit_note}"
             )
         return "；".join(notes)
 

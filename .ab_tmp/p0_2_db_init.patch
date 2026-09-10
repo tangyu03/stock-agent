@@ -1,0 +1,11 @@
+﻿*** Begin Patch
+*** Update File: src/db.py
+@@
+         rules_version TEXT DEFAULT '',
++        frozen_prev_status TEXT DEFAULT '',
+         y_formula TEXT DEFAULT '',
+@@
+                 "rules_version": "TEXT DEFAULT ''",
++                "frozen_prev_status": "TEXT DEFAULT ''",
+                 "y_formula": "TEXT DEFAULT ''",
+*** End Patch

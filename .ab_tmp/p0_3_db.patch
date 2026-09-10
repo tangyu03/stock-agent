@@ -1,0 +1,17 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+             frozen_prev_status=(row["frozen_prev_status"] or "") if "frozen_prev_status" in row.keys() else "",
++            entry_snapshot=(row["entry_snapshot"] or "{}") if "entry_snapshot" in row.keys() else "{}",
++            maintenance_check=(row["maintenance_check"] or "{}") if "maintenance_check" in row.keys() else "{}",
+@@
+-                     status, invalid_reason, rule_version, rules_version, frozen_prev_status, y_formula, y_inputs, updated_at)
+-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++                     status, invalid_reason, rule_version, rules_version, frozen_prev_status,
++                     entry_snapshot, maintenance_check, y_formula, y_inputs, updated_at)
++                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+@@
+                     event.status, event.invalid_reason, event.rule_version, event.rules_version,
+                     event.frozen_prev_status,
++                    event.entry_snapshot, event.maintenance_check,
+*** End Patch

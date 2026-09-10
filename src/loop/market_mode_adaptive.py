@@ -504,19 +504,55 @@ class MarketModeAdaptive:
             "mode_reason": " | ".join(reasons),
         }
 
+    _DIMENSION_WEIGHTS: Dict[str, float] = {
+        "index_trend": 0.25,
+        "ma_alignment": 0.15,
+        "volume": 0.15,
+        "breadth": 0.20,
+        "dist_days": 0.20,
+        "gem_sci_tech": 0.05,
+    }
+    _STATUS_VALUES = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}
+    _DIMENSION_NAMES = {
+        "index_trend": "指数趋势",
+        "ma_alignment": "MA排列",
+        "volume": "量价",
+        "breadth": "宽度",
+        "dist_days": "派发",
+        "gem_sci_tech": "双创",
+    }
+
     def score_dimensions(self, date: str, index_kline: List[Dict]) -> Dict:
         """兼容旧接口，委托给 _assess_market"""
         result = self._assess_market(date, index_kline)
         if result is None:
             return None
-        # 为调用方提供兼容的 raw_score / dim_sum 字段
+        # 【P1-1】加权明细：读者必须能从状态×权重复算总分。
         dims = result.get("dimensions", [])
-        bullish = sum(1 for d in dims if d.get("status") == "bullish")
-        neutral = sum(1 for d in dims if d.get("status") == "neutral")
-        # 兼容：用 bullish 占比估算，范围 0-10
-        compat_score = min(10, (bullish * 2.0 + neutral * 1.0))
-        result["raw_score"] = round(compat_score, 1)
-        result["dim_sum"] = round(compat_score / 2.0, 1)
+        weighted_sum = 0.0
+        details = []
+        for d in dims:
+            key = str(d.get("key") or "")
+            weight = self._DIMENSION_WEIGHTS.get(key)
+            if weight is None:
+                continue
+            value = self._STATUS_VALUES.get(d.get("status"), 0.0)
+            weighted_value = value * weight
+            weighted_sum += weighted_value
+            d["score_value"] = value
+            d["weight"] = weight
+            d["weighted_value"] = weighted_value
+            sign = "+" if value > 0 else (str(value) if value < 0 else "+0")
+            details.append(
+                f"{self._DIMENSION_NAMES.get(key, key)}{sign}×{weight:.2f}"
+            )
+        # 把 -1..+1 加权和映射到 0..10，5 分为中性。
+        raw_score = 5.0 + weighted_sum * 5.0
+        result["raw_score"] = round(raw_score, 1)
+        result["dim_sum"] = round(weighted_sum, 2)
+        result["score_detail"] = (
+            "评分明细: " + " | ".join(details) + f" = {raw_score:.1f} → {result.get('mode', '')}"
+        )
         return result
 
 

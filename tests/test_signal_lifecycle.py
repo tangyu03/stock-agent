@@ -337,6 +337,46 @@ class TestForwardOnlyState:
         assert event.status == "invalidated"
         assert "回踩失败已撤单" in notices[0]["reason"]
 
+    def test_price_far_above_buypoint_is_chase_abandoned(self):
+        from src.analyzers.signal_lifecycle import (
+            InMemorySignalEventStore,
+            SignalLifecycle,
+        )
+        lifecycle = SignalLifecycle(InMemorySignalEventStore(), valid_days=5)
+        event = lifecycle.register_event(
+            "688028", "沃尔德", "价量突破",
+            breakout_level=88.0, entry_price=89.50, stop_loss=83.50,
+            target_low=96.0, target_high=102.0,
+            hypothesis={"x": "放量突破MA25"},
+        )
+        notices = lifecycle.evaluate_events("688028", current_price=104.0)
+
+        assert event.status == "chase_abandon"
+        assert notices[0]["exit_type"] == "追高放弃"
+        assert "超过+15%" in notices[0]["reason"]
+
+    def test_frozen_event_expires_after_validity(self):
+        from datetime import timedelta as _timedelta
+        from src.analyzers.signal_lifecycle import (
+            InMemorySignalEventStore,
+            SignalLifecycle,
+        )
+        lifecycle = SignalLifecycle(InMemorySignalEventStore(), valid_days=5)
+        event = lifecycle.register_event(
+            "688028", "沃尔德", "价量突破",
+            breakout_level=88.0, entry_price=89.50, stop_loss=83.50,
+            target_low=96.0, target_high=102.0,
+            hypothesis={"x": "放量突破MA25"},
+        )
+        lifecycle.freeze(event.event_id, "技术-1（放量阴线），冻结")
+        future = date.fromisoformat(event.born_date) + _timedelta(days=6)
+        notices = lifecycle.evaluate_events(
+            "688028", current_price=90.0, today=future,
+        )
+
+        assert event.status == "expired"
+        assert notices[0]["exit_type"] == "信号过期"
+
     def test_active_filled_event_is_not_reentry_candidate(self):
         from src.analyzers.signal_lifecycle import reentry_status
         store = self._store_with_event("filled")

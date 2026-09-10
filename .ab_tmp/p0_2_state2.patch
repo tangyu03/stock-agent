@@ -1,0 +1,24 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+         prior = [
+             e for e in self.events.values()
+-            if e.stock_code == stock_code and normalize_status(e.status) != "valid"
++            if e.stock_code == stock_code
++            and normalize_status(e.status) not in ("valid", "frozen")
+@@
+             from_status = event.status
+             event.status = normalize_status(status)
+             event.invalid_reason = reason
++            if event.status == "frozen":
++                event.frozen_prev_status = from_status
++            elif from_status == "frozen":
++                event.frozen_prev_status = ""
+@@
+     if target == "expired":
+         return "R3.5有效期到期"
++    if target == "frozen":
++        return "R4.1事件冻结"
++    if current == "frozen":
++        return "R4.2事件解冻"
+*** End Patch

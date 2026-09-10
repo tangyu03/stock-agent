@@ -201,6 +201,13 @@ class Orchestrator:
         # P2-13 审计：透出数据参考日，非交易日复盘时推送/日志可明确"上一交易日"口径
         env["ref_date"] = ref_date
         env["is_backfill"] = is_backfill
+        try:
+            from ..feedback.daily_review_parts import evaluate_environment_invalidation
+            invalidation = evaluate_environment_invalidation(env)
+            env["invalidation"] = invalidation
+            env["invalidation_triggered"] = invalidation.get("triggered", False)
+        except Exception as e:
+            logger.warning("失效条款机检失败: %s", e)
 
         market_mode = env.get("market_mode", "defend")
 
@@ -510,8 +517,26 @@ class Orchestrator:
             env['watch_ladder'] = build_watch_ladder(
                 batch.entry_diagnostics, all_holdings,
                 in_flight_events=in_flight_events,
-            )[:5]
+                market_mode=market_mode,
+            )
+            ladder_by_code = {row['stock_code']: row for row in env['watch_ladder']}
+            tracked_observations = []
+            for item in observation_batch:
+                code = str(item.get('stock_code', ''))
+                tracked = dict(item)
+                tracked['entry_diagnostic'] = batch.entry_diagnostics.get(code, '')
+                tracked['intercept_reason'] = (ladder_by_code.get(code) or {}).get('reason', '')
+                tracked_observations.append(tracked)
+            market_env = env.get('market_env') or {}
+            from ..feedback.observation_tracker import record_observation_t0
+            record_observation_t0(
+                tracked_observations,
+                track_date=ref_date,
+                benchmark_close=market_env.get('csi300_close'),
+            )
             env['virtual_fill_counts'] = build_virtual_fill_counts(in_flight_events)
+            from ..feedback.signal_quality import build_signal_quality_cards
+            env['signal_quality_cards'] = build_signal_quality_cards()
         except Exception as e:
             logger.debug("候梯排序构建失败: %s", e)
 

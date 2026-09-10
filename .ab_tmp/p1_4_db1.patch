@@ -1,0 +1,7 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+             rule_version=(row["rule_version"] or "") if "rule_version" in row.keys() else "",
++            rules_version=(row["rules_version"] or "") if "rules_version" in row.keys() else "",
+             y_formula=(row["y_formula"] or "") if "y_formula" in row.keys() else "",
+*** End Patch

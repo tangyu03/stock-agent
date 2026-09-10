@@ -103,6 +103,56 @@ class DailyReview:
         tomorrow_focus = self._get_tomorrow_focus()
         lines.append(tomorrow_focus)
 
+        # 5.1 【P3-2】到期检查点回填；失败留待下一次，不造数。
+        try:
+            from ..feedback.observation_tracker import fill_observation_checkpoints
+            fill_result = fill_observation_checkpoints(as_of=date.today())
+            if fill_result.get("missing"):
+                lines.append("")
+                lines.append(
+                    f"拦截票检查点回填: 新增{fill_result.get('filled', 0)}条，"
+                    f"{fill_result['missing']}条价格未取到"
+                )
+        except Exception as e:
+            logger.debug("拦截票检查点回填失败: %s", str(e)[:80])
+
+        # 5.2 【P3-4】昨日复核 + 失效条款；缺失数据显式暴露。
+        lines.append("")
+        try:
+            from ..data_layer.stock_data import batch_get_realtime_quotes
+            from ..feedback.daily_review_parts import (
+                build_yesterday_observation_review,
+                format_invalidation_clause,
+                previous_weekday,
+            )
+            review_env = {}
+            try:
+                from ..analyzers.market_env import get_market_environment
+                review_env["market_env"] = get_market_environment(force_refresh=False)
+            except Exception as e:
+                logger.debug("失效条款市场环境获取失败: %s", str(e)[:80])
+            try:
+                from ..analyzers.gem_sci_tech_scorer import get_gem_sci_tech_analysis
+                review_env["gem_sci_tech"] = get_gem_sci_tech_analysis(force_refresh=False)
+            except Exception as e:
+                logger.debug("失效条款双创数据获取失败: %s", str(e)[:80])
+
+            yesterday = previous_weekday(date.today())
+            quote_rows = batch_get_realtime_quotes(self._get_observation_t0_codes(yesterday))
+            prices = {
+                code: float(quote.get("current_price") or 0)
+                for code, quote in quote_rows.items() if quote
+            }
+            market_env = review_env.get("market_env") or {}
+            lines.append(build_yesterday_observation_review(
+                yesterday,
+                prices,
+                market_env.get("csi300_change_pct"),
+            ))
+            lines.append(format_invalidation_clause(review_env))
+        except Exception as e:
+            lines.append(f"昨日复核/失效条款生成失败: {str(e)[:80]}")
+
         # 6.【P3-3】参数附录：每个参数的出处与验证状态
         # （RRR 1.5 隐含 40% 胜率假设七天未验证——参数没有验证状态
         #   就是拍脑袋的数字；附录机制永不作废）
@@ -115,6 +165,10 @@ class DailyReview:
 
         report = "\n".join(lines)
         return report
+
+    def _get_observation_t0_codes(self, track_date: str):
+        from ..feedback.observation_tracker import get_observation_intercepts
+        return [row["stock_code"] for row in get_observation_intercepts(track_date=track_date)]
 
     def _collect_actual_ratios(self) -> dict:
         """【P0-1】收盘后取各股实际全天量/60日均量（用于外推误差回填）。"""

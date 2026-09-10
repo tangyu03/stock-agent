@@ -332,9 +332,22 @@ class PushPlus:
 
         # 【P1-5】候梯前排：按差几个条件排序，直接回答接下来盯谁。
         watch_ladder = environment.get("watch_ladder") or []
-        if watch_ladder:
+        current_mode_ladder = [
+            item for item in watch_ladder if not item.get("cross_mode")
+        ]
+        cross_mode_ladder = [item for item in watch_ladder if item.get("cross_mode")]
+        if current_mode_ladder:
             content += "<b>候梯前排</b><br/>"
-            for item in watch_ladder[:5]:
+            for item in current_mode_ladder[:5]:
+                content += (
+                    f"&nbsp;&nbsp;{_esc(stock_identity(item))} | "
+                    f"{_esc(item.get('reason', ''))}<br/>"
+                )
+            content += "<br/>"
+
+        if cross_mode_ladder:
+            content += "<b>跨模式候梯(当前不可触发)</b><br/>"
+            for item in cross_mode_ladder[:5]:
                 content += (
                     f"&nbsp;&nbsp;{_esc(stock_identity(item))} | "
                     f"{_esc(item.get('reason', ''))}<br/>"
@@ -343,8 +356,15 @@ class PushPlus:
 
         if entries:
             content += f"<b>📥 买入信号 ({len(entries)}条)</b><br/><br/>"
+            quality_by_strategy = {
+                item.get("strategy", ""): item.get("card", "")
+                for item in (environment.get("signal_quality_cards") or [])
+            }
             for i, s in enumerate(entries):
                 _, card = render_entry_signal(s)
+                quality_card = quality_by_strategy.get(s.get("entry_type", ""), "")
+                if quality_card:
+                    card += f"<br/>&nbsp;&nbsp;{_esc(quality_card)}"
                 content += card
                 if i < len(entries) - 1:
                     content += "<br/><hr/>"

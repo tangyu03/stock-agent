@@ -1,0 +1,34 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/timing_engine.py
+@@
+         current_z_mode = str(self._cfg("hypothesis_gate", "z_line_mode", default="buffered_structure"))
++        tech_signals = tech_data.get("tech_signals") or {}
++        ma5, ma10, ma20 = tech_data.get("ma5"), tech_data.get("ma10"), tech_data.get("ma20")
++        ma_alignment = bool(ma5 and ma10 and ma20 and ma5 > ma10 > ma20)
++        entry_snapshot = {
++            "volume_ratio": getattr(volume_snapshot, "volume_ratio", None),
++            "ma_alignment": ma_alignment,
++            "rsi": tech_signals.get("rsi"),
++            "sector_status": sector_status,
++        }
+         for sig in valid_signals:
+@@
+                     y_formula=sig.entry_y_formula,
+                     y_inputs=sig.entry_y_inputs,
++                    entry_snapshot=entry_snapshot,
+@@
+             tech_signals = tech_data.get("tech_signals") or {}
++            ma5, ma10, ma20 = tech_data.get("ma5"), tech_data.get("ma10"), tech_data.get("ma20")
++            maintenance_check = {
++                "date": datetime.now().date().isoformat(),
++                "volume_ratio": tech_data.get("volume_ratio"),
++                "ma_alignment": bool(ma5 and ma10 and ma20 and ma5 > ma10 > ma20),
++                "rsi": tech_signals.get("rsi"),
++                "sector_status": sector_status,
++            }
++            try:
++                self._lifecycle.set_maintenance_check(stock_code, maintenance_check)
++            except Exception as e:
++                logger.debug("维持检查写入失败 %s: %s", stock_code, e)
+             return self._lifecycle.evaluate_events(
+*** End Patch

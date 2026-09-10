@@ -1,0 +1,6 @@
+﻿*** Begin Patch
+*** Update File: tests/test_event_arbitration.py
+@@
+-    assert "买点上方待回踩" in lifecycle.event_status_note("920045", current_price=499.0)
++    assert "买点上方待回踩" in lifecycle.event_status_note("920045", current_price=505.0)
+*** End Patch

@@ -1,0 +1,85 @@
+﻿*** Begin Patch
+*** Add File: src/signal_states.py
++"""Canonical signal status enum and count labels."""
++
++TRIGGERED = "valid"
++FILLED = "filled"
++FROZEN = "frozen"
++STRUCT_CANCEL = "struct_cancel"
++EXPIRED = "expired"
++CHASE_ABANDON = "chase_abandon"
++SIG_STOP = "sig_stop"
++SIG_TARGET = "sig_target"
++TIME_EXIT = "time_exit"
++
++
++MATCH_COUNT_LABELS = {
++    TRIGGERED: "在飞",
++    FILLED: "成交",
++    FROZEN: "冻结",
++    STRUCT_CANCEL: "结构失败撤单",
++    EXPIRED: "到期",
++    CHASE_ABANDON: "追高放弃",
++    SIG_STOP: "信号止损",
++    SIG_TARGET: "信号止盈",
++    TIME_EXIT: "时间离场",
++}
++
++
++def canonical_match_status(status: str, invalid_reason: str = "") -> str:
++    """Map legacy rows to the match-count enum without rewriting stored state."""
++    value = str(status or "valid")
++    if value == "triggered":
++        return FILLED
++    if value != "invalidated":
++        return value
++    reason = str(invalid_reason or "")
++    if "止损线" in reason or "止损" in reason:
++        return SIG_STOP
++    return STRUCT_CANCEL
+*** Update File: src/feedback/event_tracker.py
+@@
+ from ..analyzers.signal_lifecycle import display_status, normalize_status
++from ..signal_states import MATCH_COUNT_LABELS, canonical_match_status
+@@
+ def build_virtual_fill_counts(rows: List[Dict], target: int = 30) -> str:
+-    """撮合计数表：先只数数，不做 EV/滑点/分桶。"""
++    """撮合计数唯一派生源：事件列表 group-by，不再独立维护计数。"""
+     if not rows:
+         return "撮合计数: 样本0/30"
+-    counts = {"filled": 0, "stop": 0, "cancelled": 0, "expired": 0, "open": 0}
++    counts = {label: 0 for label in MATCH_COUNT_LABELS.values()}
+     for r in rows:
+-        status = normalize_status(str(r.get("status") or ""))
+-        reason = str(r.get("invalid_reason") or "")
+-        if status == "filled":
+-            counts["filled"] += 1
+-        elif status == "valid":
+-            counts["open"] += 1
+-        elif status == "invalidated" and "止损线" in reason:
+-            counts["stop"] += 1
+-        elif status == "invalidated" and "回踩失败" in reason:
+-            counts["cancelled"] += 1
+-        elif status == "expired":
+-            counts["expired"] += 1
+-    total = sum(counts.values())
++        status = canonical_match_status(
++            str(r.get("status") or ""),
++            str(r.get("invalid_reason") or ""),
++        )
++        label = MATCH_COUNT_LABELS.get(status)
++        if label:
++            counts[label] += 1
++    completed = sum(
++        count for status, label in MATCH_COUNT_LABELS.items()
++        for count in [counts[label]]
++        if status not in ("valid", "frozen")
++    )
+     return (
+-        f"撮合计数: 成交{counts['filled']} 撤单{counts['cancelled']} "
+-        f"止损{counts['stop']} 过期{counts['expired']} 在飞{counts['open']} "
+-        f"| 样本{total}/{target}"
++        "撮合计数: " + " ".join(f"{label}{count}" for label, count in counts.items())
++        + f" | 累计完结样本{completed}/{target}"
+     )
+*** End Patch

@@ -1,0 +1,57 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+ def display_rule_version(rule_version: str) -> str:
+     return _RULE_VERSION_DISPLAY.get(str(rule_version or ""), str(rule_version or ""))
++
++
++def _snapshot_flags(snapshot: dict, maintenance: bool = False) -> List[str]:
++    flags: List[str] = []
++    try:
++        volume_ratio = snapshot.get("volume_ratio")
++        if volume_ratio is not None:
++            text = f"量比{float(volume_ratio):.2f}"
++            if maintenance and float(volume_ratio) < 1.2:
++                text += " △缩量"
++            else:
++                text += "✓"
++            flags.append(text)
++    except (TypeError, ValueError):
++        pass
++    ma = snapshot.get("ma_alignment")
++    if ma is not None:
++        flags.append(("多头排列✓" if ma else "多头排列✗"))
++    rsi = snapshot.get("rsi")
++    if rsi is not None:
++        flags.append(f"RSI{float(rsi):.1f}")
++    sector = snapshot.get("sector_status")
++    if sector:
++        flags.append(f"板块{sector}")
++    return flags
++
++
++def render_entry_and_maintenance(event) -> str:
++    """T0入场条件与当日维持条件分栏，禁止用当日值改写T0事实。"""
++    try:
++        entry = json.loads(event.entry_snapshot or "{}")
++    except Exception:
++        entry = {}
++    try:
++        maintenance = json.loads(event.maintenance_check or "{}")
++    except Exception:
++        maintenance = {}
++    entry_flags = _snapshot_flags(entry)
++    maintenance_flags = _snapshot_flags(maintenance, maintenance=True)
++    if maintenance_flags and entry_flags:
++        weak = any("△" in flag for flag in maintenance_flags)
++        suffix = (
++            "——维持条件走弱，不影响已触发状态，仅提示"
++            if weak else "——维持条件正常"
++        )
++    else:
++        suffix = "——维持检查未评估"
++    return (
++        f"入场(T0 {event.born_date}): {' '.join(entry_flags) or '快照缺失'} | "
++        f"维持(今日): {' '.join(maintenance_flags) or '未评估'}{suffix}"
++    )
+*** End Patch

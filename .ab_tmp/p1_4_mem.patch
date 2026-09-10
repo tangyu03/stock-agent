@@ -1,0 +1,21 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+                 "reason": event.invalid_reason,
+                 "source": "signal_lifecycle",
++                "trigger_data": {},
++                "rule_entry": _default_rule_entry(from_status, event.status),
++                "rules_version": event.rules_version,
+@@
+-    def update_status(self, event_id: str, status: str, reason: str = "") -> None:
++    def update_status(
++        self, event_id: str, status: str, reason: str = "",
++        trigger_data: Optional[Dict] = None, rule_entry: str = "",
++    ) -> None:
+@@
+                 "reason": reason,
+                 "source": "signal_lifecycle",
++                "trigger_data": trigger_data or {},
++                "rule_entry": rule_entry or _default_rule_entry(from_status, event.status),
++                "rules_version": event.rules_version,
+*** End Patch

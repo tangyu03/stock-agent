@@ -4,6 +4,8 @@
 """
 from typing import Dict
 
+from ..rules_version import get_rules_version
+
 def _pct(v: float, digits: int = 1) -> str:
     return f"+{v*100:.{digits}f}%" if v >= 0 else f"{v*100:.{digits}f}%"
 
@@ -283,8 +285,17 @@ def _institutional(data) -> str:
     # 总分 + 标签（【Phase3】口径标注：资金流投票，非研报共识）
     emoji = "🟢" if score >= 2 else ("🔴" if score <= -2 else "⚪")
     scope = str(inst.get("label_scope") or "")
-    parts.append(f"{emoji}{label}({score:+d}票,多{bull}/空{bear})"
-                 + (f"[{scope}]" if scope else ""))
+    valid_votes = inst.get("valid_vote_sources")
+    if valid_votes is not None:
+        parts.append(
+            f"{emoji}{label}({score:+d}票,多{bull}/空{bear},有效票源{valid_votes}/4)"
+            + (f"[{scope}]" if scope else "")
+        )
+    else:
+        parts.append(
+            f"{emoji}{label}({score:+d}票,多{bull}/空{bear})"
+            + (f"[{scope}]" if scope else "")
+        )
 
     # 各数据源具体数值
     votes = inst.get("votes", {})
@@ -324,9 +335,15 @@ def _institutional(data) -> str:
                 "shareholder": "股东",
             }.get(src_name, src_name)
             # 【C-噪音降权】权重标注：主力/股东票权 0.5（拆单噪音/报告期滞后）
-            weights = inst.get("vote_weights") or {}
+            weights = inst.get("effective_vote_weights") or inst.get("vote_weights") or {}
             w = weights.get(src_name) if isinstance(weights, dict) else None
             weight_note = f"（权重{w:g}）" if w is not None and float(w) < 1.0 else ""
+            freshness = (inst.get("vote_freshness") or {}).get(src_name) or {}
+            fresh_date = str(freshness.get("date") or "")
+            if fresh_date:
+                weight_note += f"@{fresh_date[-5:].replace('-', '/')}"
+            if freshness.get("display_only"):
+                weight_note += "(滞后,仅展示)"
             arrow = "↑" if v > 0 else ("↓" if v < 0 else "→")
             detail_parts.append(f"{short_name}{arrow}{detail}{weight_note}")
         if detail_parts:
@@ -1089,6 +1106,9 @@ def render_environment_overview(data: Dict) -> str:
     mn = {"attack": "进攻", "defend": "防守", "retreat": "撤退"}.get(mode, mode)
 
     content = "<b>📊 环境总览</b><br/>"
+    content += f"&nbsp;&nbsp;规则版本:{get_rules_version()}<br/>"
+    if data.get("invalidation_triggered"):
+        content += "&nbsp;&nbsp;<b>⚠环境判定作废重估告警</b><br/>"
     content += f"&nbsp;&nbsp;模式:{mn}<br/>"
 
     # P2-13 审计（2026-08-22）：非交易日复盘时标注数据参考日（上一交易日）
@@ -1107,6 +1127,9 @@ def render_environment_overview(data: Dict) -> str:
             condition = d.get("condition", "")
             dim_parts.append(f"{icon}{d['name']}:{_esc(condition)}")
         content += f"&nbsp;&nbsp;环境: {' | '.join(dim_parts)}<br/>"
+        score_detail = data.get("score_detail", "")
+        if score_detail:
+            content += f"&nbsp;&nbsp;{_esc(score_detail)}<br/>"
         # 模式判定原因
         mode_reason = data.get("mode_reason", "")
         if mode_reason:

@@ -1,0 +1,51 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+             rules_version=(row["rules_version"] or "") if "rules_version" in row.keys() else "",
++            frozen_prev_status=(row["frozen_prev_status"] or "") if "frozen_prev_status" in row.keys() else "",
+@@
+-                        "AND status IN ('valid','filled','triggered') AND entry_type=?",
++                        "AND status IN ('valid','filled','frozen','triggered') AND entry_type=?",
+@@
+-                        "AND status IN ('valid','filled','triggered')",
++                        "AND status IN ('valid','filled','frozen','triggered')",
+@@
+-                    "AND status NOT IN ('valid') "
++                    "AND status NOT IN ('valid','frozen') "
+@@
+-                     status, invalid_reason, rule_version, rules_version, y_formula, y_inputs, updated_at)
+-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++                     status, invalid_reason, rule_version, rules_version, frozen_prev_status, y_formula, y_inputs, updated_at)
++                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+@@
+-                    event.status, event.invalid_reason, event.rule_version, event.rules_version,
++                    event.status, event.invalid_reason, event.rule_version, event.rules_version,
++                    event.frozen_prev_status,
+@@
+-                    "SELECT stock_code, status, rules_version FROM signal_events WHERE event_id=?",
++                    "SELECT stock_code, status, rules_version, frozen_prev_status FROM signal_events WHERE event_id=?",
+@@
+-                cursor.execute(
+-                    "UPDATE signal_events SET status=?, invalid_reason=?, updated_at=? WHERE event_id=?",
+-                    (target, reason, datetime.now().isoformat(timespec="seconds"), event_id),
+-                )
++                if target == "frozen":
++                    cursor.execute(
++                        "UPDATE signal_events SET status=?, invalid_reason=?, "
++                        "frozen_prev_status=?, updated_at=? WHERE event_id=?",
++                        (target, reason, current,
++                         datetime.now().isoformat(timespec="seconds"), event_id),
++                    )
++                elif current == "frozen":
++                    cursor.execute(
++                        "UPDATE signal_events SET status=?, invalid_reason=?, "
++                        "frozen_prev_status='', updated_at=? WHERE event_id=?",
++                        (target, reason,
++                         datetime.now().isoformat(timespec="seconds"), event_id),
++                    )
++                else:
++                    cursor.execute(
++                        "UPDATE signal_events SET status=?, invalid_reason=?, updated_at=? WHERE event_id=?",
++                        (target, reason, datetime.now().isoformat(timespec="seconds"), event_id),
++                    )
+*** End Patch

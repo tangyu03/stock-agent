@@ -1,0 +1,11 @@
+﻿*** Begin Patch
+*** Update File: src/db.py
+@@
+         frozen_prev_status TEXT DEFAULT '',
++        entry_snapshot TEXT DEFAULT '{}',
++        maintenance_check TEXT DEFAULT '{}',
+@@
+                 "frozen_prev_status": "TEXT DEFAULT ''",
++                "entry_snapshot": "TEXT DEFAULT '{}'",
++                "maintenance_check": "TEXT DEFAULT '{}'",
+*** End Patch

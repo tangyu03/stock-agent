@@ -1,0 +1,35 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+-ACTIVE_EVENT_STATUSES = ("valid", "filled")
++ACTIVE_EVENT_STATUSES = ("valid", "filled", "frozen")
+@@
+     "valid": "已触发",
+     "filled": "已成交",
++    "frozen": "已冻结",
+@@
+-    return current == "valid" and target in ("filled", *TERMINAL_EVENT_STATUSES)
++    if current == "valid":
++        return target in ("filled", "frozen", *TERMINAL_EVENT_STATUSES)
++    if current == "filled":
++        return target == "frozen"
++    if current == "frozen":
++        return target in ("valid", "filled")
++    return False
+@@
+     rules_version: str = ""
++    frozen_prev_status: str = ""
+     y_formula: str = ""
+@@
+         rules_version TEXT DEFAULT '',
++        frozen_prev_status TEXT DEFAULT '',
+@@
+         cursor.execute("ALTER TABLE signal_events ADD COLUMN rules_version TEXT DEFAULT ''")
+     except Exception:
+         pass
++
++    try:
++        cursor.execute("ALTER TABLE signal_events ADD COLUMN frozen_prev_status TEXT DEFAULT ''")
++    except Exception:
++        pass
+*** End Patch

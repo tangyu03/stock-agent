@@ -545,6 +545,18 @@ def set_fund_layering(enabled: bool) -> None:
 _SHAREHOLDER_STALE_DAYS = 90
 
 
+def _effective_vote_weight(src_name: str, age_days: Optional[int]) -> float:
+    """P1-3: 当日/T-1全权，3日后半权，超过5日仅展示不投票。缺数据日不静默清零。"""
+    base_weight = float(_VOTE_WEIGHTS.get(src_name, 1.0))
+    if age_days is None:
+        return base_weight
+    if age_days > 5:
+        return 0.0
+    if age_days > 3:
+        return base_weight * 0.5
+    return base_weight
+
+
 def _find_recent_trading_day(target_date: str, max_lookback: int = 10, skip_today: bool = False) -> str:
     """找最近的交易日（周末/假期回退）。简单版：跳过周六日。
 
@@ -714,13 +726,13 @@ def _fetch_margin_balance(code: str) -> Dict[str, Any]:
             return {
                 "vote": 0,
                 "detail": "两融接口失败（数据源不可用，不代表非两融标的）",
-                "raw": {"data_quality": "margin_source_failed"},
+                "raw": {"data_quality": "margin_source_failed", "as_of": latest_date},
             }
 
         em_note = "（东财兜底）" if em_used else ""
         if prev_bal <= 0:
             _mark_api_success("north_bound")
-            return {"vote": 0, "detail": f"融资余额{latest_bal/1e8:.2f}亿（无对比数据）{em_note}", "raw": {"latest": latest_bal}}
+            return {"vote": 0, "detail": f"融资余额{latest_bal/1e8:.2f}亿（无对比数据）{em_note}", "raw": {"latest": latest_bal, "as_of": latest_date}}
 
         change_pct = (latest_bal - prev_bal) / prev_bal
         _mark_api_success("north_bound")
@@ -729,19 +741,19 @@ def _fetch_margin_balance(code: str) -> Dict[str, Any]:
             return {
                 "vote": 1,
                 "detail": f"融资余额增加{change_pct*100:.1f}%（{prev_bal/1e8:.2f}→{latest_bal/1e8:.2f}亿）{em_note}",
-                "raw": {"latest": latest_bal, "prev": prev_bal, "change_pct": change_pct},
+                "raw": {"latest": latest_bal, "prev": prev_bal, "change_pct": change_pct, "as_of": latest_date},
             }
         elif change_pct < -0.02:  # 融资余额减少 >2%
             return {
                 "vote": -1,
                 "detail": f"融资余额减少{change_pct*100:.1f}%（{prev_bal/1e8:.2f}→{latest_bal/1e8:.2f}亿）{em_note}",
-                "raw": {"latest": latest_bal, "prev": prev_bal, "change_pct": change_pct},
+                "raw": {"latest": latest_bal, "prev": prev_bal, "change_pct": change_pct, "as_of": latest_date},
             }
         else:
             return {
                 "vote": 0,
                 "detail": f"融资余额持平（变化{change_pct*100:.1f}%，{latest_bal/1e8:.2f}亿）{em_note}",
-                "raw": {"latest": latest_bal, "prev": prev_bal, "change_pct": change_pct},
+                "raw": {"latest": latest_bal, "prev": prev_bal, "change_pct": change_pct, "as_of": latest_date},
             }
     except Exception as e:
         err_msg = str(e)[:80]
@@ -847,19 +859,19 @@ def _fetch_lhb_institutional(code: str) -> Dict[str, Any]:
             return {
                 "vote": 1,
                 "detail": f"龙虎榜净买入 {total_net/1e8:.2f} 亿（{appear_count} 次上榜）",
-                "raw": {"total_net": total_net, "appear_count": appear_count},
+                "raw": {"total_net": total_net, "appear_count": appear_count, "as_of": lhb_as_of},
             }
         elif total_net < -50000000:  # 净卖出 > 5000 万
             return {
                 "vote": -1,
                 "detail": f"龙虎榜净卖出 {total_net/1e8:.2f} 亿（{appear_count} 次上榜）",
-                "raw": {"total_net": total_net, "appear_count": appear_count},
+                "raw": {"total_net": total_net, "appear_count": appear_count, "as_of": lhb_as_of},
             }
         else:
             return {
                 "vote": 0,
                 "detail": f"龙虎榜净额 {total_net/1e4:.0f} 万（{appear_count} 次上榜，未达阈值）",
-                "raw": {"total_net": total_net, "appear_count": appear_count},
+                "raw": {"total_net": total_net, "appear_count": appear_count, "as_of": lhb_as_of},
             }
     except Exception as e:
         err_msg = str(e)[:80]
@@ -950,6 +962,11 @@ def _fetch_main_force_flow(code: str) -> Dict[str, Any]:
             "latest_super_large_net": super_large_flows[-1] if super_large_flows else fund.get("super_large_net"),
             "latest_large_net": large_flows[-1] if large_flows else fund.get("large_net"),
         })
+        flow_dates = [
+            str(p.get("date"))[:10] for p in (result["raw"].get("fund_flow_5d") or [])
+            if p.get("date")
+        ]
+        result["raw"]["as_of"] = max(flow_dates) if flow_dates else datetime.now().strftime("%Y-%m-%d")
         return result
     except Exception as e:
         err_msg = str(e)[:80]
@@ -1264,10 +1281,31 @@ def score_institutional_holding(
     top10_ratio = _fetch_top10_institutional_ratio(code)
 
     vote_scores = [v["vote"] for v in votes.values()]
+    # 【P1-3】数据时效分层：每个子项都透出数据日；超过 5 日仅展示不投票。
+    # age_days 为日历日保守近似（缺日历时只标注 @N/A，不静默降权）。
+    vote_freshness: Dict[str, Dict[str, Any]] = {}
+    for src_name, v in votes.items():
+        raw = v.get("raw") or {}
+        as_of = str(raw.get("as_of") or "") or None
+        age_days = raw.get("age_days")
+        if age_days is None and as_of:
+            try:
+                age_days = (datetime.now() - datetime.strptime(as_of[:10], "%Y-%m-%d")).days
+            except ValueError:
+                age_days = None
+        age_value = int(age_days) if age_days is not None else None
+        display_only = bool(age_value is not None and age_value > 5)
+        effective_weight = _effective_vote_weight(src_name, age_value)
+        vote_freshness[src_name] = {
+            "date": as_of,
+            "age_days": age_value,
+            "display_only": display_only,
+            "effective_weight": effective_weight,
+        }
     # 【C-噪音降权】加权总分：主力（拆单算法噪音）/股东（报告期滞后）票权 0.5，
     # 两融/龙虎榜（交易所披露）1.0。int() 截断向零：单噪音源不足以翻动总分。
     weighted_total = sum(
-        (v["vote"] or 0) * _VOTE_WEIGHTS.get(src_name, 1.0)
+        (v["vote"] or 0) * vote_freshness[src_name]["effective_weight"]
         for src_name, v in votes.items()
     )
 
@@ -1278,11 +1316,11 @@ def score_institutional_holding(
     slow_sources = tuple(_FUND_LAYERING.get("slow_sources") or ())
     if layering_on:
         fast_total = sum(
-            (votes[src]["vote"] or 0) * _VOTE_WEIGHTS.get(src, 1.0)
+            (votes[src]["vote"] or 0) * vote_freshness[src]["effective_weight"]
             for src in fast_sources if src in votes
         )
         slow_total = sum(
-            (votes[src]["vote"] or 0) * _VOTE_WEIGHTS.get(src, 1.0)
+            (votes[src]["vote"] or 0) * vote_freshness[src]["effective_weight"]
             for src in slow_sources if src in votes
         )
         total_score = int(fast_total)
@@ -1333,10 +1371,22 @@ def score_institutional_holding(
     if not data_sufficient:
         vote_label = "资金数据不足(降权)"
 
+    if layering_on:
+        voting_sources = fast_sources
+    else:
+        voting_sources = tuple(votes.keys())
+    valid_vote_sources = sum(
+        1 for src in voting_sources
+        if (votes.get(src) or {}).get("vote", 0) != 0
+        and not vote_freshness.get(src, {}).get("display_only", False)
+    )
+
     result = {
         "vote_score": total_score,
         "vote_label": vote_label,
         "votes": votes,
+        "vote_freshness": vote_freshness,
+        "valid_vote_sources": valid_vote_sources,
         "bullish_count": bullish_count,
         "bearish_count": bearish_count,
         "neutral_count": neutral_count,
@@ -1347,6 +1397,9 @@ def score_institutional_holding(
         "stale": False,
         # 【C-噪音降权】透出权重与加权明细（推送模板展示，便于人工复核）
         "vote_weights": dict(_VOTE_WEIGHTS),
+        "effective_vote_weights": {
+            src: info["effective_weight"] for src, info in vote_freshness.items()
+        },
         "vote_score_weighted": round(weighted_total, 1),
         "weight_note": "主力/股东票降权0.5（拆单算法噪音/报告期滞后）",
         # 【Phase3】标签口径声明（渲染层展示，防止把资金流当研报共识误读）

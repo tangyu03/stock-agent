@@ -1069,6 +1069,15 @@ class TimingEngine:
         # 双轨可审计——观察卡显示"Z 按 XX 规则生成"，审计者不再误判
         # "Z 线统一没做"（博杰 9/7 旧 Z=85.54 实证）。
         current_z_mode = str(self._cfg("hypothesis_gate", "z_line_mode", default="buffered_structure"))
+        tech_signals = tech_data.get("tech_signals") or {}
+        ma5, ma10, ma20 = tech_data.get("ma5"), tech_data.get("ma10"), tech_data.get("ma20")
+        ma_alignment = bool(ma5 and ma10 and ma20 and ma5 > ma10 > ma20)
+        entry_snapshot = {
+            "volume_ratio": getattr(volume_snapshot, "volume_ratio", None),
+            "ma_alignment": ma_alignment,
+            "rsi": tech_signals.get("rsi"),
+            "sector_status": sector_status,
+        }
         for sig in valid_signals:
             try:
                 event = self._lifecycle.register_event(
@@ -1084,6 +1093,7 @@ class TimingEngine:
                     rule_version=current_z_mode,
                     y_formula=sig.entry_y_formula,
                     y_inputs=sig.entry_y_inputs,
+                    entry_snapshot=entry_snapshot,
                 )
                 sig.event_id = event.event_id
             except Exception as e:
@@ -1329,6 +1339,26 @@ class TimingEngine:
         evidence: List[str] = []
 
         # ── 门一：四确认 + 时机 ──
+        # 【P1-2】每个闸门都输出 当前值/阈值/差距，读者可复现候梯排序。
+        def _gap(label: str, value, threshold: float, direction: str = "ge",
+                 fmt: str = "{:.2f}") -> Tuple[str, float]:
+            """direction=ge 表示越大越好；lt 表示越小越好。返回(展示, 缺口%)。"""
+            if value is None:
+                return f"{label} 数据未取到(阈值{fmt.format(threshold)})", 100.0
+            value = float(value)
+            if direction == "ge":
+                ok = value >= threshold
+                gap_pct = max(0.0, (threshold - value) / abs(threshold) * 100.0) if threshold else 0.0
+                rel = "缺" if not ok else "余"
+            else:
+                ok = value <= threshold
+                gap_pct = max(0.0, (value - threshold) / abs(threshold) * 100.0) if threshold else 0.0
+                rel = "超" if not ok else "余"
+            return (
+                f"{label} {fmt.format(value)}/{fmt.format(threshold)} {rel}{gap_pct:.0f}%",
+                gap_pct,
+            )
+
         current = float(tech_data.get("current_price") or 0)
         recent_high = float(tech_data.get("recent_high") or 0)
         volume_ratio = float(tech_data.get("volume_ratio") or 1.0)
@@ -1354,26 +1384,59 @@ class TimingEngine:
         # 盘中创新高但收盘回落 >1% 的标的（蘅东光 9/7）不再被误拦；
         # prior_high 缺失时回退 recent_high（兼容旧测试/旧缓存数据）。
         prior_high = tech_data.get("prior_high") or recent_high
-        gate1_checks = {
-            "创新高": bool(current and prior_high and current >= float(prior_high) * new_high_ratio),
-            "量比": volume_ratio >= volume_ratio_min,
-            "量能(外推或实际)": bool(
-                (projected is not None and projected >= projected_volume_min
-                 and snapshot.projection_mode == "ok")
-                or (snapshot.volume_vs_ma60 or 0) >= 1.0
-            ),
-            "ADX单边力度": bool(adx is not None and float(adx) >= adx_min),
-            "外盘主动": bool(
-                outer is None or inner is None or float(outer or 0) > float(inner or 0)
-            ),  # 内外盘数据缺失时不阻断（东财缺字段 ≠ 无主动盘）
-            # 【Phase5 回炉】文案带口径：验收质疑“蘅东光 RSI6=73 未拦、罗博特科 RSI6=79.5 拦”
-            # 同条件两判定——实际判定用 RSI14（66.4<67 过 / 67.9>67 拦），判定本身一致，
-            # 是文案没写口径造成误读。口径透明化后此类质疑自消。
-            f"RSI14未过热(<{rsi_overheat:.0f})": bool(rsi is None or float(rsi) < rsi_overheat),
-        }
+        gap_items: List[Dict] = []
+        gate1_checks = {}
+        gate1_text = []
+        if current and prior_high:
+            text, gap = _gap(
+                "创新高", current, float(prior_high) * new_high_ratio,
+                "ge", "{:.2f}",
+            )
+            gate1_checks["创新高"] = gap == 0.0
+            gate1_text.append(text)
+            gap_items.append({"gate": "确认追强", "item": "创新高", "gap": gap})
+        else:
+            gate1_checks["创新高"] = False
+            gate1_text.append(f"创新高 数据未取到(阈值{new_high_ratio:.2f}×近段高)")
+            gap_items.append({"gate": "确认追强", "item": "创新高", "gap": 100.0})
+
+        text, gap = _gap("量比", volume_ratio, volume_ratio_min, "ge", "{:.2f}")
+        gate1_checks["量比"] = gap == 0.0
+        gate1_text.append(text)
+        gap_items.append({"gate": "确认追强", "item": "量比", "gap": gap})
+
+        projected_ok = projected is not None and snapshot.projection_mode == "ok"
+        volume_value = projected if projected_ok else snapshot.volume_vs_ma60
+        volume_threshold = projected_volume_min if projected_ok else 1.0
+        volume_label = "量能外推" if projected_ok else "量能实际"
+        text, gap = _gap(volume_label, volume_value, volume_threshold, "ge", "{:.2f}x")
+        gate1_checks["量能(外推或实际)"] = gap == 0.0
+        gate1_text.append(text)
+        gap_items.append({"gate": "确认追强", "item": "量能", "gap": gap})
+
+        text, gap = _gap("ADX", adx, adx_min, "ge", "{:.1f}")
+        gate1_checks["ADX单边力度"] = gap == 0.0
+        gate1_text.append(text)
+        gap_items.append({"gate": "确认追强", "item": "ADX", "gap": gap})
+
+        if outer is None or inner is None:
+            gate1_checks["外盘主动"] = True
+            gate1_text.append("外盘主动 数据未取到(不阻断)")
+        else:
+            text, gap = _gap("外盘/内盘", float(outer), float(inner), "ge", "{:.0f}")
+            gate1_checks["外盘主动"] = gap == 0.0
+            gate1_text.append(text)
+            gap_items.append({"gate": "确认追强", "item": "外盘主动", "gap": gap})
+
+        # 【Phase5 回炉】文案带口径：实际判定用 RSI14；同条件两判定的口径差异可见。
+        text, gap = _gap("RSI14", rsi, rsi_overheat, "lt", "{:.1f}")
+        gate1_checks[f"RSI14未过热(<{rsi_overheat:.0f})"] = gap == 0.0
+        gate1_text.append(f"RSI14未过热(<{rsi_overheat:.0f})：{text}")
+        gap_items.append({"gate": "确认追强", "item": "RSI", "gap": gap})
+
         gate1_failed = [k for k, v in gate1_checks.items() if not v]
         if gate1_failed:
-            evidence.append(f"门一未过: {'、'.join(gate1_failed)}")
+            evidence.append(f"门一未过: {'、'.join(gate1_text)}")
 
         # ── 门二：基本面验证 ──
         fundamental = tech_data.get("fundamental") or {}
@@ -1398,6 +1461,16 @@ class TimingEngine:
 
         profit_yoy_min = float(cfg.get("profit_yoy_min", 30.0))
         dispersion_max = float(cfg.get("shareholder_dispersion_max", 0.20))
+        profit_text, profit_gap = _gap(
+            "净利同比", profit_yoy, profit_yoy_min, "ge", "{:.1f}%"
+        )
+        if profit_gap:
+            gap_items.append({"gate": "确认追强", "item": "净利同比", "gap": profit_gap})
+        dispersion_text, dispersion_gap = _gap(
+            "筹码分散", shareholder_change, dispersion_max * 100.0, "lt", "{:.1f}%"
+        )
+        if shareholder_change is not None and dispersion_gap:
+            gap_items.append({"gate": "确认追强", "item": "筹码分散", "gap": dispersion_gap})
         gate2_checks = {
             "净利同比达标": bool(profit_yoy is not None and profit_yoy >= profit_yoy_min),
             "无业绩雷/降级": bool(verdict not in ("veto", "warn")) if verdict else (profit_yoy is not None),
@@ -1408,15 +1481,24 @@ class TimingEngine:
         }
         gate2_failed = [k for k, v in gate2_checks.items() if not v]
         if gate2_failed:
-            evidence.append(f"门二未过: {'、'.join(gate2_failed)}")
+            evidence.append(f"门二未过: 净利同比达标；{profit_text}；筹码无分散：{dispersion_text}")
 
         # ── 门三：板块联动 ──
         if sector_status != "main_trend":
-            evidence.append(f"门三未过: 板块非主线({sector_status})")
+            sector_names = {
+                "rotational": "轮动", "retreating": "退潮",
+                "main_trend": "主线", "unknown": "未知",
+            }
+            evidence.append(
+                f"门三未过: 板块非主线({sector_names.get(sector_status, sector_status)}"
+                f"/主线，差距不可量化)"
+            )
 
         return {
             "passed": not evidence,
             "evidence": evidence,
+            "gap_items": gap_items,
+            "min_gate_gap": min((x["gap"] for x in gap_items), default=100.0),
             "projected_volume": projected,
             "snapshot": snapshot,
         }
@@ -2356,6 +2438,19 @@ class TimingEngine:
             close_price = _number_or_none(
                 current_price or latest_bar.get("收盘", latest_bar.get("close"))
             )
+            tech_signals = tech_data.get("tech_signals") or {}
+            ma5, ma10, ma20 = tech_data.get("ma5"), tech_data.get("ma10"), tech_data.get("ma20")
+            maintenance_check = {
+                "date": datetime.now().date().isoformat(),
+                "volume_ratio": tech_data.get("volume_ratio"),
+                "ma_alignment": bool(ma5 and ma10 and ma20 and ma5 > ma10 > ma20),
+                "rsi": tech_signals.get("rsi"),
+                "sector_status": sector_status,
+            }
+            try:
+                self._lifecycle.set_maintenance_check(stock_code, maintenance_check)
+            except Exception as e:
+                logger.debug("维持检查写入失败 %s: %s", stock_code, e)
             return self._lifecycle.evaluate_events(
                 stock_code,
                 current_price=current_price,
@@ -2363,6 +2458,9 @@ class TimingEngine:
                 day_high=day_high,
                 day_low=day_low,
                 close_price=close_price,
+                tech_score=tech_signals.get("vote_score"),
+                volume_ratio=tech_data.get("volume_ratio"),
+                change_pct=tech_data.get("change_pct"),
             )
         except Exception as e:
             logger.debug("事件评估失败 %s: %s", stock_code, e)

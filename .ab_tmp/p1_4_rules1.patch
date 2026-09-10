@@ -1,0 +1,66 @@
+﻿*** Begin Patch
+*** Add File: src/rules_version.py
++"""Global, immutable rules version used by decision audit logs."""
++
++RULES_VERSION = "v2.3"
++
++
++def get_rules_version() -> str:
++    return RULES_VERSION
+*** Add File: CHANGELOG.md
++# Rules Changelog
++
++| 日期 | 版本 | 改动条目 | 改动原因 |
++| --- | --- | --- | --- |
++| 2026-09-10 | v2.3 | 全局规则版本；事件创建快照版本；状态迁移日志补触发数据、命中规则与版本 | 状态迁移和历史结论必须可回溯复算 |
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+ from ..db import get_conn
++from ..rules_version import get_rules_version
+@@
+     rule_version: str = ""
++    rules_version: str = ""
+     y_formula: str = ""
+@@
+         rule_version TEXT DEFAULT '',
++        rules_version TEXT DEFAULT '',
+@@
+         cursor.execute("ALTER TABLE signal_events ADD COLUMN rule_version TEXT DEFAULT ''")
+     except Exception:
+         pass  # 列已存在（SQLite 无 ADD COLUMN IF NOT EXISTS）
++
++    try:
++        cursor.execute("ALTER TABLE signal_events ADD COLUMN rules_version TEXT DEFAULT ''")
++    except Exception:
++        pass
+@@
+         source TEXT DEFAULT 'signal_lifecycle',
++        trigger_data TEXT DEFAULT '{}',
++        rule_entry TEXT DEFAULT '',
++        rules_version TEXT DEFAULT '',
+         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+@@
+     )
+     cursor.execute("CREATE INDEX IF NOT EXISTS idx_signal_event_logs_event "
+                    "ON signal_event_logs(event_id, created_at)")
++
++
++def _default_rule_entry(current: str, target: str, reason: str = "") -> str:
++    """Known lifecycle edges; free-text migration callers get a stable fallback."""
++    current = normalize_status(current)
++    target = normalize_status(target)
++    if current == "none" and target == "valid":
++        return "R1.0事件诞生"
++    if target == "filled":
++        return "R3.2回踩确认"
++    if target == "expired":
++        return "R3.5有效期到期"
++    if target == "invalidated":
++        if "止损" in reason:
++            return "R3.1收盘跌破Z"
++        if "买点" in reason:
++            return "R3.3回踩失败"
++        if "退潮" in reason:
++            return "R3.4环境前提消失"
++    return "R3.0状态迁移"
+*** End Patch

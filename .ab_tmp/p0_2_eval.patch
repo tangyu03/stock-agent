@@ -1,0 +1,57 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+         day_low: Optional[float] = None,
+         close_price: Optional[float] = None,
++        tech_score: Optional[float] = None,
++        volume_ratio: Optional[float] = None,
++        change_pct: Optional[float] = None,
+@@
+         notices: List[Dict] = []
+         for event in self.get_active_events(stock_code):
++            if event.status == "frozen":
++                if tech_score is not None and float(tech_score) >= 0:
++                    target = event.frozen_prev_status or "valid"
++                    self.unfreeze(
++                        event.event_id, target,
++                        trigger_data={"tech_score": tech_score},
++                    )
++                    notices.append(_notice(
++                        "事件解冻",
++                        f"技术分{float(tech_score):+.1f}≥0，恢复原状态",
++                        "常规",
++                    ))
++                continue
+             if event.status != "valid":
+@@
+                 continue
++
++            try:
++                should_freeze = (
++                    tech_score is not None
++                    and float(tech_score) <= -1
++                    and volume_ratio is not None
++                    and float(volume_ratio) >= 1.2
++                    and change_pct is not None
++                    and float(change_pct) < 0
++                )
++            except (TypeError, ValueError):
++                should_freeze = False
++            if should_freeze:
++                reason = (
++                    f"技术{float(tech_score):+.1f}"
++                    f"（放量阴线{float(change_pct):+.2f}%，"
++                    f"量比{float(volume_ratio):.2f}）；"
++                    "解冻条件技术分≥0，冻结期间不提示回踩买入"
++                )
++                self.freeze(
++                    event.event_id, reason,
++                    trigger_data={
++                        "tech_score": tech_score,
++                        "volume_ratio": volume_ratio,
++                        "change_pct": change_pct,
++                    },
++                )
++                notices.append(_notice("事件冻结", reason, "重要"))
++                continue
+*** End Patch

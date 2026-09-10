@@ -1,0 +1,143 @@
+﻿*** Begin Patch
+*** Add File: src/rules_version.py
++"""Global, immutable rules version used by decision audit logs."""
++
++RULES_VERSION = "v2.3"
++
++
++def get_rules_version() -> str:
++    return RULES_VERSION
+*** Add File: CHANGELOG.md
++# Rules Changelog
++
++| 日期 | 版本 | 改动条目 | 改动原因 |
++| --- | --- | --- | --- |
++| 2026-09-10 | v2.3 | 全局规则版本；事件创建快照版本；状态迁移日志补触发数据、命中规则与版本 | 状态迁移和历史结论必须可回溯复算 |
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+ from typing import Dict, List, Optional
+ 
+ from ..db import get_conn
++from ..rules_version import get_rules_version
+@@
+     rule_version: str = ""
++    rules_version: str = ""
+     y_formula: str = ""
+@@
+         rule_version TEXT DEFAULT '',
++        rules_version TEXT DEFAULT '',
+@@
+         cursor.execute("ALTER TABLE signal_events ADD COLUMN rule_version TEXT DEFAULT ''")
+     except Exception:
+         pass  # 列已存在（SQLite 无 ADD COLUMN IF NOT EXISTS）
++
++    try:
++        cursor.execute("ALTER TABLE signal_events ADD COLUMN rules_version TEXT DEFAULT ''")
++    except Exception:
++        pass
+@@
+         source TEXT DEFAULT 'signal_lifecycle',
++        trigger_data TEXT DEFAULT '{}',
++        rule_entry TEXT DEFAULT '',
++        rules_version TEXT DEFAULT '',
+         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+@@
+         source: "signal_lifecycle",
++        "trigger_data": {},
++        "rule_entry": "R1.0事件诞生",
++        "rules_version": previous.rules_version if previous else event.rules_version,
+@@
+-    def update_status(self, event_id: str, status: str, reason: str = "") -> None:
++    def update_status(
++        self, event_id: str, status: str, reason: str = "",
++        trigger_data: Optional[Dict] = None, rule_entry: str = "",
++    ) -> None:
+@@
+                 "reason": reason,
+                 "source": "signal_lifecycle",
++                "trigger_data": trigger_data or {},
++                "rule_entry": rule_entry or "R3.0状态迁移",
++                "rules_version": event.rules_version,
+@@
+             rule_version=(row["rule_version"] or "") if "rule_version" in row.keys() else "",
++            rules_version=(row["rules_version"] or "") if "rules_version" in row.keys() else "",
+@@
+-    def update_status(self, event_id: str, status: str, reason: str = "") -> None:
++    def update_status(
++        self, event_id: str, status: str, reason: str = "",
++        trigger_data: Optional[Dict] = None, rule_entry: str = "",
++    ) -> None:
+@@
+                         INSERT INTO signal_event_logs
+-                        (event_id, stock_code, from_status, to_status, reason, source)
+-                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle')
++                        (event_id, stock_code, from_status, to_status, reason, source,
++                         trigger_data, rule_entry, rules_version)
++                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle', ?, ?, ?)
+                     """, (
+                         event.event_id, event.stock_code, from_status,
+-                        event.status, event.invalid_reason,
++                        event.status, event.invalid_reason,
++                        json.dumps(trigger_data or {}, ensure_ascii=False, sort_keys=True),
++                        rule_entry or "R3.0状态迁移",
++                        event.rules_version,
+@@
+-    def update_status(self, event_id: str, status: str, reason: str = "") -> None:
++    def update_status(
++        self, event_id: str, status: str, reason: str = "",
++        trigger_data: Optional[Dict] = None, rule_entry: str = "",
++    ) -> None:
+@@
+-        self, event_id: str, status: str, reason: str = "",
++        self, event_id: str, status: str, reason: str = "",
+@@
+                         INSERT INTO signal_event_logs
+-                        (event_id, stock_code, from_status, to_status, reason, source)
+-                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle')
++                        (event_id, stock_code, from_status, to_status, reason, source,
++                         trigger_data, rule_entry, rules_version)
++                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle', ?, ?, ?)
+                     """, (
+                         event_id, existing["stock_code"],
+-                        current, target, reason,
++                        current, target, reason,
++                        json.dumps(trigger_data or {}, ensure_ascii=False, sort_keys=True),
++                        rule_entry or _default_rule_entry(current, target, reason),
++                        _event_rules_version(event_id) or get_rules_version(),
+@@
+         y_inputs: Optional[str | Dict] = None,
++        rules_version: str = "",
+@@
+             rule_version=str(rule_version or ""),
++            rules_version=str(rules_version or get_rules_version()),
+@@
+-    def mark_filled(self, event_id: str, reason: str = "价格触及买点，转入成交跟踪") -> None:
+-        self.store.update_status(event_id, "filled", reason)
++    def mark_filled(
++        self, event_id: str, reason: str = "价格触及买点，转入成交跟踪",
++        trigger_data: Optional[Dict] = None,
++    ) -> None:
++        self.store.update_status(
++            event_id, "filled", reason,
++            trigger_data=trigger_data, rule_entry="R3.2回踩确认",
++        )
+@@
+-    def invalidate(self, event_id: str, reason: str) -> None:
+-        self.store.update_status(event_id, "invalidated", reason)
++    def invalidate(
++        self, event_id: str, reason: str,
++        trigger_data: Optional[Dict] = None,
++    ) -> None:
++        self.store.update_status(
++            event_id, "invalidated", reason,
++            trigger_data=trigger_data,
++        )
+@@
+-    def expire(self, event_id: str) -> None:
+-        self.store.update_status(event_id, "expired", "回踩买点有效期超期作废")
++    def expire(self, event_id: str, trigger_data: Optional[Dict] = None) -> None:
++        self.store.update_status(
++            event_id, "expired", "回踩买点有效期超期作废",
++            trigger_data=trigger_data, rule_entry="R3.5有效期到期",
++        )
+*** End Patch

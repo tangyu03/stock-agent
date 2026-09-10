@@ -1,0 +1,25 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+     frozen_prev_status: str = ""
++    entry_snapshot: str = "{}"
++    maintenance_check: str = "{}"
+     y_formula: str = ""
+@@
+         frozen_prev_status TEXT DEFAULT '',
++        entry_snapshot TEXT DEFAULT '{}',
++        maintenance_check TEXT DEFAULT '{}',
+@@
+         cursor.execute("ALTER TABLE signal_events ADD COLUMN frozen_prev_status TEXT DEFAULT ''")
+     except Exception:
+         pass
++    for column in ("entry_snapshot", "maintenance_check"):
++        try:
++            cursor.execute(f"ALTER TABLE signal_events ADD COLUMN {column} TEXT DEFAULT '{{}}'")
++        except Exception:
++            pass
+@@
+                 "rules_version": event.rules_version,
++                "entry_snapshot": event.entry_snapshot,
++                "maintenance_check": event.maintenance_check,
+*** End Patch

@@ -1,0 +1,31 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+         for e in events:
+             age = ""
+@@
+             except ValueError:
+                 pass
++            if e.status == "frozen":
++                notes.append(
++                    f"[{e.entry_type}]已冻结：{e.invalid_reason or '评分仲裁触发'}"
++                )
++                continue
+             pullback_ok = "回踩买点有效" if (not current_price or current_price <= e.entry_price * 1.01) else "买点上方待回踩"
+*** Update File: src/analyzers/timing_engine.py
+@@
+                 day_high = _number_or_none(latest_bar.get("最高", latest_bar.get("high")))
+                 day_low = _number_or_none(latest_bar.get("最低", latest_bar.get("low")))
+                 close_price = _number_or_none(
+                     current_price or latest_bar.get("收盘", latest_bar.get("close"))
+                 )
++                tech_signals = tech_data.get("tech_signals") or {}
+                 return self._lifecycle.evaluate_events(
+@@
+                     day_low=day_low,
+                     close_price=close_price,
++                    tech_score=tech_signals.get("vote_score"),
++                    volume_ratio=tech_data.get("volume_ratio"),
++                    change_pct=tech_data.get("change_pct"),
+                 )
+*** End Patch

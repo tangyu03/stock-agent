@@ -1,0 +1,14 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+     cursor.execute("CREATE INDEX IF NOT EXISTS idx_signal_event_logs_event "
+                    "ON signal_event_logs(event_id, created_at)")
++    for column in ("trigger_data", "rule_entry", "rules_version"):
++        try:
++            default = "'{}'" if column == "trigger_data" else "''"
++            cursor.execute(
++                f"ALTER TABLE signal_event_logs ADD COLUMN {column} TEXT DEFAULT {default}"
++            )
++        except Exception:
++            pass
+*** End Patch

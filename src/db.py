@@ -272,6 +272,10 @@ def init_db():
         status TEXT DEFAULT 'valid',
         invalid_reason TEXT,
         rule_version TEXT DEFAULT '',
+        rules_version TEXT DEFAULT '',
+        frozen_prev_status TEXT DEFAULT '',
+        entry_snapshot TEXT DEFAULT '{}',
+        maintenance_check TEXT DEFAULT '{}',
         y_formula TEXT DEFAULT '',
         y_inputs TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -291,11 +295,18 @@ def init_db():
         to_status TEXT NOT NULL,
         reason TEXT DEFAULT '',
         source TEXT DEFAULT 'signal_lifecycle',
+        trigger_data TEXT DEFAULT '{}',
+        rule_entry TEXT DEFAULT '',
+        rules_version TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_signal_event_logs_event "
                    "ON signal_event_logs(event_id, created_at)")
+
+    # 信号台账由事件库和迁移日志唯一投影，另加每日收盘快照表。
+    from .feedback.signal_ledger import ensure_signal_ledger_schema
+    ensure_signal_ledger_schema(cursor)
 
     # 【一】出厂拒绝留痕表（可证伪性检查拦下的信号：不进调度不推送，但可审计）
     cursor.execute("""
@@ -340,6 +351,10 @@ def _migrate():
         if cols:
             additions = {
                 "rule_version": "TEXT DEFAULT ''",
+                "rules_version": "TEXT DEFAULT ''",
+                "frozen_prev_status": "TEXT DEFAULT ''",
+                "entry_snapshot": "TEXT DEFAULT '{}'",
+                "maintenance_check": "TEXT DEFAULT '{}'",
                 "y_formula": "TEXT DEFAULT ''",
                 "y_inputs": "TEXT DEFAULT ''",
             }

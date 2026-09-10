@@ -1,0 +1,10 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+         reason TEXT DEFAULT '',
+         source TEXT DEFAULT 'signal_lifecycle',
++        trigger_data TEXT DEFAULT '{}',
++        rule_entry TEXT DEFAULT '',
++        rules_version TEXT DEFAULT '',
+         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+*** End Patch

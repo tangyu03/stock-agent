@@ -1,0 +1,45 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+-                self.invalidate(event.event_id, reason)
++                self.invalidate(
++                    event.event_id, reason,
++                    trigger_data={"close": close, "stop_loss": event.stop_loss},
++                )
+@@
+-                self.invalidate(event.event_id, reason)
++                self.invalidate(
++                    event.event_id, reason,
++                    trigger_data={
++                        "price": effective_current,
++                        "failure_anchor": failure_anchor,
++                        "day_low": low,
++                    },
++                )
+@@
+-                self.invalidate(event.event_id, reason)
++                self.invalidate(
++                    event.event_id, reason,
++                    trigger_data={"sector_status": sector_status},
++                )
+@@
+-                self.mark_filled(event.event_id)
++                self.mark_filled(
++                    event.event_id,
++                    trigger_data={
++                        "day_low": low,
++                        "entry_price": event.entry_price,
++                        "close": close,
++                    },
++                )
+@@
+-                self.expire(event.event_id)
++                self.expire(
++                    event.event_id,
++                    trigger_data={
++                        "today": today.isoformat(),
++                        "expire_date": event.expire_date,
++                        "close": close or current_price,
++                    },
++                )
+*** End Patch

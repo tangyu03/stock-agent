@@ -1,0 +1,51 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+                      hypothesis_x, hypothesis_y, hypothesis_z, hypothesis_w,
+-                     status, invalid_reason, rule_version, y_formula, y_inputs, updated_at)
+-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++                     status, invalid_reason, rule_version, rules_version, y_formula, y_inputs, updated_at)
++                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+@@
+-                    event.status, event.invalid_reason, event.rule_version,
++                    event.status, event.invalid_reason, event.rule_version, event.rules_version,
+@@
+                         INSERT INTO signal_event_logs
+-                        (event_id, stock_code, from_status, to_status, reason, source)
+-                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle')
++                        (event_id, stock_code, from_status, to_status, reason, source,
++                         trigger_data, rule_entry, rules_version)
++                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle', ?, ?, ?)
+@@
+-                        event.event_id, event.stock_code, from_status,
+-                        event.status, event.invalid_reason,
++                        event.event_id, event.stock_code, from_status,
++                        event.status, event.invalid_reason,
++                        json.dumps({}, ensure_ascii=False, sort_keys=True),
++                        _default_rule_entry(from_status, event.status),
++                        event.rules_version,
+@@
+-    def update_status(self, event_id: str, status: str, reason: str = "") -> None:
++    def update_status(
++        self, event_id: str, status: str, reason: str = "",
++        trigger_data: Optional[Dict] = None, rule_entry: str = "",
++    ) -> None:
+@@
+-                    "SELECT stock_code, status FROM signal_events WHERE event_id=?",
++                    "SELECT stock_code, status, rules_version FROM signal_events WHERE event_id=?",
+@@
+                         INSERT INTO signal_event_logs
+-                        (event_id, stock_code, from_status, to_status, reason, source)
+-                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle')
++                        (event_id, stock_code, from_status, to_status, reason, source,
++                         trigger_data, rule_entry, rules_version)
++                        VALUES (?, ?, ?, ?, ?, 'signal_lifecycle', ?, ?, ?)
+@@
+-                        event_id, existing["stock_code"],
+-                        current, target, reason,
++                        event_id, existing["stock_code"],
++                        current, target, reason,
++                        json.dumps(trigger_data or {}, ensure_ascii=False, sort_keys=True),
++                        rule_entry or _default_rule_entry(current, target, reason),
++                        (existing["rules_version"] or "") if "rules_version" in existing.keys() else "",
+*** End Patch

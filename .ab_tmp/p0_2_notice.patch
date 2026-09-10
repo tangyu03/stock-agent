@@ -1,0 +1,42 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+         notices: List[Dict] = []
+         for event in self.get_active_events(stock_code):
++            close = float(close_price) if close_price is not None else None
++            low = float(day_low) if day_low is not None else None
++            high = float(day_high) if day_high is not None else None
++
++            def _notice(exit_type: str, reason: str, urgency: str) -> Dict:
++                return {
++                    "stock_code": stock_code,
++                    "stock_name": event.stock_name,
++                    "exit_type": exit_type,
++                    "trigger_price": close or current_price,
++                    "stop_loss_price": event.stop_loss,
++                    "reason": f"[{event.entry_type}] {reason}",
++                    "urgency": urgency,
++                    "sector_status": sector_status,
++                    "event_id": event.event_id,
++                }
++
+             if event.status == "frozen":
+@@
+-            close = float(close_price) if close_price is not None else None
+-            low = float(day_low) if day_low is not None else None
+-            high = float(day_high) if day_high is not None else None
+-
+-            def _notice(exit_type: str, reason: str, urgency: str) -> Dict:
+-                return {
+-                    "stock_code": stock_code,
+-                    "stock_name": event.stock_name,
+-                    "exit_type": exit_type,
+-                    "trigger_price": close or current_price,
+-                    "stop_loss_price": event.stop_loss,
+-                    "reason": f"[{event.entry_type}] {reason}",
+-                    "urgency": urgency,
+-                    "sector_status": sector_status,
+-                    "event_id": event.event_id,
+-                }
+-
+*** End Patch

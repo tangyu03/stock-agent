@@ -1,0 +1,39 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+         y_inputs: Optional[str | Dict] = None,
++        rules_version: str = "",
+@@
+             rule_version=str(rule_version or ""),
++            rules_version=str(rules_version or get_rules_version()),
+@@
+-    def mark_filled(self, event_id: str, reason: str = "价格触及买点，转入成交跟踪") -> None:
+-        self.store.update_status(event_id, "filled", reason)
++    def mark_filled(
++        self, event_id: str, reason: str = "价格触及买点，转入成交跟踪",
++        trigger_data: Optional[Dict] = None,
++    ) -> None:
++        self.store.update_status(
++            event_id, "filled", reason,
++            trigger_data=trigger_data, rule_entry="R3.2回踩确认",
++        )
+@@
+-    def invalidate(self, event_id: str, reason: str) -> None:
+-        self.store.update_status(event_id, "invalidated", reason)
++    def invalidate(
++        self, event_id: str, reason: str,
++        trigger_data: Optional[Dict] = None,
++    ) -> None:
++        self.store.update_status(
++            event_id, "invalidated", reason,
++            trigger_data=trigger_data,
++        )
+@@
+-    def expire(self, event_id: str) -> None:
+-        self.store.update_status(event_id, "expired", "回踩买点有效期超期作废")
++    def expire(self, event_id: str, trigger_data: Optional[Dict] = None) -> None:
++        self.store.update_status(
++            event_id, "expired", "回踩买点有效期超期作废",
++            trigger_data=trigger_data, rule_entry="R3.5有效期到期",
++        )
+*** End Patch

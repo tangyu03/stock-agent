@@ -1,0 +1,30 @@
+﻿*** Begin Patch
+*** Update File: tests/test_event_broadcast.py
+@@
+     def test_virtual_fill_counts_uses_lifecycle_states(self):
+@@
+         text = build_virtual_fill_counts(rows, target=30)
+ 
+         assert "成交1" in text
+-        assert "撤单1" in text
+-        assert "止损1" in text
+-        assert "过期1" in text
++        assert "结构失败撤单1" in text
++        assert "信号止损1" in text
++        assert "到期1" in text
+         assert "在飞1" in text
+-        assert "样本5/30" in text
++        assert "累计完结样本4/30" in text
++
++    def test_cancel_word_only_applies_to_structural_cancel(self):
++        rows = [
++            {"status": "invalidated", "invalid_reason": "回踩失败已撤单"},
++            {"status": "invalidated", "invalid_reason": "收盘跌破止损线"},
++            {"status": "sig_stop", "invalid_reason": ""},
++        ]
++        text = build_virtual_fill_counts(rows, target=30)
++
++        assert "结构失败撤单1" in text
++        assert "信号止损2" in text
++        assert " 撤单" not in text
+*** End Patch

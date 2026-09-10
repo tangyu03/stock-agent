@@ -1,0 +1,38 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/timing_engine.py
+@@
+-                day_high = _number_or_none(latest_bar.get("最高", latest_bar.get("high")))
+-                day_low = _number_or_none(latest_bar.get("最低", latest_bar.get("low")))
+-                close_price = _number_or_none(
+-                    current_price or latest_bar.get("收盘", latest_bar.get("close"))
+-                )
+-                tech_signals = tech_data.get("tech_signals") or {}
+-                return self._lifecycle.evaluate_events(
+-                stock_code,
+-                current_price=current_price,
+-                sector_status=sector_status,
+-                day_high=day_high,
+-                    day_low=day_low,
+-                    close_price=close_price,
+-                    tech_score=tech_signals.get("vote_score"),
+-                    volume_ratio=tech_data.get("volume_ratio"),
+-                    change_pct=tech_data.get("change_pct"),
+-                )
++            day_high = _number_or_none(latest_bar.get("最高", latest_bar.get("high")))
++            day_low = _number_or_none(latest_bar.get("最低", latest_bar.get("low")))
++            close_price = _number_or_none(
++                current_price or latest_bar.get("收盘", latest_bar.get("close"))
++            )
++            tech_signals = tech_data.get("tech_signals") or {}
++            return self._lifecycle.evaluate_events(
++                stock_code,
++                current_price=current_price,
++                sector_status=sector_status,
++                day_high=day_high,
++                day_low=day_low,
++                close_price=close_price,
++                tech_score=tech_signals.get("vote_score"),
++                volume_ratio=tech_data.get("volume_ratio"),
++                change_pct=tech_data.get("change_pct"),
++            )
+*** End Patch

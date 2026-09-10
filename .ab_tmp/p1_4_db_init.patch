@@ -1,0 +1,21 @@
+﻿*** Begin Patch
+*** Update File: src/db.py
+@@
+         status TEXT DEFAULT 'valid',
+         invalid_reason TEXT,
+         rule_version TEXT DEFAULT '',
++        rules_version TEXT DEFAULT '',
+         y_formula TEXT DEFAULT '',
+@@
+         reason TEXT DEFAULT '',
+         source TEXT DEFAULT 'signal_lifecycle',
++        trigger_data TEXT DEFAULT '{}',
++        rule_entry TEXT DEFAULT '',
++        rules_version TEXT DEFAULT '',
+         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+@@
+             additions = {
+                 "rule_version": "TEXT DEFAULT ''",
++                "rules_version": "TEXT DEFAULT ''",
+                 "y_formula": "TEXT DEFAULT ''",
+*** End Patch

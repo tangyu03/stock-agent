@@ -29,6 +29,7 @@ from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
 from ..analyzers.signal_lifecycle import display_status, normalize_status
+from ..signal_states import MATCH_COUNT_LABELS, canonical_match_status
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,11 @@ _STATUS_LABELS = {
     "filled": "已成交",
     "invalidated": "失效撤单",
     "expired": "过期作废",
+    "frozen": "已冻结",
+    "chase_abandon": "追高放弃",
+    "sig_target": "信号止盈",
+    "sig_stop": "信号止损",
+    "time_exit": "时间离场",
 }
 
 _TRACKING_STATUS_LABELS = {
@@ -44,6 +50,11 @@ _TRACKING_STATUS_LABELS = {
     "filled": "已成交",
     "invalidated": "失效撤单",
     "expired": "过期作废",
+    "frozen": "已冻结",
+    "chase_abandon": "追高放弃",
+    "sig_target": "信号止盈",
+    "sig_stop": "信号止损",
+    "time_exit": "时间离场",
 }
 
 _EVENT_STATUS_LABELS = {
@@ -51,6 +62,11 @@ _EVENT_STATUS_LABELS = {
     "filled": "已成交",
     "invalidated": "已撤单",
     "expired": "已过期",
+    "frozen": "已冻结",
+    "chase_abandon": "追高放弃",
+    "sig_target": "信号止盈",
+    "sig_stop": "信号止损",
+    "time_exit": "时间离场",
 }
 
 
@@ -282,16 +298,21 @@ def collect_in_flight_events(
             continue
         status = normalize_status(str(row.get("status") or "valid"))
         if born > as_of or (
-            status in ("invalidated", "expired")
+            status in ("invalidated", "expired", "chase_abandon",
+                       "sig_target", "sig_stop", "time_exit")
             and born < as_of - timedelta(days=lookback_days)
         ):
             continue
         row["born_date"] = born.isoformat()
         row["status_label"] = _EVENT_STATUS_LABELS.get(status, display_status(status))
-        row["active"] = status in ("valid", "filled")
+        row["active"] = status in ("valid", "filled", "frozen")
         rows.append(row)
 
-    priority = {"valid": 0, "filled": 1, "invalidated": 2, "expired": 3}
+    priority = {
+        "valid": 0, "filled": 1, "frozen": 2,
+        "invalidated": 3, "expired": 4, "chase_abandon": 5,
+        "sig_target": 6, "sig_stop": 7, "time_exit": 8,
+    }
     rows.sort(key=lambda r: (priority.get(r["status"], 9), r["born_date"], r["stock_code"]))
     return rows
 
@@ -334,7 +355,10 @@ def render_in_flight_events(rows: List[Dict]) -> str:
                 seg += f" 距买点{distance:+.1f}%"
         if r.get("expire_date"):
             seg += f" 至{r.get('expire_date')}"
-        if r.get("status") in ("invalidated", "expired") and r.get("invalid_reason"):
+        if r.get("status") in (
+            "invalidated", "expired", "chase_abandon",
+            "sig_target", "sig_stop", "time_exit",
+        ) and r.get("invalid_reason"):
             reason = str(r["invalid_reason"])
             seg += f" ({reason[:42]})"
         parts.append(seg)
@@ -412,6 +436,7 @@ def build_watch_ladder(
     entry_diagnostics: Dict[str, str],
     stocks: List[Dict],
     in_flight_events: Optional[List[Dict]] = None,
+    market_mode: str = "defend",
 ) -> List[Dict]:
     """27×5 矩阵压成一张候梯表：谁差几个条件，谁排前面。"""
     rows: List[Dict] = []
@@ -420,6 +445,14 @@ def build_watch_ladder(
         code = str(event.get("stock_code", ""))
         if code and event.get("active") and code not in in_flight_by_code:
             in_flight_by_code[code] = event
+    mode = str(market_mode or "defend")
+    mode_names = {
+        "attack": "进攻", "defend": "防守",
+        "retreat": "撤退", "panic": "恐慌",
+    }
+    strategy_mode_map = {
+        "恐慌抄底": ("panic", "retreat"),
+    }
     for stock in stocks or []:
         code = str(stock.get("code", ""))
         if not code:
@@ -433,7 +466,16 @@ def build_watch_ladder(
         if len(failures) > 2:
             shown += f"等{len(failures)}项"
         in_flight = in_flight_by_code.get(code, {})
-        reason = f"{closest['strategy']}：缺 {shown}"
+        required_modes = strategy_mode_map.get(closest["strategy"], (mode,))
+        mode_eligible = mode in required_modes
+        required_text = "/".join(
+            mode_names.get(required_mode, required_mode)
+            for required_mode in required_modes
+        ) or mode_names.get(mode, mode)
+        mode_note = (
+            "本模式可入" if mode_eligible else f"需模式:{required_text}"
+        )
+        reason = f"{closest['strategy']}({mode_note})：缺 {shown}"
         if in_flight:
             reason += (
                 f" ⚠在飞：{in_flight.get('entry_type') or '未知策略'}"
@@ -448,6 +490,9 @@ def build_watch_ladder(
             "name": stock.get("name", code),
             "fail_count": len(failures),
             "strategy": closest["strategy"],
+            "mode_required": required_text,
+            "mode_eligible": mode_eligible,
+            "cross_mode": not mode_eligible,
             "failures": failures,
             "reason": reason,
             "in_flight": bool(in_flight),
@@ -455,30 +500,33 @@ def build_watch_ladder(
             "in_flight_entry_type": str(in_flight.get("entry_type", "")),
             "in_flight_status_label": str(in_flight.get("status_label", "")),
         })
-    return sorted(rows, key=lambda r: (r["fail_count"], r["stock_code"]))
+    return sorted(
+        rows,
+        key=lambda r: (
+            r["cross_mode"], r["fail_count"], r["stock_code"],
+        ),
+    )
 
 
 def build_virtual_fill_counts(rows: List[Dict], target: int = 30) -> str:
-    """撮合计数表：先只数数，不做 EV/滑点/分桶。"""
+    """撮合计数唯一派生源：事件列表 group-by，不再独立维护计数。"""
     if not rows:
         return "撮合计数: 样本0/30"
-    counts = {"filled": 0, "stop": 0, "cancelled": 0, "expired": 0, "open": 0}
+    counts = {label: 0 for label in MATCH_COUNT_LABELS.values()}
     for r in rows:
-        status = normalize_status(str(r.get("status") or ""))
-        reason = str(r.get("invalid_reason") or "")
-        if status == "filled":
-            counts["filled"] += 1
-        elif status == "valid":
-            counts["open"] += 1
-        elif status == "invalidated" and "止损线" in reason:
-            counts["stop"] += 1
-        elif status == "invalidated" and "回踩失败" in reason:
-            counts["cancelled"] += 1
-        elif status == "expired":
-            counts["expired"] += 1
-    total = sum(counts.values())
+        status = canonical_match_status(
+            str(r.get("status") or ""),
+            str(r.get("invalid_reason") or ""),
+        )
+        label = MATCH_COUNT_LABELS.get(status)
+        if label:
+            counts[label] += 1
+    completed = sum(
+        count for status, label in MATCH_COUNT_LABELS.items()
+        for count in [counts[label]]
+        if status not in ("valid", "frozen")
+    )
     return (
-        f"撮合计数: 成交{counts['filled']} 撤单{counts['cancelled']} "
-        f"止损{counts['stop']} 过期{counts['expired']} 在飞{counts['open']} "
-        f"| 样本{total}/{target}"
+        "撮合计数: " + " ".join(f"{label}{count}" for label, count in counts.items())
+        + f" | 累计完结样本{completed}/{target}"
     )

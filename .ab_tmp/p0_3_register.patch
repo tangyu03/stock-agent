@@ -1,0 +1,20 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+         rules_version: str = "",
++        entry_snapshot: Optional[Dict] = None,
+@@
+             rules_version=str(rules_version or get_rules_version()),
++            entry_snapshot=json.dumps(entry_snapshot or {}, ensure_ascii=False, sort_keys=True),
+@@
+         self.store.update_status(
+             event_id, "expired", "回踩买点有效期超期作废",
+             trigger_data=trigger_data, rule_entry="R3.5有效期到期",
+         )
++
++    def set_maintenance_check(self, stock_code: str, data: Dict) -> None:
++        payload = json.dumps(data or {}, ensure_ascii=False, sort_keys=True)
++        for event in self.get_active_events(stock_code):
++            event.maintenance_check = payload
++            self.store.save(event)
+*** End Patch

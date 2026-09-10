@@ -1,0 +1,26 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+             else:
+                 ver_note = ""
++            global_version = str(getattr(e, "rules_version", "") or "")
++            global_ver_note = (
++                f",规则:{global_version}" if global_version else ",规则未记录"
++            )
+             notes.append(
+                 f"[{e.entry_type}]事件{age}{pullback_ok}"
+                 f"(Y={e.entry_price:.2f},Z={e.stop_loss:.2f}{ver_note},"
+-                f"有效至{e.expire_date})"
++                f"{global_ver_note.lstrip(',')},有效至{e.expire_date})"
+             )
+*** Update File: src/push/templates.py
+@@
+-from typing import Dict
++from typing import Dict
++
++from ..rules_version import get_rules_version
+@@
+     content = "<b>📊 环境总览</b><br/>"
++    content += f"&nbsp;&nbsp;规则版本:{get_rules_version()}<br/>"
+     content += f"&nbsp;&nbsp;模式:{mn}<br/>"
+*** End Patch

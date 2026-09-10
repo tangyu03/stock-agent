@@ -1,0 +1,28 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+     def expire(self, event_id: str, trigger_data: Optional[Dict] = None) -> None:
+         self.store.update_status(
+             event_id, "expired", "回踩买点有效期超期作废",
+             trigger_data=trigger_data, rule_entry="R3.5有效期到期",
+         )
++
++    def freeze(
++        self, event_id: str, reason: str,
++        trigger_data: Optional[Dict] = None,
++    ) -> None:
++        self.store.update_status(
++            event_id, "frozen", reason,
++            trigger_data=trigger_data, rule_entry="R4.1事件冻结",
++        )
++
++    def unfreeze(
++        self, event_id: str, target_status: str = "valid",
++        trigger_data: Optional[Dict] = None,
++    ) -> None:
++        self.store.update_status(
++            event_id, target_status,
++            "技术分回升，冻结解除",
++            trigger_data=trigger_data, rule_entry="R4.2事件解冻",
++        )
+*** End Patch

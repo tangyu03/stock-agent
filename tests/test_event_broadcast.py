@@ -67,6 +67,19 @@ class TestInFlightBroadcast:
     def test_render_empty_is_honest(self):
         assert "今日无合格事件" in render_in_flight_events([])
 
+    def test_frozen_event_is_active_and_chase_abandon_is_closed(self):
+        rows = collect_in_flight_events(
+            as_of=date(2026, 9, 8), events=[
+                self._event("000001", "冻结事件", "frozen"),
+                self._event("000002", "追高放弃", "chase_abandon",
+                            invalid_reason="价格远离买点，回踩假设失效"),
+            ])
+
+        assert rows[0]["active"] is True
+        assert rows[0]["status_label"] == "已冻结"
+        assert rows[1]["active"] is False
+        assert rows[1]["status_label"] == "追高放弃"
+
 
 class TestWatchLadderAndCounts:
     """候梯排序和虚拟撮合只做最小可审计信息。"""
@@ -86,8 +99,8 @@ class TestWatchLadderAndCounts:
 
         assert [r["stock_code"] for r in rows] == ["600001", "600002", "600003"]
         assert rows[0]["fail_count"] == 1
-        assert rows[0]["reason"] == "综合：缺 ADX不足"
-        assert rows[2]["reason"] == "综合：缺 差A+差B等3项"
+        assert rows[0]["reason"] == "综合(本模式可入)：缺 ADX不足"
+        assert rows[2]["reason"] == "综合(本模式可入)：缺 差A+差B等3项"
 
     def test_watch_ladder_shows_closest_strategy_and_missing_conditions(self):
         diagnostics = {
@@ -112,8 +125,8 @@ class TestWatchLadderAndCounts:
         rows = build_watch_ladder(diagnostics, stocks)
 
         assert [r["stock_code"] for r in rows] == ["688028", "300666"]
-        assert rows[0]["reason"] == "确认追强：缺 ADX"
-        assert rows[1]["reason"] == "确认追强：缺 ADX+外盘主动"
+        assert rows[0]["reason"] == "确认追强(本模式可入)：缺 ADX"
+        assert rows[1]["reason"] == "确认追强(本模式可入)：缺 ADX+外盘主动"
 
     def test_watch_ladder_marks_in_flight_event(self):
         diagnostics = {
@@ -141,6 +154,27 @@ class TestWatchLadderAndCounts:
         assert row["in_flight_event_id"].endswith("价量突破")
         assert "⚠在飞：价量突破·已成交#" in row["reason"]
 
+    def test_watch_ladder_separates_cross_mode_candidates(self):
+        diagnostics = {
+            "002975": "策略检查:\n- 恐慌抄底: 正常行情，未触发\n",
+            "688028": "策略检查:\n- 确认追强: ——未过: ADX单边力度\n",
+        }
+        stocks = [
+            {"code": "002975", "name": "博杰股份"},
+            {"code": "688028", "name": "沃尔德"},
+        ]
+        rows = build_watch_ladder(
+            diagnostics, stocks, market_mode="defend",
+        )
+
+        assert rows[0]["stock_code"] == "688028"
+        assert rows[0]["cross_mode"] is False
+        assert "本模式可入" in rows[0]["reason"]
+        assert rows[1]["stock_code"] == "002975"
+        assert rows[1]["cross_mode"] is True
+        assert rows[1]["mode_required"] == "恐慌/撤退"
+        assert "需模式:恐慌/撤退" in rows[1]["reason"]
+
     def test_virtual_fill_counts_uses_lifecycle_states(self):
         rows = [
             {"status": "triggered", "invalid_reason": ""},
@@ -148,12 +182,26 @@ class TestWatchLadderAndCounts:
             {"status": "invalidated", "invalid_reason": "回踩失败已撤单"},
             {"status": "invalidated", "invalid_reason": "收盘跌破止损线"},
             {"status": "expired", "invalid_reason": ""},
+            {"status": "chase_abandon", "invalid_reason": ""},
         ]
         text = build_virtual_fill_counts(rows, target=30)
 
         assert "成交1" in text
-        assert "撤单1" in text
-        assert "止损1" in text
-        assert "过期1" in text
+        assert "结构失败撤单1" in text
+        assert "信号止损1" in text
+        assert "到期1" in text
+        assert "追高放弃1" in text
         assert "在飞1" in text
-        assert "样本5/30" in text
+        assert "累计完结样本5/30" in text
+
+    def test_cancel_word_only_applies_to_structural_cancel(self):
+        rows = [
+            {"status": "invalidated", "invalid_reason": "回踩失败已撤单"},
+            {"status": "invalidated", "invalid_reason": "收盘跌破止损线"},
+            {"status": "sig_stop", "invalid_reason": ""},
+        ]
+        text = build_virtual_fill_counts(rows, target=30)
+
+        assert "结构失败撤单1" in text
+        assert "信号止损2" in text
+        assert " 撤单" not in text
