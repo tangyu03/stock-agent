@@ -330,6 +330,12 @@ class InMemorySignalEventStore:
         ]
         return sorted(prior, key=lambda e: e.born_date)
 
+    def get_frozen_events(self) -> List[SignalEvent]:
+        return [
+            e for e in self.events.values()
+            if normalize_status(e.status) == "frozen"
+        ]
+
     def save(self, event: SignalEvent) -> None:
         event.status = normalize_status(event.status)
         previous = self.events.get(event.event_id)
@@ -378,6 +384,9 @@ class InMemorySignalEventStore:
                 "rule_entry": rule_entry or _default_rule_entry(from_status, event.status),
                 "rules_version": event.rules_version,
             })
+
+    def get_event_logs(self, event_id: str) -> List[Dict]:
+        return [log for log in self.logs if log["event_id"] == event_id]
 
 
 class DbSignalEventStore:
@@ -447,6 +456,23 @@ class DbSignalEventStore:
                     (stock_code,),
                 )
                 return [self._row_to_event(r) for r in cursor.fetchall()]
+        except Exception as e:
+            logger.error("读取历史信号事件失败 %s: %s", stock_code, e)
+            return []
+
+    def get_frozen_events(self) -> List[SignalEvent]:
+        try:
+            with get_conn() as conn:
+                cursor = conn.cursor()
+                _ensure_tables(cursor)
+                cursor.execute(
+                    "SELECT * FROM signal_events WHERE status='frozen' "
+                    "ORDER BY born_date",
+                )
+                return [self._row_to_event(r) for r in cursor.fetchall()]
+        except Exception as e:
+            logger.error("读取冻结信号事件失败: %s", e)
+            return []
         except Exception as e:
             logger.error("读取历史信号事件失败 %s: %s", stock_code, e)
             return []
@@ -585,6 +611,9 @@ class SignalLifecycle:
 
     def get_active_events(self, stock_code: str, entry_type: Optional[str] = None) -> List[SignalEvent]:
         return self.store.get_active_events(stock_code, entry_type)
+
+    def get_prior_events(self, stock_code: str) -> List[SignalEvent]:
+        return self.store.get_prior_events(stock_code)
 
     # ---------- 诞生 ----------
 
@@ -805,6 +834,7 @@ class SignalLifecycle:
                         "price": effective_price,
                         "entry_price": event.entry_price,
                         "chase_gap": chase_gap,
+                        "today": today.isoformat(),
                     },
                 )
                 notices.append(_notice("追高放弃", reason, "常规"))
@@ -826,7 +856,10 @@ class SignalLifecycle:
                     target = event.frozen_prev_status or "valid"
                     self.unfreeze(
                         event.event_id, target,
-                        trigger_data={"tech_score": tech_score},
+                        trigger_data={
+                            "tech_score": tech_score,
+                            "today": today.isoformat(),
+                        },
                     )
                     notices.append(_notice(
                         "事件解冻",
@@ -854,10 +887,11 @@ class SignalLifecycle:
                         reason = f"先触及止损{stop:.2f}，信号口径认错"
                         self.mark_signal_stop(
                             event.event_id,
-                            trigger_data={
-                                "close": effective_price, "day_low": low,
-                                "day_high": high, "stop_loss": stop,
-                            },
+                        trigger_data={
+                            "close": effective_price, "day_low": low,
+                            "day_high": high, "stop_loss": stop,
+                            "today": today.isoformat(),
+                        },
                         )
                         notices.append(_notice("信号止损", reason, "重要"))
                         continue
@@ -865,20 +899,22 @@ class SignalLifecycle:
                         reason = f"先触及目标{target:.2f}，信号口径兑现"
                         self.mark_signal_target(
                             event.event_id,
-                            trigger_data={
-                                "close": effective_price, "day_low": low,
-                                "day_high": high, "target": target,
-                            },
+                        trigger_data={
+                            "close": effective_price, "day_low": low,
+                            "day_high": high, "target": target,
+                            "today": today.isoformat(),
+                        },
                         )
                         notices.append(_notice("信号止盈", reason, "常规"))
                         continue
                     if event.expire_date and today.isoformat() > event.expire_date:
                         self.mark_time_exit(
                             event.event_id,
-                            trigger_data={
-                                "close": effective_price,
-                                "expire_date": event.expire_date,
-                            },
+                        trigger_data={
+                            "close": effective_price,
+                            "expire_date": event.expire_date,
+                            "today": today.isoformat(),
+                        },
                         )
                         notices.append(_notice("时间离场", "有效期内未触目标或止损", "常规"))
                         continue
@@ -908,6 +944,7 @@ class SignalLifecycle:
                         "tech_score": tech_score,
                         "volume_ratio": volume_ratio,
                         "change_pct": change_pct,
+                        "today": today.isoformat(),
                     },
                 )
                 notices.append(_notice("事件冻结", reason, "重要"))
@@ -920,7 +957,10 @@ class SignalLifecycle:
                 )
                 self.invalidate(
                     event.event_id, reason,
-                    trigger_data={"close": close, "stop_loss": event.stop_loss},
+                    trigger_data={
+                        "close": close, "stop_loss": event.stop_loss,
+                        "today": today.isoformat(),
+                    },
                 )
                 notices.append(_notice("信号作废", reason, "紧急"))
                 continue
@@ -944,6 +984,7 @@ class SignalLifecycle:
                         "price": effective_current,
                         "failure_anchor": failure_anchor,
                         "day_low": low,
+                        "today": today.isoformat(),
                     },
                 )
                 notices.append(_notice("信号作废", reason, "重要"))
@@ -954,7 +995,10 @@ class SignalLifecycle:
                 reason = "板块状态机转为退潮，假说环境前提消失"
                 self.invalidate(
                     event.event_id, reason,
-                    trigger_data={"sector_status": sector_status},
+                    trigger_data={
+                        "sector_status": sector_status,
+                        "today": today.isoformat(),
+                    },
                 )
                 notices.append(_notice("信号作废", reason + "——立即撤单", "重要"))
                 continue
@@ -971,6 +1015,7 @@ class SignalLifecycle:
                         "day_low": low,
                         "entry_price": event.entry_price,
                         "close": close,
+                        "today": today.isoformat(),
                     },
                 )
                 close_text = f"，收盘{close:.2f}" if close is not None else ""
@@ -1004,6 +1049,53 @@ class SignalLifecycle:
                 })
         return notices
 
+    def run_daily_unfreeze(
+        self,
+        tech_scores: Dict[str, float],
+        today: Optional[date] = None,
+    ) -> List[Dict]:
+        """日终仲裁：只处理 FROZEN 解冻，报告层只读批处理后的状态。"""
+        today = today or date.today()
+        notices: List[Dict] = []
+        for event in self.store.get_frozen_events():
+            if event.expire_date and today.isoformat() > event.expire_date:
+                self.expire(
+                    event.event_id,
+                    trigger_data={
+                        "today": today.isoformat(),
+                        "expire_date": event.expire_date,
+                    },
+                )
+                notices.append({
+                    "stock_code": event.stock_code,
+                    "stock_name": event.stock_name,
+                    "exit_type": "信号过期",
+                    "reason": f"[{event.entry_type}] 冻结事件超过有效期，自动过期",
+                    "urgency": "常规",
+                    "event_id": event.event_id,
+                })
+                continue
+            score = tech_scores.get(event.stock_code)
+            if score is None or float(score) < 0:
+                continue
+            target = event.frozen_prev_status or "valid"
+            self.unfreeze(
+                event.event_id, target,
+                trigger_data={"tech_score": float(score)},
+            )
+            notices.append({
+                "stock_code": event.stock_code,
+                "stock_name": event.stock_name,
+                "exit_type": "事件解冻",
+                "reason": (
+                    f"[{event.entry_type}] 技术分{float(score):+.1f}≥0，"
+                    "恢复原状态"
+                ),
+                "urgency": "常规",
+                "event_id": event.event_id,
+            })
+        return notices
+
     def event_status_note(self, stock_code: str, current_price: float = 0,
                           current_rule_version: str = "") -> str:
         """观察卡用：活跃事件的状态描述（回踩买点是否仍有效）。
@@ -1014,7 +1106,10 @@ class SignalLifecycle:
         """
         events = self.get_active_events(stock_code)
         if not events:
-            return ""
+            prior = self.get_prior_events(stock_code)
+            if not prior:
+                return ""
+            events = [prior[-1]]
         notes = []
         for e in events:
             age = ""
@@ -1026,6 +1121,28 @@ class SignalLifecycle:
             if e.status == "frozen":
                 notes.append(
                     f"[{e.entry_type}]已冻结：{e.invalid_reason or '评分仲裁触发'}"
+                )
+                continue
+            if e.status == "filled":
+                audit_note = render_entry_and_maintenance(e)
+                notes.append(
+                    f"[{e.entry_type}]已成交第{self._event_day(e)}天·"
+                    f"持有检查{self._maintenance_health(e)}\n{audit_note}"
+                )
+                continue
+            if e.status in TERMINAL_EVENT_STATUSES:
+                completion_price = self._completion_price(e)
+                completion_text = (
+                    f"{completion_price:.2f}" if completion_price > 0
+                    else "数据未取到"
+                )
+                distance = ""
+                if completion_price and e.entry_price:
+                    distance = f" 距买点{(completion_price / e.entry_price - 1.0):+.1%}"
+                notes.append(
+                    f"[{e.entry_type}]已完结({display_status(e.status)})："
+                    f"完结价{completion_text}"
+                    f"{distance}；原因{e.invalid_reason or '规则迁移'}"
                 )
                 continue
             pullback_ok = "回踩买点有效" if (not current_price or current_price <= e.entry_price * 1.01) else "买点上方待回踩"
@@ -1049,6 +1166,38 @@ class SignalLifecycle:
                 f"\n{audit_note}"
             )
         return "；".join(notes)
+
+    def _event_day(self, event) -> int:
+        try:
+            return (date.today() - date.fromisoformat(event.born_date)).days + 1
+        except (TypeError, ValueError):
+            return 0
+
+    def _maintenance_health(self, event) -> str:
+        try:
+            maintenance = json.loads(event.maintenance_check or "{}")
+        except Exception:
+            maintenance = {}
+        flags = _snapshot_flags(maintenance, maintenance=True)
+        if not flags:
+            return "未评估"
+        return "走弱" if any("△" in flag for flag in flags) else "正常"
+
+    def _completion_price(self, event) -> float:
+        try:
+            log = self.store.get_event_logs(event.event_id)[-1]
+            raw_data = log.get("trigger_data") or {}
+            data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+        except Exception:
+            return 0.0
+        for key in ("price", "close"):
+            try:
+                value = float(data.get(key))
+                if value > 0:
+                    return value
+            except (TypeError, ValueError):
+                continue
+        return 0.0
 
 
 # ============================================================

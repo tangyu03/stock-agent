@@ -1,0 +1,24 @@
+﻿*** Begin Patch
+*** Update File: tests/test_event_broadcast.py
+@@
+         assert "到期1" in text
+         assert "追高放弃1" in text
+         assert "等待回踩1" in text
+-        assert "累计完结样本5/30" in text
++        assert "累计完结样本4/30" in text
++
++    def test_structural_stop_is_not_signal_stop(self):
++        from src.signal_states import canonical_match_status
++
++        assert canonical_match_status(
++            "invalidated", "收盘474.00跌破止损线476.75，结构失败，买单撤单"
++        ) == "struct_cancel"
++        assert canonical_match_status("invalidated", "先触及止损价") == "sig_stop"
++
++    def test_unbacked_historical_count_is_disclosed(self):
++        text = build_virtual_fill_counts(
++            [], target=30, pending_historical={"sig_stop": 1},
++        )
++        assert "信号止损1" in text
++        assert "历史事件，早于09-09，待补录" in text
+*** End Patch

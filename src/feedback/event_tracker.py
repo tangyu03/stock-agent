@@ -322,7 +322,8 @@ def render_in_flight_events(rows: List[Dict]) -> str:
     if not rows:
         return "<b>在飞事件 0</b><br/>&nbsp;&nbsp;今日无合格事件；空仓是合法输出<br/>"
     active = sum(1 for r in rows if r.get("active"))
-    parts = [f"<b>在飞事件 {len(rows)}（活跃{active}）</b>"]
+    completed = len(rows) - active
+    parts = [f"<b>在飞事件 {len(rows)}（活跃{active}/完结{completed}）</b>"]
     for r in rows:
         try:
             entry = float(r.get("entry_price") or 0)
@@ -438,7 +439,7 @@ def build_watch_ladder(
     in_flight_events: Optional[List[Dict]] = None,
     market_mode: str = "defend",
 ) -> List[Dict]:
-    """27×5 矩阵压成一张候梯表：谁差几个条件，谁排前面。"""
+    """把观察矩阵压成候选梯；硬闸门与活跃在飞事件不参与排序。"""
     rows: List[Dict] = []
     in_flight_by_code: Dict[str, Dict] = {}
     for event in in_flight_events or []:
@@ -457,6 +458,31 @@ def build_watch_ladder(
         code = str(stock.get("code", ""))
         if not code:
             continue
+        if code in in_flight_by_code:
+            continue
+        diagnostic = str((entry_diagnostics or {}).get(code, ""))
+        if "板块退潮" in diagnostic and (
+            "禁止新" in diagnostic or "新买入未触发" in diagnostic
+        ):
+            rows.append({
+                "stock_code": code,
+                "code": code,
+                "stock_name": stock.get("name", code),
+                "name": stock.get("name", code),
+                "fail_count": 0,
+                "strategy": "全部策略",
+                "mode_required": "板块未退潮",
+                "mode_eligible": False,
+                "cross_mode": False,
+                "hard_blocked": True,
+                "failures": [],
+                "reason": "新买入未触发：板块退潮",
+                "in_flight": False,
+                "in_flight_event_id": "",
+                "in_flight_entry_type": "",
+                "in_flight_status_label": "",
+            })
+            continue
         groups = _strategy_missing_groups((entry_diagnostics or {}).get(code, ""))
         if not groups:
             continue
@@ -473,7 +499,7 @@ def build_watch_ladder(
             for required_mode in required_modes
         ) or mode_names.get(mode, mode)
         mode_note = (
-            "本模式可入" if mode_eligible else f"需模式:{required_text}"
+            "当前模式可评估" if mode_eligible else f"需市场模式进入{required_text}"
         )
         reason = f"{closest['strategy']}({mode_note})：缺 {shown}"
         if in_flight:
@@ -508,9 +534,13 @@ def build_watch_ladder(
     )
 
 
-def build_virtual_fill_counts(rows: List[Dict], target: int = 30) -> str:
+def build_virtual_fill_counts(
+    rows: List[Dict],
+    target: int = 30,
+    pending_historical: Optional[Dict[str, int]] = None,
+) -> str:
     """撮合计数唯一派生源：事件列表 group-by，不再独立维护计数。"""
-    if not rows:
+    if not rows and not pending_historical:
         return "撮合计数: 样本0/30"
     counts = {label: 0 for label in MATCH_COUNT_LABELS.values()}
     for r in rows:
@@ -522,11 +552,22 @@ def build_virtual_fill_counts(rows: List[Dict], target: int = 30) -> str:
         if label:
             counts[label] += 1
     completed = sum(
-        count for status, label in MATCH_COUNT_LABELS.items()
-        for count in [counts[label]]
-        if status not in ("valid", "frozen")
+        counts[MATCH_COUNT_LABELS[status]]
+        for status in (
+            "struct_cancel", "expired", "chase_abandon",
+            "sig_stop", "sig_target", "time_exit",
+        )
     )
+    historical_note = ""
+    for status, count in (pending_historical or {}).items():
+        label = MATCH_COUNT_LABELS.get(status, status)
+        if count:
+            historical_note += (
+                f" | {label}{count}"
+                "(历史事件，早于09-09，待补录)"
+            )
     return (
         "撮合计数: " + " ".join(f"{label}{count}" for label, count in counts.items())
         + f" | 累计完结样本{completed}/{target}"
+        + historical_note
     )

@@ -139,6 +139,15 @@ def _fetch_qq_quotes(codes: List[str]) -> int:
                 reference_price = _f(parts[4]) or _f(parts[3])
                 volume_factor = _volume_share_factor(raw_volume, amount, reference_price)
                 volume_shares = raw_volume * volume_factor
+                # 【分型引擎】五档委比：腾讯字段 [9..18]=买一~买五 量/价相间，
+                # [19..28]=卖一~卖五。委比=(买五档总量-卖五档总量)/(总+总)*100。
+                # 东财 ulist 备选源不带五档，缺字段按 None 处理（分型引擎静默跳过）。
+                wb_ratio = None
+                if len(parts) > 28:
+                    bid_total = sum(_f(parts[i]) for i in (9, 11, 13, 15, 17))
+                    ask_total = sum(_f(parts[i]) for i in (19, 21, 23, 25, 27))
+                    if bid_total + ask_total > 0:
+                        wb_ratio = (bid_total - ask_total) / (bid_total + ask_total) * 100
                 _spot_cache[code] = {
                     "current_price": _f(parts[3]),
                     "change_pct": _f(parts[32]),
@@ -153,6 +162,7 @@ def _fetch_qq_quotes(codes: List[str]) -> int:
                     "turnover_rate": _f(parts[38]) if len(parts) > 38 else 0.0,
                     "outer_volume": (_f(parts[7]) if len(parts) > 7 else 0.0) * volume_factor,
                     "inner_volume": (_f(parts[8]) if len(parts) > 8 else 0.0) * volume_factor,
+                    "wb_ratio": wb_ratio,
                     "name": name,
                     "is_st": "ST" in name or "*ST" in name,
                     "is_suspended": raw_volume == 0 and _is_a_share_trading_time(parts[30]),
@@ -646,6 +656,31 @@ def calc_kdj(highs: List[float], lows: List[float], closes: List[float],
     }
 
 
+def calc_obv(closes: List[float], volumes: List[float]) -> Dict:
+    """计算 OBV 及近 5 日方向；仅披露资金方向，不参与投票。"""
+    if len(closes) < 2 or len(volumes) < len(closes):
+        return {"obv": None, "change_5": None, "direction": "数据未取到"}
+    obv_series = [0.0]
+    for index in range(1, len(closes)):
+        delta = volumes[index]
+        if closes[index] > closes[index - 1]:
+            delta = abs(delta)
+        elif closes[index] < closes[index - 1]:
+            delta = -abs(delta)
+        obv_series.append(obv_series[-1] + delta)
+    current = obv_series[-1]
+    previous = obv_series[-6] if len(obv_series) >= 6 else obv_series[0]
+    change = current - previous
+    threshold = max(sum(volumes[-5:]) / 5 * 0.05, 1.0)
+    if change > threshold:
+        direction = "上行"
+    elif change < -threshold:
+        direction = "下行"
+    else:
+        direction = "走平"
+    return {"obv": round(current, 2), "change_5": round(change, 2), "direction": direction}
+
+
 def _rsi_zone(rsi: float, overbought: float = 70, oversold: float = 30) -> str:
     """
     RSI 6 区细分。
@@ -804,6 +839,7 @@ def calc_tech_indicators(
     market_mode: str = "defend",
     volume_ratio: Optional[float] = None,
     realtime_quote: Optional[Dict] = None,
+    volume_ratio_source: str = "K线5日均量",
 ) -> Dict:
     """
     计算完整技术指标（替代问财 tech_signals）
@@ -899,6 +935,8 @@ def calc_tech_indicators(
 
     # 成交量
     volumes = [float(k.get("volume", k.get("成交量", 0))) for k in kline]
+    # OBV：只做资金方向披露，不投票。
+    obv = calc_obv(closes, volumes)
     avg_vol_5 = sum(volumes[-6:-1]) / 5 if len(volumes) >= 6 else 1
     try:
         realtime_ratio = float(volume_ratio) if volume_ratio is not None else None
@@ -961,6 +999,10 @@ def calc_tech_indicators(
         order_flow_label = "内盘占优"
     else:
         order_flow_label = "均衡"
+
+    # 【分型引擎】五档委比(%)透传：腾讯源独有；东财备选源缺失时保持 None，
+    # 分型引擎对 None 静默跳过委比交叉验证。
+    wb_ratio = _safe_quote_number((realtime_quote or {}).get("wb_ratio"))
 
     # ═══════════════════════════════════════════════════════════════
     # 4 类分组投票（阈值从 config/market_scoring.yaml → voting 读取）
@@ -1155,9 +1197,12 @@ def calc_tech_indicators(
         "macd": macd,
         # KDJ
         "kdj": kdj,
+        # OBV
+        "obv": obv,
         # 量能
         "volume_signal": vol_signal,
         "volume_ratio": round(vol_ratio, 1),
+        "volume_ratio_source": volume_ratio_source,
         # 波动率
         "volatility": round(volatility, 1),
         "volume_snapshot": volume_snapshot.as_dict(),
@@ -1169,6 +1214,8 @@ def calc_tech_indicators(
             "label": order_flow_label,
             "unit": "手",
             "display_only": True,
+            # 【分型引擎】五档委比(%)：缺失(东财备选)时为 None，引擎跳过委比验证
+            "wb_ratio": round(wb_ratio, 2) if wb_ratio is not None else None,
         },
         # 缠论背驰
         "chan_divergence": divergence,

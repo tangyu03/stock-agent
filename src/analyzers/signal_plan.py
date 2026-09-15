@@ -22,6 +22,9 @@ DATA_GUARD_DEFAULTS: Dict[str, float] = {
 @dataclass
 class VolumeSnapshot:
     volume_ratio: Optional[float] = None
+    volume_ratio_source: str = "数据未取到"
+    volume_ratio_raw: Optional[float] = None
+    volume_vs_prev_day: Optional[float] = None
     volume_vs_ma60: Optional[float] = None
     turnover_rate: Optional[float] = None
     turnover_p25: Optional[float] = None
@@ -187,12 +190,24 @@ def build_volume_snapshot(
         today_turnover = turnover_values[-1]
 
     volume_ratio = _number(tech_data.get("volume_ratio"))
+    volume_ratio_source = str(tech_data.get("volume_ratio_source") or "K线5日均量")
+    volume_ratio_raw = _number(tech_data.get("volume_ratio_raw"))
+    if volume_ratio_raw is None:
+        volume_ratio_raw = volume_ratio
     volume_ma60 = _number(tech_data.get("volume_ma60"))
     if volume_ma60 is None and len(volumes) >= 60:
         volume_ma60 = sum(volumes[-60:]) / 60
     volume_vs_ma60 = (
         today_volume / volume_ma60
         if today_volume and volume_ma60 and volume_ma60 > 0
+        else None
+    )
+    prev_day_volume = (
+        volumes[-2] if len(volumes) >= 2 and volumes[-2] and volumes[-2] > 0 else None
+    )
+    volume_vs_prev_day = (
+        today_volume / prev_day_volume
+        if today_volume and prev_day_volume and prev_day_volume > 0
         else None
     )
     # 【二】规则1: 量比<1 而量能倍数>10 → 量能口径冲突（股/手错位放大百倍）
@@ -230,6 +245,9 @@ def build_volume_snapshot(
 
     snapshot = VolumeSnapshot(
         volume_ratio=volume_ratio,
+        volume_ratio_source=volume_ratio_source,
+        volume_ratio_raw=volume_ratio_raw,
+        volume_vs_prev_day=volume_vs_prev_day,
         volume_vs_ma60=volume_vs_ma60,
         dirty=dirty,
         dirty_reason=dirty_reason,

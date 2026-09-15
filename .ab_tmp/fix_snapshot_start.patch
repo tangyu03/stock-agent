@@ -1,0 +1,27 @@
+﻿*** Begin Patch
+*** Update File: src/feedback/signal_ledger.py
+@@
+ def record_daily_snapshot(
+@@
+     status: str,
+ ) -> bool:
+     """Append one close snapshot; replays for the same date are ignored."""
+     if not event_id or not snapshot_date:
+         return False
++    try:
++        with get_conn() as conn:
++            cursor = conn.cursor()
++            ensure_signal_ledger_schema(cursor)
++            cursor.execute(
++                """
++                INSERT OR IGNORE INTO signal_event_daily_snapshots
++                (event_id, snapshot_date, close_price, status)
++                VALUES (?, ?, ?, ?)
++                """,
++                (event_id, snapshot_date, close_price, status),
++            )
++            conn.commit()
++            return cursor.rowcount > 0
++    except Exception:
++        return False
+*** End Patch

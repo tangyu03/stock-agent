@@ -12,6 +12,7 @@ from datetime import datetime
 
 from ..config_models import load_config
 from ..analyzers.market_scorer import get_market_scorer
+from ..analyzers.volume_pattern import kline_position_inputs
 from ..decision.aggregator import get_aggregator
 from ..push.pushplus import get_pushplus
 # templates 渲染已移至 pushplus.send_intraday_report 内部调用
@@ -242,11 +243,13 @@ class Orchestrator:
             sector_result=None,
             sector_map={},
             market_score=float(env.get("market_score", 0) or 0),
+            ref_date=ref_date,
         )
 
         # ---- 3. 构建信号列表 ----
         sector_ranks = {}
         env["sectors"] = {}
+        env["sector_changes"] = getattr(batch, "sector_changes", None)
 
         # 自选池（portfolio.yaml stocks）——用于识别无信号的"观察"股；买卖信号由统一引擎全量扫
         portfolio = load_config("portfolio.yaml")  # 直接用模块顶层已导入的 load_config
@@ -282,6 +285,10 @@ class Orchestrator:
                 "adx": (td.get("tech_signals") or {}).get("adx"),
                 "volume_ratio": td.get("volume_ratio", 0),
                 "turnover_rate": td.get("turnover_rate", 0),
+                # 【分型引擎】③量能位置档输入：三重门前高 + K线派生斜率/20日涨幅
+                "prior_high": td.get("prior_high"),
+                "recent_high": td.get("recent_high"),
+                **kline_position_inputs(td.get("kline") or [], td.get("current_price")),
                 "benchmark_price": getattr(sig, "benchmark_price", 0),
                 "rrr_low": getattr(sig, "rrr_low", None),
                 "rrr_high": getattr(sig, "rrr_high", None),
@@ -326,6 +333,10 @@ class Orchestrator:
                     "ma5": td.get("ma5"), "ma10": td.get("ma10"), "ma20": td.get("ma20"),
                     "rsi": td.get("rsi"), "adx": td.get("adx"),
                     "volume_ratio": td.get("volume_ratio", 0),
+                    # 【分型引擎】③量能位置档输入（与买入卡/观察卡同口径）
+                    "prior_high": td.get("prior_high"),
+                    "recent_high": td.get("recent_high"),
+                    **kline_position_inputs(td.get("kline") or [], td.get("current_price")),
                     # 机构持仓打分（4 数据源投票 + 具体数值，透出到 push）
                     "institutional_holding": td.get("institutional_holding", {}),
                 })
@@ -386,6 +397,10 @@ class Orchestrator:
                 "ma5": td.get("ma5"), "ma10": td.get("ma10"), "ma20": td.get("ma20"),
                 "volume_ratio": td.get("volume_ratio", 0),
                 "turnover_rate": td.get("turnover_rate", 0),
+                # 【分型引擎】③量能位置档输入（与买入卡同口径）
+                "prior_high": td.get("prior_high"),
+                "recent_high": td.get("recent_high"),
+                **kline_position_inputs(td.get("kline") or [], td.get("current_price")),
                 "kline_pattern": td.get("kline_pattern", []),
                 "institutional_holding": td.get("institutional_holding", {}),
                 "market_score": td.get("market_score"),
@@ -534,7 +549,10 @@ class Orchestrator:
                 track_date=ref_date,
                 benchmark_close=market_env.get('csi300_close'),
             )
-            env['virtual_fill_counts'] = build_virtual_fill_counts(in_flight_events)
+            env['virtual_fill_counts'] = build_virtual_fill_counts(
+                in_flight_events,
+                pending_historical={"sig_stop": 1},
+            )
             from ..feedback.signal_quality import build_signal_quality_cards
             env['signal_quality_cards'] = build_signal_quality_cards()
         except Exception as e:

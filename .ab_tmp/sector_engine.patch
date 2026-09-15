@@ -1,0 +1,45 @@
+﻿*** Begin Patch
+*** Update File: src/orchestrator/unified_engine.py
+@@
+     # 【Phase4 P2-1】板块分类版本
+     theme_version: str = ""
++    # F2-2 审计：板块状态/归属相对前一报告日的变化
++    sector_changes: Optional[Dict] = None
+@@
+ def run_unified_analysis(
+     data_mode: str = "daily",
+     market_mode: str = "defend",
+     sector_result=None,
+     sector_map: Dict[str, str] = None,
+     market_score: Optional[float] = None,
++    ref_date: str = "",
+ ) -> UnifiedSignalBatch:
+@@
+     except Exception as e:
+         logger.warning("sector_ranker 板块分类失败: %s", e)
++
++    # F2-2 审计：先留存板块级当日状态，主题映射后再比对个股归属。
++    sector_states: Dict[str, str] = {}
++    for info in ranker_result.values():
++        for sector in info.get("sectors", []):
++            name = str(sector.get("name") or "")
++            classification = str(sector.get("classification") or "")
++            if name and classification:
++                sector_states[name] = classification
+@@
+     except Exception as e:
+         logger.warning("主题归属修正失败（沿用原行业链路）: %s", e)
++
++    try:
++        from ..feedback.sector_changes import record_sector_changes
++        name_by_code = {s.get("code", ""): s.get("name", "") for s in stocks}
++        batch.sector_changes = record_sector_changes(
++            ref_date or __import__("datetime").date.today().isoformat(),
++            sector_states,
++            stock_sector,
++            stock_sector_status,
++            name_by_code=name_by_code,
++        )
++    except Exception as e:
++        logger.warning("板块变更快照失败: %s", e)
+*** End Patch

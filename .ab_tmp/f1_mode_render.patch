@@ -1,0 +1,50 @@
+﻿*** Begin Patch
+*** Update File: src/push/templates.py
+@@
+     if data.get("invalidation_triggered"):
+         content += "&nbsp;&nbsp;<b>⚠环境判定作废重估告警</b><br/>"
+     content += f"&nbsp;&nbsp;模式:{mn}<br/>"
++    mode_matrix = data.get("mode_transition_matrix") or []
++    if mode_matrix:
++        matrix_parts = []
++        for row in mode_matrix:
++            mark = "→" if row.get("is_current") else ""
++            matrix_parts.append(f"{mark}{row.get('label')}:{row.get('entry')}")
++        content += (
++            f"&nbsp;&nbsp;模式矩阵: "
++            f"{' | '.join(_esc(item) for item in matrix_parts)}<br/>"
++        )
++    from ..decision.mode_rules import render_market_panic_line
++    content += f"&nbsp;&nbsp;{_esc(render_market_panic_line(data.get('market_panic')))}<br/>"
+@@
+     sectors = data.get("sectors") or {}
+@@
+             if rt:
+                 content += f"&nbsp;&nbsp;退潮:{','.join(rt)}<br/>"
++
++    sector_changes = data.get("sector_changes") or {}
++    if sector_changes:
++        change_items = []
++        for item in sector_changes.get("status_changes") or []:
++            change_items.append(
++                f"{item.get('sector')}: {item.get('from_label')}→"
++                f"{item.get('to_label')}"
++            )
++        for item in sector_changes.get("mapping_changes") or []:
++            change_items.append(
++                f"{item.get('stock_name')}({item.get('stock_code')}): "
++                f"{item.get('from_label')}→{item.get('to_label')}"
++            )
++        if change_items:
++            content += "<br/><b>板块变更</b><br/>"
++            content += (
++                f"&nbsp;&nbsp;{' | '.join(_esc(item) for item in change_items)}<br/>"
++            )
++        elif sector_changes.get("baseline"):
++            content += (
++                "<br/><b>板块变更</b><br/>"
++                "&nbsp;&nbsp;基线已建立，次日输出变更<br/>"
++            )
+ 
+     content += "<br/>"
+*** End Patch

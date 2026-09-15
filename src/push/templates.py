@@ -4,6 +4,7 @@
 """
 from typing import Dict
 
+from ..analyzers.volume_pattern import build_volume_pattern, pattern_summary_line, render_volume_pattern
 from ..rules_version import get_rules_version
 
 def _pct(v: float, digits: int = 1) -> str:
@@ -286,9 +287,13 @@ def _institutional(data) -> str:
     emoji = "🟢" if score >= 2 else ("🔴" if score <= -2 else "⚪")
     scope = str(inst.get("label_scope") or "")
     valid_votes = inst.get("valid_vote_sources")
+    covered_sources = inst.get("covered_sources")
     if valid_votes is not None:
         parts.append(
-            f"{emoji}{label}({score:+d}票,多{bull}/空{bear},有效票源{valid_votes}/4)"
+            f"{emoji}{label}({score:+d}票,多{bull}/空{bear},"
+            f"有效票源{valid_votes}/4"
+            + (f",覆盖{covered_sources}/4" if covered_sources is not None else "")
+            + ")"
             + (f"[{scope}]" if scope else "")
         )
     else:
@@ -414,21 +419,9 @@ def _entry_decision_lines(data) -> list[str]:
     pattern_details = "/".join(pattern.get("details") or []) or "无信号"
     lines.append(f"②时机:{rsi_text}+{pattern_details}→{_vote_text(int(pattern.get('vote', 0) or 0))}")
 
-    volume = plan.get("volume_snapshot") or {}
-    volume_ratio = volume.get("volume_ratio")
-    turnover = volume.get("turnover_rate")
-    volume_text = f"量比{float(volume_ratio):.2f}" if volume_ratio is not None else "量比:N/A"
-    if turnover is not None:
-        p90 = volume.get("turnover_p90")
-        hot = "⚠️>P90过热" if volume.get("turnover_hot") else ""
-        p90_text = f"P90={float(p90):.2f}%" if p90 is not None else "P90=N/A"
-        volume_text += f" | 换手{float(turnover):.2f}%({p90_text}){hot}"
-    else:
-        volume_text += " | 换手:N/A"
-    order_text = _order_flow_text(tech)
-    if order_text:
-        volume_text += f" | {order_text}"
-    lines.append(f"③量能:{volume_text}")
+    # 【分型引擎】③量能从陈列升级为分型：涨跌×主动差×量能档×位置档 →
+    # 八型之一 + 冲突检测 + 确认条件（原始量比/换手/主动差在"数据"行可复核）
+    lines.extend(render_volume_pattern(build_volume_pattern(data)))
 
     fund = plan.get("fund_snapshot") or {}
     main_flows = fund.get("main_flows") or []
@@ -500,7 +493,6 @@ def _render_compact_observation_signal(data):
     trend = categories.get("trend") or {}
     momentum = categories.get("momentum") or {}
     pattern = categories.get("pattern") or {}
-    volume = categories.get("volume") or {}
     ma5 = data.get("ma5")
     ma10 = data.get("ma10")
     ma20 = data.get("ma20")
@@ -533,16 +525,9 @@ def _render_compact_observation_signal(data):
         f"{_esc('/'.join(pattern.get('details') or []) or '无信号')}"
         f"→{_vote_text(int(pattern.get('vote', 0) or 0))}<br/>"
     )
-    volume_ratio = data.get("volume_ratio")
-    turnover = data.get("turnover_rate")
-    volume_text = f"量比{float(volume_ratio):.2f}" if volume_ratio else "量比:N/A"
-    volume_text += f" | 换手{float(turnover):.2f}%" if turnover else " | 换手:N/A"
-    if volume.get("details"):
-        volume_text += " | " + "/".join(volume["details"])
-    order_text = _order_flow_text(tech)
-    if order_text:
-        volume_text += f" | {order_text}"
-    content += f"&nbsp;&nbsp;③量能:{_esc(volume_text)}<br/>"
+    # 【分型引擎】③量能从陈列升级为分型（与买入卡同引擎同口径）
+    for pattern_line in render_volume_pattern(build_volume_pattern(data)):
+        content += f"&nbsp;&nbsp;{_esc(pattern_line)}<br/>"
     content += f"&nbsp;&nbsp;④资金:{_esc(_institutional(data) or '无数据')}<br/>"
     buy_text = _esc(buy_note.replace("买入: ", "", 1) or "无买入拦截明细")
     buy_text = buy_text.replace("\n", "<br/>&nbsp;&nbsp;&nbsp;&nbsp;")
@@ -726,6 +711,9 @@ def _tech(data):
         order = "多头排列" if ma5 > ma10 > ma20 else "空头排列" if ma5 < ma10 < ma20 else "交叉震荡"
         parts.append(f"MA:{order}({_val(ma5)}/{_val(ma10)}/{_val(ma20)})")
     vr = data.get("volume_ratio")
+    volume_snapshot = data.get("tech_signals", {}).get("volume_snapshot", {})
+    if not isinstance(volume_snapshot, dict):
+        volume_snapshot = {}
     if vr:
         if vr < 1.0:
             label = "缩量"
@@ -733,7 +721,14 @@ def _tech(data):
             label = "放量"
         else:
             label = "量平"
-        parts.append(f"量比:{vr:.2f}x{label}")
+        source = volume_snapshot.get("volume_ratio_source") or data.get("volume_ratio_source") or "口径未标注"
+        volume_text = f"量比:{vr:.2f}x{label}(口径:{source}"
+        prev_ratio = volume_snapshot.get("volume_vs_prev_day")
+        if prev_ratio is not None:
+            volume_text += f",较前日{float(prev_ratio):.2f}x"
+        parts.append(volume_text + ")")
+    else:
+        parts.append("量比:数据未取到")
     ts = data.get("tech_signals",{})
     if ts:
         ema = ts.get("ema_cross","")
@@ -767,6 +762,12 @@ def _tech(data):
             if bias6_val is not None:
                 rsi_text += f"/BIAS6:{float(bias6_val):.1f}%"
             parts.append(f"{rsi_text}({zone})" if zone else rsi_text)
+        kdj = ts.get("kdj", {})
+        if kdj:
+            parts.append(f"KDJ:{float(kdj.get('k', 0)):.1f}/{float(kdj.get('d', 0)):.1f}/J{float(kdj.get('j', 0)):.1f}")
+        obv = ts.get("obv", {})
+        if obv.get("direction"):
+            parts.append(f"OBV:{obv.get('direction')}")
         adx = ts.get("adx")
         if adx: parts.append(f"ADX:{adx:.1f}({'趋势强' if adx>25 else '趋势弱' if adx<20 else '中性'})")
         bp = ts.get("bollinger",{}).get("position","")
@@ -778,7 +779,22 @@ def _tech(data):
         if vd:
             # 显示前 5 条投票明细，让推导过程透明
             top_details = " ".join(vd[:5])
-            parts.append(f"投票:{vote}({sc:+.1f}) ⓘ {_esc(top_details)}")
+            category_labels = {
+                "trend": "①方向", "momentum": "②时机",
+                "pattern": "③结构", "volume": "④量能",
+            }
+            categories = ts.get("category_votes") or {}
+            vote_values = []
+            for category, label in category_labels.items():
+                info = categories.get(category) or {}
+                value = _num_or_none(info.get("vote"))
+                weight = _num_or_none(info.get("weight"))
+                vote_values.append(
+                    f"{label}{value:+.1f}" if value is not None else f"{label}数据未取到"
+                )
+            detail_values = " ".join(vote_values)
+            parts.append(f"投票:{vote}({sc:+.1f})")
+            parts.append(f"评分明细: {detail_values} ⓘ {_esc(top_details)}")
         else:
             parts.append(f"投票:{vote}({sc:+.1f})")
     turnover = data.get("turnover_rate")
@@ -1110,6 +1126,18 @@ def render_environment_overview(data: Dict) -> str:
     if data.get("invalidation_triggered"):
         content += "&nbsp;&nbsp;<b>⚠环境判定作废重估告警</b><br/>"
     content += f"&nbsp;&nbsp;模式:{mn}<br/>"
+    mode_matrix = data.get("mode_transition_matrix") or []
+    if mode_matrix:
+        matrix_parts = []
+        for row in mode_matrix:
+            mark = "→" if row.get("is_current") else ""
+            matrix_parts.append(f"{mark}{row.get('label')}:{row.get('entry')}")
+        content += (
+            f"&nbsp;&nbsp;模式矩阵: "
+            f"{' | '.join(_esc(item) for item in matrix_parts)}<br/>"
+        )
+    from ..decision.mode_rules import render_market_panic_line
+    content += f"&nbsp;&nbsp;{_esc(render_market_panic_line(data.get('market_panic')))}<br/>"
 
     # P2-13 审计（2026-08-22）：非交易日复盘时标注数据参考日（上一交易日）
     ref_date = data.get("ref_date")
@@ -1189,6 +1217,30 @@ def render_environment_overview(data: Dict) -> str:
                 content += f"&nbsp;&nbsp;支线:{','.join(rs)}<br/>"
             if rt:
                 content += f"&nbsp;&nbsp;退潮:{','.join(rt)}<br/>"
+
+    sector_changes = data.get("sector_changes") or {}
+    if sector_changes:
+        change_items = []
+        for item in sector_changes.get("status_changes") or []:
+            change_items.append(
+                f"{item.get('sector')}: {item.get('from_label')}→"
+                f"{item.get('to_label')}"
+            )
+        for item in sector_changes.get("mapping_changes") or []:
+            change_items.append(
+                f"{item.get('stock_name')}({item.get('stock_code')}): "
+                f"{item.get('from_label')}→{item.get('to_label')}"
+            )
+        if change_items:
+            content += "<br/><b>板块变更</b><br/>"
+            content += (
+                f"&nbsp;&nbsp;{' | '.join(_esc(item) for item in change_items)}<br/>"
+            )
+        elif sector_changes.get("baseline"):
+            content += (
+                "<br/><b>板块变更</b><br/>"
+                "&nbsp;&nbsp;基线已建立，次日输出变更<br/>"
+            )
 
     content += "<br/>"
     return content

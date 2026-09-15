@@ -1,0 +1,17 @@
+﻿*** Begin Patch
+*** Update File: src/orchestrator/engine.py
+@@
+         batch = run_unified_analysis(
+             data_mode="realtime",
+             market_mode=market_mode,
+             sector_result=None,
+             sector_map={},
+             market_score=float(env.get("market_score", 0) or 0),
++            ref_date=ref_date,
+         )
+ 
+         # ---- 3. 构建信号列表 ----
+         sector_ranks = {}
+         env["sectors"] = {}
++        env["sector_changes"] = batch.sector_changes
+*** End Patch

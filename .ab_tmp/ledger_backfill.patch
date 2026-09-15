@@ -1,0 +1,85 @@
+﻿*** Begin Patch
+*** Update File: src/feedback/signal_ledger.py
+@@
+ import json
++import re
+ from typing import List, Optional
+@@
+ def get_signal_ledger(
+@@
+         cursor.execute(f"SELECT * FROM signal_ledger{where} ORDER BY t0_date, signal_id", params)
+         return [dict(row) for row in cursor.fetchall()]
++
++
++def backfill_snapshots_from_transition_logs() -> dict:
++    """Backfill close snapshots only from event-log-backed prices.
++
++    This is an append-only reconciliation pass.  Missing prices remain missing;
++    unknown historical events are never fabricated.
++    """
++    from ..analyzers.signal_lifecycle import _ensure_tables
++
++    filled = 0
++    skipped = 0
++    missing: List[dict] = []
++    with get_conn() as conn:
++        cursor = conn.cursor()
++        _ensure_tables(cursor)
++        ensure_signal_ledger_schema(cursor)
++        events = [dict(row) for row in cursor.execute(
++            "SELECT * FROM signal_events ORDER BY born_date"
++        )]
++        for event in events:
++            logs = [dict(row) for row in cursor.execute(
++                "SELECT * FROM signal_event_logs WHERE event_id=? ORDER BY id",
++                (event["event_id"],),
++            )]
++            candidates = []
++            for log in logs:
++                try:
++                    raw = log.get("trigger_data") or "{}"
++                    data = json.loads(raw) if isinstance(raw, str) else raw
++                except Exception:
++                    data = {}
++                snapshot_date = str(data.get("today") or log.get("created_at") or "")[:10]
++                if not snapshot_date:
++                    continue
++                for key in ("close", "price", "day_low"):
++                    try:
++                        price = float(data.get(key) or 0)
++                    except (TypeError, ValueError):
++                        continue
++                    if price > 0:
++                        candidates.append((snapshot_date, price, "transition_log"))
++                        break
++            reason = str(event.get("invalid_reason") or "")
++            match = re.search(r"收盘(?:价)?([0-9]+(?:\.[0-9]+)?)", reason)
++            if match:
++                date_text = ""
++                for log in logs:
++                    date_text = str(log.get("created_at") or "")[:10]
++                    if date_text:
++                        break
++                if date_text:
++                    candidates.append((date_text, float(match.group(1)), "terminal_reason"))
++            if not candidates:
++                missing.append({
++                    "signal_id": event["event_id"],
++                    "stock_name": event["stock_name"],
++                    "reason": "迁移日志无价格",
++                })
++                continue
++            for snapshot_date, price, source in candidates:
++                cursor.execute(
++                    """
++                    INSERT OR IGNORE INTO signal_event_daily_snapshots
++                    (event_id, snapshot_date, close_price, status, source)
++                    VALUES (?, ?, ?, ?, ?)
++                    """,
++                    (event["event_id"], snapshot_date, price, event["status"], source),
++                )
++                filled += cursor.rowcount
++            skipped += len(candidates)
++        conn.commit()
++    return {"filled": filled, "candidate_count": skipped, "missing": missing}
+*** End Patch

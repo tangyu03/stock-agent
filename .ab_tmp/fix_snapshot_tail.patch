@@ -1,0 +1,28 @@
+﻿*** Begin Patch
+*** Update File: src/feedback/signal_ledger.py
+@@
+     with get_conn() as conn:
+         cursor = conn.cursor()
+         ensure_signal_ledger_schema(cursor)
+         cursor.execute(
+             f"SELECT * FROM signal_tracking_stop_logs{where} ORDER BY log_date, event_id",
+             params,
+         )
+         return [dict(row) for row in cursor.fetchall()]
+-    try:
+-        with get_conn() as conn:
+-            cursor = conn.cursor()
+-            ensure_signal_ledger_schema(cursor)
+-            cursor.execute(
+-                """
+-                INSERT OR IGNORE INTO signal_event_daily_snapshots
+-                (event_id, snapshot_date, close_price, status)
+-                VALUES (?, ?, ?, ?)
+-                """,
+-                (event_id, snapshot_date, close_price, status),
+-            )
+-            conn.commit()
+-            return cursor.rowcount > 0
+-    except Exception:
+-        return False
+*** End Patch

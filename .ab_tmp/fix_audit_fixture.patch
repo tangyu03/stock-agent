@@ -1,0 +1,47 @@
+﻿*** Begin Patch
+*** Update File: src/feedback/signal_ledger.py
+@@
+             match = re.search(r"收盘(?:价)?([0-9]+(?:\.[0-9]+)?)", reason)
+             if match:
+                 date_text = ""
++                terminal_status = ""
+                 for log in logs:
+                     date_text = str(log.get("created_at") or "")[:10]
++                    terminal_status = _snapshot_status(log.get("to_status"))
+                     if date_text:
+                         break
+-                if date_text and date_text not in candidates:
++                if date_text and date_text not in candidates:
+                     candidates[date_text] = {
+                         "price": float(match.group(1)),
+-                        "status": _snapshot_status(event["status"]),
++                        "status": terminal_status
++                        or _snapshot_status(event["status"]),
+                         "source": "terminal_reason",
+                     }
+*** Update File: tests/test_audit_followups.py
+@@
+-# -*- coding: utf-8 -*-
+ from datetime import date
++import uuid
+ 
+ import pytest
+ 
+ from src.db import close_thread_connection, init_db
+@@
+ def sqlite_db(tmp_path, monkeypatch):
+     import src.db as db_module
+ 
+-    db_path = tmp_path / "audit-followups.db"
++    db_dir = Path(".ab_tmp") / f"audit-followups-{uuid.uuid4().hex}"
++    db_dir.mkdir(parents=True, exist_ok=False)
++    db_path = db_dir / "audit-followups.db"
+     monkeypatch.setattr(db_module, "DB_PATH", db_path)
+     close_thread_connection()
+     yield db_path
+     close_thread_connection()
++    import shutil
++
++    shutil.rmtree(db_dir, ignore_errors=True)
+*** End Patch
+*** End Patch

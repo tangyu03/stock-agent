@@ -1,0 +1,36 @@
+﻿*** Begin Patch
+*** Update File: src/feedback/event_tracker.py
+@@
+-def build_virtual_fill_counts(rows: List[Dict], target: int = 30) -> str:
++def build_virtual_fill_counts(
++    rows: List[Dict],
++    target: int = 30,
++    pending_historical: Optional[Dict[str, int]] = None,
++) -> str:
+@@
+-    completed = sum(
+-        count for status, label in MATCH_COUNT_LABELS.items()
+-        for count in [counts[label]]
+-        if status not in ("valid", "frozen")
+-    )
++    completed = sum(
++        counts[MATCH_COUNT_LABELS[status]]
++        for status in (
++            "struct_cancel", "expired", "chase_abandon",
++            "sig_stop", "sig_target", "time_exit",
++        )
++    )
++    historical_note = ""
++    for status, count in (pending_historical or {}).items():
++        label = MATCH_COUNT_LABELS.get(status, status)
++        if count:
++            historical_note += (
++                f" | {label}{count}"
++                "(历史事件，早于09-09，待补录)"
++            )
+     return (
+         "撮合计数: " + " ".join(f"{label}{count}" for label, count in counts.items())
+         + f" | 累计完结样本{completed}/{target}"
++        + historical_note
+     )
+*** End Patch

@@ -53,7 +53,7 @@ class TestInFlightBroadcast:
             ])
         text = render_in_flight_events(rows)
 
-        assert "在飞事件 1（活跃1）" in text
+        assert "在飞事件 1（活跃1/完结0）" in text
         assert "蘅东光通讯 确认追强 已成交" in text
         assert "#evt-000001" not in text
         assert "#t-000001" in text
@@ -99,8 +99,8 @@ class TestWatchLadderAndCounts:
 
         assert [r["stock_code"] for r in rows] == ["600001", "600002", "600003"]
         assert rows[0]["fail_count"] == 1
-        assert rows[0]["reason"] == "综合(本模式可入)：缺 ADX不足"
-        assert rows[2]["reason"] == "综合(本模式可入)：缺 差A+差B等3项"
+        assert rows[0]["reason"] == "综合(当前模式可评估)：缺 ADX不足"
+        assert rows[2]["reason"] == "综合(当前模式可评估)：缺 差A+差B等3项"
 
     def test_watch_ladder_shows_closest_strategy_and_missing_conditions(self):
         diagnostics = {
@@ -125,10 +125,10 @@ class TestWatchLadderAndCounts:
         rows = build_watch_ladder(diagnostics, stocks)
 
         assert [r["stock_code"] for r in rows] == ["688028", "300666"]
-        assert rows[0]["reason"] == "确认追强(本模式可入)：缺 ADX"
-        assert rows[1]["reason"] == "确认追强(本模式可入)：缺 ADX+外盘主动"
+        assert rows[0]["reason"] == "确认追强(当前模式可评估)：缺 ADX"
+        assert rows[1]["reason"] == "确认追强(当前模式可评估)：缺 ADX+外盘主动"
 
-    def test_watch_ladder_marks_in_flight_event(self):
+    def test_watch_ladder_excludes_active_in_flight_event(self):
         diagnostics = {
             "002975": (
                 "技术偏多但四种入场策略均未达到触发阈值\n策略检查:\n"
@@ -143,16 +143,13 @@ class TestWatchLadderAndCounts:
             "status_label": "已成交",
             "active": True,
         }]
-        row = build_watch_ladder(
+        rows = build_watch_ladder(
             diagnostics,
             [{"code": "002975", "name": "博杰股份"}],
             in_flight_events=in_flight,
-        )[0]
+        )
 
-        assert row["in_flight"] is True
-        assert row["in_flight_status_label"] == "已成交"
-        assert row["in_flight_event_id"].endswith("价量突破")
-        assert "⚠在飞：价量突破·已成交#" in row["reason"]
+        assert rows == []
 
     def test_watch_ladder_separates_cross_mode_candidates(self):
         diagnostics = {
@@ -169,11 +166,29 @@ class TestWatchLadderAndCounts:
 
         assert rows[0]["stock_code"] == "688028"
         assert rows[0]["cross_mode"] is False
-        assert "本模式可入" in rows[0]["reason"]
+        assert "当前模式可评估" in rows[0]["reason"]
         assert rows[1]["stock_code"] == "002975"
         assert rows[1]["cross_mode"] is True
         assert rows[1]["mode_required"] == "恐慌/撤退"
-        assert "需模式:恐慌/撤退" in rows[1]["reason"]
+        assert "需市场模式进入恐慌/撤退" in rows[1]["reason"]
+
+    def test_sector_retreat_is_hard_block_not_candidate(self):
+        rows = build_watch_ladder(
+            {
+                "301666": (
+                    "板块退潮，禁止新入场\n策略检查:\n"
+                    "- 全部策略: 板块退潮，禁止新买入\n"
+                ),
+            },
+            [{"code": "301666", "name": "大普微"}],
+        )
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["hard_blocked"] is True
+        assert row["reason"] == "新买入未触发：板块退潮"
+        assert "当前模式可评估" not in row["reason"]
+        assert "缺" not in row["reason"]
 
     def test_virtual_fill_counts_uses_lifecycle_states(self):
         rows = [
@@ -187,12 +202,27 @@ class TestWatchLadderAndCounts:
         text = build_virtual_fill_counts(rows, target=30)
 
         assert "成交1" in text
-        assert "结构失败撤单1" in text
-        assert "信号止损1" in text
+        assert "结构失败撤单2" in text
+        assert "信号止损0" in text
         assert "到期1" in text
         assert "追高放弃1" in text
-        assert "在飞1" in text
-        assert "累计完结样本5/30" in text
+        assert "等待回踩1" in text
+        assert "累计完结样本4/30" in text
+
+    def test_structural_stop_is_not_signal_stop(self):
+        from src.signal_states import canonical_match_status
+
+        assert canonical_match_status(
+            "invalidated", "收盘474.00跌破止损线476.75，结构失败，买单撤单"
+        ) == "struct_cancel"
+        assert canonical_match_status("invalidated", "先触及止损价") == "sig_stop"
+
+    def test_unbacked_historical_count_is_disclosed(self):
+        text = build_virtual_fill_counts(
+            [], target=30, pending_historical={"sig_stop": 1},
+        )
+        assert "信号止损1" in text
+        assert "历史事件，早于09-09，待补录" in text
 
     def test_cancel_word_only_applies_to_structural_cancel(self):
         rows = [
@@ -202,6 +232,6 @@ class TestWatchLadderAndCounts:
         ]
         text = build_virtual_fill_counts(rows, target=30)
 
-        assert "结构失败撤单1" in text
-        assert "信号止损2" in text
+        assert "结构失败撤单2" in text
+        assert "信号止损1" in text
         assert " 撤单" not in text

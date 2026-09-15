@@ -45,6 +45,8 @@ class UnifiedSignalBatch:
     budget_blocked: List[Dict] = field(default_factory=list)
     # 【Phase4 P2-1】板块分类版本
     theme_version: str = ""
+    # F2-2 审计：板块状态/归属相对前一报告日的变化
+    sector_changes: Optional[Dict] = None
 
 
 def _build_sector_for_stock(code: str, sector_map: Dict[str, str],
@@ -97,7 +99,7 @@ def _explain_no_entry(
     strategy_reasons = _strategy_blockers(market_mode, sector_status, tech_data)
 
     if sector_status == "retreating":
-        primary = "板块退潮，禁止新入场"
+        primary = "板块退潮，新买入未触发"
     elif market_mode == "retreat":
         primary = "撤退模式只允许恐慌抄底"
     elif tech_score < 0:
@@ -125,7 +127,7 @@ def _strategy_blockers(
 ) -> List[str]:
     """List the entry gate that failed for each of the five strategies."""
     if sector_status == "retreating":
-        return ["全部策略: 板块退潮，禁止新买入"]
+        return ["全部策略: 新买入未触发（板块退潮）"]
 
     blockers: List[str] = []
     panic_reason = _panic_bottom_blocker(tech_data)
@@ -205,16 +207,32 @@ def _defensive_gate_blocker_text(tech_data: Dict, sector_status: str) -> str:
         gate = engine._defensive_chase_gates(tech_data, sector_status)
         if gate["passed"]:
             return ""  # 三重门已过 → 实际信号应已生成（此处不展示拦截）
-        return "；".join(gate["evidence"])
+        failed = sorted(
+            (item for item in gate.get("gap_items", []) if item.get("gap", 0) > 0),
+            key=lambda item: item["gap"],
+        )[:3]
+        summary = "|".join(
+            f"{item['item']}{'超' if item.get('direction') == 'lt' else '缺'}{item['gap']:.0f}%"
+            for item in failed
+        )
+        passed = int(gate.get("checks_passed", 0))
+        total = int(gate.get("check_total", 0))
+        return (
+            f"确认追强{passed}/{total}达标"
+            + (f" | 缺口前三: {summary}" if summary else "")
+            + "；全量清单入审计字段"
+        )
     except Exception:
         return "三重门评估不可用"
 
 
 def _panic_bottom_blocker(tech_data: Dict) -> str:
-    index_drop = abs(float(tech_data.get("index_daily_drop", 0) or 0))
-    gem_star_drop = abs(float(tech_data.get("gem_sci_tech_drop", 0) or 0))
-    ad_ratio = float(tech_data.get("advance_decline_ratio", 1.0) or 1.0)
-    market_panic = index_drop > 4.0 or gem_star_drop > 5.0 or ad_ratio < 0.15
+    from ..decision.mode_rules import evaluate_market_panic
+    market_panic = evaluate_market_panic(
+        index_drop=tech_data.get("index_daily_drop"),
+        gem_star_drop=tech_data.get("gem_sci_tech_drop"),
+        ad_ratio=tech_data.get("advance_decline_ratio"),
+    )["triggered"]
     if not market_panic:
         return "正常行情，未触发"
 
@@ -327,6 +345,7 @@ def run_unified_analysis(
     sector_result=None,
     sector_map: Dict[str, str] = None,
     market_score: Optional[float] = None,
+    ref_date: str = "",
 ) -> UnifiedSignalBatch:
     """
     统一分析入口。
@@ -373,6 +392,15 @@ def run_unified_analysis(
     except Exception as e:
         logger.warning("sector_ranker 板块分类失败: %s", e)
 
+    # F2-2 审计：先留存板块级当日状态，主题映射后再比对个股归属。
+    sector_states: Dict[str, str] = {}
+    for info in ranker_result.values():
+        for sector in info.get("sectors", []):
+            name = str(sector.get("name") or "")
+            classification = str(sector.get("classification") or "")
+            if name and classification:
+                sector_states[name] = classification
+
     # 【二】主题归属修正（Phase2-B）：行业数据库自动映射把澜起/海光/大普微/
     # 中科飞测/芯碁微装/胜蓝/兆易创新误归“电子化学品”，骄成超声误归“电池”，
     # 创世纪误归“自动化设备”——而板块状态直接决定“禁追强/低吸可用”闸门。
@@ -391,6 +419,19 @@ def run_unified_analysis(
         batch.theme_version = get_theme_version()
     except Exception as e:
         logger.warning("主题归属修正失败（沿用原行业链路）: %s", e)
+
+    try:
+        from ..feedback.sector_changes import record_sector_changes
+        name_by_code = {s.get("code", ""): s.get("name", "") for s in stocks}
+        batch.sector_changes = record_sector_changes(
+            ref_date or __import__("datetime").date.today().isoformat(),
+            sector_states,
+            stock_sector,
+            stock_sector_status,
+            name_by_code=name_by_code,
+        )
+    except Exception as e:
+        logger.warning("板块变更快照失败: %s", e)
 
     # 引擎
     timing = get_timing_engine()
@@ -526,6 +567,18 @@ def run_unified_analysis(
 
     # -------- 2. 出场信号（全量扫）--------
     logger.info("--- 统一引擎：出场检查 ---")
+    frozen_scores = {}
+    for s in stocks:
+        code = s.get("code", "")
+        score = ((timing._tech_data_full.get(code) or {}).get("tech_signals") or {}).get("vote_score")
+        if score is not None:
+            frozen_scores[code] = float(score)
+    try:
+        batch.event_notices.extend(
+            timing.run_daily_event_unfreeze(frozen_scores)
+        )
+    except Exception as e:
+        logger.debug("日终解冻批处理失败: %s", e)
     for s in stocks:
         code = s.get("code", "")
         name = s.get("name", code)

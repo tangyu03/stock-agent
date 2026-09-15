@@ -1,0 +1,197 @@
+"""Sector status and mapping change disclosure (F2-2)."""
+
+from typing import Dict, Iterable, Optional
+
+from ..db import get_conn
+
+
+STATUS_LABELS = {
+    "main_trend": "主线",
+    "rotational": "轮动",
+    "retreating": "退潮",
+    "unknown": "未知",
+}
+
+
+def _label(status: Optional[str]) -> str:
+    return STATUS_LABELS.get(str(status or ""), str(status or "数据未取到"))
+
+
+def _normalize_date(value: str) -> str:
+    return str(value or "")[:10]
+
+
+def _strictest(statuses: Iterable[Optional[str]]) -> str:
+    priority = {"retreating": 3, "main_trend": 2, "rotational": 1, "unknown": 0}
+    valid = [str(value) for value in statuses if value]
+    return max(valid, key=lambda value: priority.get(value, -1)) if valid else "unknown"
+
+
+def _ensure_schema(cursor) -> None:
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS sector_status_history (
+        snapshot_date TEXT NOT NULL,
+        sector_name TEXT NOT NULL,
+        classification TEXT NOT NULL,
+        source TEXT DEFAULT 'sector_ranker',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (snapshot_date, sector_name)
+    )
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS stock_sector_history (
+        snapshot_date TEXT NOT NULL,
+        stock_code TEXT NOT NULL,
+        stock_name TEXT,
+        sector_name TEXT NOT NULL,
+        classification TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (snapshot_date, stock_code)
+    )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sector_status_history_date "
+        "ON sector_status_history(snapshot_date)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_stock_sector_history_date "
+        "ON stock_sector_history(snapshot_date, stock_code)"
+    )
+
+
+def _load_sector_snapshot(cursor, snapshot_date: str) -> Dict[str, str]:
+    cursor.execute(
+        "SELECT sector_name, classification FROM sector_status_history "
+        "WHERE snapshot_date = ?",
+        (snapshot_date,),
+    )
+    return {row["sector_name"]: row["classification"] for row in cursor.fetchall()}
+
+
+def _load_stock_snapshot(cursor, snapshot_date: str) -> Dict[str, Dict]:
+    cursor.execute(
+        "SELECT stock_code, stock_name, sector_name, classification "
+        "FROM stock_sector_history WHERE snapshot_date = ?",
+        (snapshot_date,),
+    )
+    return {
+        row["stock_code"]: {
+            "stock_name": row["stock_name"],
+            "sector_name": row["sector_name"],
+            "classification": row["classification"],
+        }
+        for row in cursor.fetchall()
+    }
+
+
+def build_sector_changes(
+    sector_states: Dict[str, str],
+    stock_sector: Dict[str, str],
+    stock_sector_status: Dict[str, str],
+    previous_sectors: Dict[str, str],
+    previous_stocks: Dict[str, Dict],
+    name_by_code: Optional[Dict[str, str]] = None,
+) -> Dict:
+    """Compare the current sector projection with the previous report date."""
+    name_by_code = name_by_code or {}
+    status_changes = []
+    for sector in sorted(set(sector_states) | set(previous_sectors)):
+        before = previous_sectors.get(sector)
+        after = sector_states.get(sector)
+        if before is not None and after is not None and before != after:
+            status_changes.append({
+                "sector": sector,
+                "from": before,
+                "to": after,
+                "from_label": _label(before),
+                "to_label": _label(after),
+            })
+
+    mapping_changes = []
+    for code in sorted(set(stock_sector) | set(previous_stocks)):
+        before = previous_stocks.get(code)
+        after_sector = stock_sector.get(code)
+        after_status = stock_sector_status.get(code)
+        if not after_sector or not after_status or not before:
+            continue
+        if (
+            before.get("sector_name") != after_sector
+            or before.get("classification") != after_status
+        ):
+            mapping_changes.append({
+                "stock_code": code,
+                "stock_name": name_by_code.get(code) or before.get("stock_name") or code,
+                "from_sector": before.get("sector_name"),
+                "to_sector": after_sector,
+                "from": before.get("classification"),
+                "to": after_status,
+                "from_label": _label(before.get("classification")),
+                "to_label": _label(after_status),
+            })
+
+    return {
+        "baseline": not previous_sectors and not previous_stocks,
+        "status_changes": status_changes,
+        "mapping_changes": mapping_changes,
+    }
+
+
+def record_sector_changes(
+    ref_date: str,
+    sector_states: Dict[str, str],
+    stock_sector: Dict[str, str],
+    stock_sector_status: Dict[str, str],
+    name_by_code: Optional[Dict[str, str]] = None,
+) -> Optional[Dict]:
+    """Persist one report-date projection and return changes from the prior date."""
+    ref_date = _normalize_date(ref_date)
+    if not ref_date or (not sector_states and not stock_sector):
+        return None
+
+    with get_conn() as conn:
+        cursor = conn.cursor()
+        _ensure_schema(cursor)
+        cursor.execute(
+            "SELECT snapshot_date FROM sector_status_history "
+            "WHERE snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1",
+            (ref_date,),
+        )
+        previous_row = cursor.fetchone()
+        previous_date = previous_row["snapshot_date"] if previous_row else ""
+        previous_sectors = _load_sector_snapshot(cursor, previous_date) if previous_date else {}
+        previous_stocks = _load_stock_snapshot(cursor, previous_date) if previous_date else {}
+        result = build_sector_changes(
+            sector_states,
+            stock_sector,
+            stock_sector_status,
+            previous_sectors,
+            previous_stocks,
+            name_by_code=name_by_code,
+        )
+        result["ref_date"] = ref_date
+        result["previous_date"] = previous_date
+
+        for sector, classification in sector_states.items():
+            cursor.execute(
+                "INSERT OR IGNORE INTO sector_status_history "
+                "(snapshot_date, sector_name, classification) VALUES (?, ?, ?)",
+                (ref_date, sector, classification),
+            )
+        for code, sector in stock_sector.items():
+            status = stock_sector_status.get(code)
+            if not sector or not status:
+                continue
+            cursor.execute(
+                "INSERT OR IGNORE INTO stock_sector_history "
+                "(snapshot_date, stock_code, stock_name, sector_name, classification) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    ref_date,
+                    code,
+                    (name_by_code or {}).get(code, ""),
+                    sector,
+                    status,
+                ),
+            )
+        conn.commit()
+        return result

@@ -1,0 +1,41 @@
+﻿*** Begin Patch
+*** Update File: src/loop/market_mode_adaptive.py
+@@
+         market_env = None
+         try:
+             from ..analyzers.market_env import get_market_environment
+             market_env = get_market_environment(force_refresh)
+         except Exception as e:
+             logger.debug("市场环境增强指标跳过: %s", e)
++
++        # F1-2 审计：环境层与恐慌抄底策略引用同一个市场侧恐慌判定。
++        try:
++            from ..decision.mode_rules import (
++                build_mode_transition_matrix,
++                evaluate_market_panic,
++            )
++            index_drop = (
++                market_env.get("csi300_change_pct")
++                if market_env and market_env.get("csi300_close")
++                else None
++            )
++            market_panic = evaluate_market_panic(
++                index_drop=index_drop,
++                gem_star_drop=None,
++                ad_ratio=(market_env or {}).get("ad_ratio"),
++            )
++            mode_transition_matrix = build_mode_transition_matrix(mode)
++        except Exception as e:
++            logger.debug("模式矩阵/恐慌口径构建失败: %s", e)
++            market_panic = None
++            mode_transition_matrix = []
+ 
+         return {
+@@
+             "external_market": external_market,
+             "style_spread": style_spread,
+             "market_env": market_env,
++            "market_panic": market_panic,
++            "mode_transition_matrix": mode_transition_matrix,
+         }
+*** End Patch

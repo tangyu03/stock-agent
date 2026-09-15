@@ -825,6 +825,45 @@ class MarketModeAdaptive:
         except Exception as e:
             logger.debug("市场环境增强指标跳过: %s", e)
 
+        # F1-2 审计：环境层与恐慌抄底策略引用同一个市场侧恐慌判定。
+        try:
+            from ..decision.mode_rules import (
+                build_mode_transition_matrix,
+                evaluate_market_panic,
+            )
+            index_drop = None
+            if index_kline and len(index_kline) >= 2:
+                try:
+                    last = float(index_kline[-1].get("close") or 0)
+                    prev = float(index_kline[-2].get("close") or 0)
+                    if last > 0 and prev > 0:
+                        index_drop = (last / prev - 1.0) * 100.0
+                except (TypeError, ValueError):
+                    index_drop = None
+            gem_star_drop = None
+            if gem_sci_tech:
+                gem = gem_sci_tech.get("gem") or {}
+                star = gem_sci_tech.get("star") or {}
+                drops = []
+                for item in (gem, star):
+                    try:
+                        change = float(item.get("change_pct") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if change < 0:
+                        drops.append(-change)
+                gem_star_drop = max(drops) if drops else 0.0
+            market_panic = evaluate_market_panic(
+                index_drop=index_drop,
+                gem_star_drop=gem_star_drop,
+                ad_ratio=(market_env or {}).get("ad_ratio"),
+            )
+            mode_transition_matrix = build_mode_transition_matrix(mode)
+        except Exception as e:
+            logger.debug("模式矩阵/恐慌口径构建失败: %s", e)
+            market_panic = None
+            mode_transition_matrix = []
+
         return {
             "mode": mode,
             "score": score,
@@ -840,6 +879,8 @@ class MarketModeAdaptive:
             "external_market": external_market,
             "style_spread": style_spread,
             "market_env": market_env,
+            "market_panic": market_panic,
+            "mode_transition_matrix": mode_transition_matrix,
         }
 
     def get_mode_series(self, index_kline: List[Dict]) -> Dict[str, str]:

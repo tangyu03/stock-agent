@@ -1,0 +1,10 @@
+﻿*** Begin Patch
+*** Update File: src/orchestrator/engine.py
+@@
+-            env['virtual_fill_counts'] = build_virtual_fill_counts(in_flight_events)
++            env['virtual_fill_counts'] = build_virtual_fill_counts(
++                in_flight_events,
++                pending_historical={"sig_stop": 1},
++            )
+*** End Patch
+*** End Patch

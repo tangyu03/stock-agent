@@ -585,7 +585,9 @@ def test_observation_render_uses_compact_reasoning_format():
     assert "市场:防守(5.0)" in rendered
     assert "①方向:MACD死叉延续" in rendered
     assert "②时机:RSI14=30.3(不投票)" in rendered
-    assert "③量能:量比0.86" in rendered
+    # 【分型引擎】③从陈列升级为分型；无内外盘时降级为"盘口数据不足"+数据行
+    assert "③量能 [盘口数据不足]" in rendered
+    assert "量比0.86(缩量)" in rendered
     assert "④资金:🔴资金看空" in rendered or "资金看空(-3票" in rendered
     assert "⑤拦截:技术投票偏空" in rendered
     assert "⑥风控:止损未触发" in rendered

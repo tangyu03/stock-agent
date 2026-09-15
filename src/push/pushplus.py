@@ -250,6 +250,7 @@ class PushPlus:
 
         from .templates import (
             _esc,
+            pattern_summary_line,
             render_environment_overview,
             render_entry_signal,
             render_exit_signal,
@@ -330,14 +331,29 @@ class PushPlus:
                 )
             content += "<br/>"
 
-        # 【P1-5】候梯前排：按差几个条件排序，直接回答接下来盯谁。
+        # 【P1-5】候梯只解释观察票为什么未触发，不是买入指令。
         watch_ladder = environment.get("watch_ladder") or []
+        if watch_ladder:
+            content += (
+                "<b>未触发说明</b><br/>&nbsp;&nbsp;以下只解释为什么没有买入信号；"
+                "买入只看“买入信号”区。<br/><br/>"
+            )
         current_mode_ladder = [
-            item for item in watch_ladder if not item.get("cross_mode")
+            item for item in watch_ladder
+            if not item.get("cross_mode") and not item.get("hard_blocked")
         ]
         cross_mode_ladder = [item for item in watch_ladder if item.get("cross_mode")]
+        hard_blocked_ladder = [item for item in watch_ladder if item.get("hard_blocked")]
+        if hard_blocked_ladder:
+            content += "<b>未触发买入(板块退潮)</b><br/>"
+            for item in hard_blocked_ladder[:5]:
+                content += (
+                    f"&nbsp;&nbsp;{_esc(stock_identity(item))} | "
+                    f"{_esc(item.get('reason', ''))}<br/>"
+                )
+            content += "<br/>"
         if current_mode_ladder:
-            content += "<b>候梯前排</b><br/>"
+            content += "<b>未触发候选(当前模式可评估)</b><br/>"
             for item in current_mode_ladder[:5]:
                 content += (
                     f"&nbsp;&nbsp;{_esc(stock_identity(item))} | "
@@ -346,7 +362,7 @@ class PushPlus:
             content += "<br/>"
 
         if cross_mode_ladder:
-            content += "<b>跨模式候梯(当前不可触发)</b><br/>"
+            content += "<b>未触发候选(当前模式不可触发)</b><br/>"
             for item in cross_mode_ladder[:5]:
                 content += (
                     f"&nbsp;&nbsp;{_esc(stock_identity(item))} | "
@@ -387,6 +403,25 @@ class PushPlus:
                 if i < len(observations) - 1:
                     content += "<br/><hr/>"
             content += "<br/>"
+
+        # 【分型引擎】报告级收尾：一屏扫完所有在推标的的盘口定性
+        # （老手收盘后翻自选的那一眼）。同一标的买卖卡并存时只报一次。
+        pattern_rows = []
+        seen_pattern_codes = set()
+        for s in [*entries, *exits, *observations]:
+            code = str(s.get("stock_code") or "")
+            if code and code in seen_pattern_codes:
+                continue
+            seen_pattern_codes.add(code)
+            row = pattern_summary_line(s)
+            if row:
+                pattern_rows.append(row)
+        if pattern_rows:
+            content += (
+                "<b>量能判定一览</b><br/>&nbsp;&nbsp;"
+                + _esc(" ".join(pattern_rows))
+                + "<br/><br/>"
+            )
 
         # 级别
         has_urgent = any(s.get("urgency") == "紧急" for s in exits)

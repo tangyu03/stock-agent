@@ -247,6 +247,11 @@ timing:
       enabled: true
       weakness_medium_min: 2              # 止损类：技术走弱 medium≥此值即出（原3）
 
+    # 极端超卖共振：只降级非价位类的技术走弱；破位止损永不拦截。
+    oversold:
+      rsi6_min: 25.0                      # RSI6 ≤ 25
+      kdj_j_max: 5.0                      # KDJ-J ≤ 5
+
     # 破位止损/预警
     breakdown:
       volume_confirm_ratio: 0.8          # 量比 > 0.8 才视为有效破位
@@ -286,6 +291,13 @@ timing:
     atr_period: 14                       # ATR 周期
     atr_multiplier: 2                    # buffer = N × ATR
     fallback_buffer_ratio: 0.02          # K线不足时退化为 当前价 × 2%
+    tracking_stop:
+      definition: "技术支撑跟踪线，逐日重算，只作风控提示；事件Z仍是买入事件的结构位硬止损"
+      enabled_from: filled
+      supports: [MA5, MA10, MA20, BOLL下轨]
+      algorithm: "近端支撑×multiplier；无近端支撑用当前价×fallback_support_ratio"
+      only_up: false
+      change_log: true
 
   # ──────────────── 推导链投票阈值 (_build_derivation) ────────────────
   derivation:

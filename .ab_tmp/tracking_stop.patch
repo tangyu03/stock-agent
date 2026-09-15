@@ -1,0 +1,87 @@
+﻿*** Begin Patch
+*** Update File: src/feedback/signal_ledger.py
+@@
+ def ensure_signal_ledger_schema(cursor=None) -> None:
+@@
+     CREATE INDEX IF NOT EXISTS idx_signal_event_daily_snapshots_event
+     ON signal_event_daily_snapshots(event_id, snapshot_date)
+     """)
++    cursor.execute("""
++    CREATE TABLE IF NOT EXISTS signal_tracking_stop_logs (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        event_id TEXT NOT NULL,
++        log_date TEXT NOT NULL,
++        event_stop REAL,
++        tracking_stop REAL,
++        current_price REAL,
++        rules_version TEXT DEFAULT '',
++        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
++        UNIQUE(event_id, log_date)
++    )
++    """)
++    cursor.execute("""
++    CREATE INDEX IF NOT EXISTS idx_signal_tracking_stop_logs_event
++    ON signal_tracking_stop_logs(event_id, log_date)
++    """)
+@@
+ def record_daily_snapshot(
+@@
+         return False
++
++
++def record_tracking_stop(
++    event_id: str,
++    log_date: str,
++    event_stop: Optional[float],
++    tracking_stop: Optional[float],
++    current_price: Optional[float],
++    rules_version: str = "",
++) -> bool:
++    """Append the daily tracking-stop snapshot; intraday replays are ignored."""
++    if not event_id or not log_date:
++        return False
++    try:
++        with get_conn() as conn:
++            cursor = conn.cursor()
++            ensure_signal_ledger_schema(cursor)
++            cursor.execute(
++                """
++                INSERT OR IGNORE INTO signal_tracking_stop_logs
++                (event_id, log_date, event_stop, tracking_stop,
++                 current_price, rules_version)
++                VALUES (?, ?, ?, ?, ?, ?)
++                """,
++                (
++                    event_id,
++                    log_date,
++                    float(event_stop) if event_stop else None,
++                    float(tracking_stop) if tracking_stop else None,
++                    float(current_price) if current_price else None,
++                    rules_version,
++                ),
++            )
++            conn.commit()
++            return cursor.rowcount > 0
++    except Exception:
++        return False
++
++
++def get_tracking_stop_logs(event_id: str = "", log_date: str = "") -> List[dict]:
++    clauses = []
++    params: List[object] = []
++    if event_id:
++        clauses.append("event_id = ?")
++        params.append(event_id)
++    if log_date:
++        clauses.append("log_date = ?")
++        params.append(log_date)
++    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
++    with get_conn() as conn:
++        cursor = conn.cursor()
++        ensure_signal_ledger_schema(cursor)
++        cursor.execute(
++            f"SELECT * FROM signal_tracking_stop_logs{where} ORDER BY log_date, event_id",
++            params,
++        )
++        return [dict(row) for row in cursor.fetchall()]
+*** End Patch

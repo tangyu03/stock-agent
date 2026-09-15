@@ -1,4 +1,6 @@
 from datetime import date
+from pathlib import Path
+import uuid
 
 import pytest
 
@@ -8,14 +10,19 @@ from src.feedback.signal_ledger import get_signal_ledger
 
 
 @pytest.fixture
-def sqlite_db(tmp_path, monkeypatch):
+def sqlite_db(monkeypatch):
     import src.db as db_module
 
-    db_path = tmp_path / "signal-ledger.db"
+    db_dir = Path(".ab_tmp") / f"signal-ledger-{uuid.uuid4().hex}"
+    db_dir.mkdir(parents=True, exist_ok=False)
+    db_path = db_dir / "signal-ledger.db"
     monkeypatch.setattr(db_module, "DB_PATH", db_path)
     close_thread_connection()
     yield db_path
     close_thread_connection()
+    import shutil
+
+    shutil.rmtree(db_dir, ignore_errors=True)
 
 
 def test_ledger_projects_event_lifecycle_and_close_snapshot(sqlite_db):

@@ -1349,13 +1349,14 @@ class TimingEngine:
             if direction == "ge":
                 ok = value >= threshold
                 gap_pct = max(0.0, (threshold - value) / abs(threshold) * 100.0) if threshold else 0.0
-                rel = "缺" if not ok else "余"
+                rel = "缺" if not ok else "✓"
             else:
                 ok = value <= threshold
                 gap_pct = max(0.0, (value - threshold) / abs(threshold) * 100.0) if threshold else 0.0
-                rel = "超" if not ok else "余"
+                rel = "超" if not ok else "✓"
             return (
-                f"{label} {fmt.format(value)}/{fmt.format(threshold)} {rel}{gap_pct:.0f}%",
+                f"{label} {fmt.format(value)}/{fmt.format(threshold)} "
+                + (f"{rel}{gap_pct:.0f}%" if not ok else "✓"),
                 gap_pct,
             )
 
@@ -1394,16 +1395,16 @@ class TimingEngine:
             )
             gate1_checks["创新高"] = gap == 0.0
             gate1_text.append(text)
-            gap_items.append({"gate": "确认追强", "item": "创新高", "gap": gap})
+            gap_items.append({"gate": "确认追强", "item": "创新高", "gap": gap, "direction": "ge"})
         else:
             gate1_checks["创新高"] = False
             gate1_text.append(f"创新高 数据未取到(阈值{new_high_ratio:.2f}×近段高)")
-            gap_items.append({"gate": "确认追强", "item": "创新高", "gap": 100.0})
+            gap_items.append({"gate": "确认追强", "item": "创新高", "gap": 100.0, "direction": "ge"})
 
         text, gap = _gap("量比", volume_ratio, volume_ratio_min, "ge", "{:.2f}")
         gate1_checks["量比"] = gap == 0.0
         gate1_text.append(text)
-        gap_items.append({"gate": "确认追强", "item": "量比", "gap": gap})
+        gap_items.append({"gate": "确认追强", "item": "量比", "gap": gap, "direction": "ge"})
 
         projected_ok = projected is not None and snapshot.projection_mode == "ok"
         volume_value = projected if projected_ok else snapshot.volume_vs_ma60
@@ -1412,12 +1413,12 @@ class TimingEngine:
         text, gap = _gap(volume_label, volume_value, volume_threshold, "ge", "{:.2f}x")
         gate1_checks["量能(外推或实际)"] = gap == 0.0
         gate1_text.append(text)
-        gap_items.append({"gate": "确认追强", "item": "量能", "gap": gap})
+        gap_items.append({"gate": "确认追强", "item": "量能", "gap": gap, "direction": "ge"})
 
         text, gap = _gap("ADX", adx, adx_min, "ge", "{:.1f}")
         gate1_checks["ADX单边力度"] = gap == 0.0
         gate1_text.append(text)
-        gap_items.append({"gate": "确认追强", "item": "ADX", "gap": gap})
+        gap_items.append({"gate": "确认追强", "item": "ADX", "gap": gap, "direction": "ge"})
 
         if outer is None or inner is None:
             gate1_checks["外盘主动"] = True
@@ -1426,13 +1427,13 @@ class TimingEngine:
             text, gap = _gap("外盘/内盘", float(outer), float(inner), "ge", "{:.0f}")
             gate1_checks["外盘主动"] = gap == 0.0
             gate1_text.append(text)
-            gap_items.append({"gate": "确认追强", "item": "外盘主动", "gap": gap})
+            gap_items.append({"gate": "确认追强", "item": "外盘主动", "gap": gap, "direction": "ge"})
 
         # 【Phase5 回炉】文案带口径：实际判定用 RSI14；同条件两判定的口径差异可见。
         text, gap = _gap("RSI14", rsi, rsi_overheat, "lt", "{:.1f}")
         gate1_checks[f"RSI14未过热(<{rsi_overheat:.0f})"] = gap == 0.0
         gate1_text.append(f"RSI14未过热(<{rsi_overheat:.0f})：{text}")
-        gap_items.append({"gate": "确认追强", "item": "RSI", "gap": gap})
+        gap_items.append({"gate": "确认追强", "item": "RSI14", "gap": gap, "direction": "lt"})
 
         gate1_failed = [k for k, v in gate1_checks.items() if not v]
         if gate1_failed:
@@ -1465,12 +1466,12 @@ class TimingEngine:
             "净利同比", profit_yoy, profit_yoy_min, "ge", "{:.1f}%"
         )
         if profit_gap:
-            gap_items.append({"gate": "确认追强", "item": "净利同比", "gap": profit_gap})
+            gap_items.append({"gate": "确认追强", "item": "净利同比", "gap": profit_gap, "direction": "ge"})
         dispersion_text, dispersion_gap = _gap(
-            "筹码分散", shareholder_change, dispersion_max * 100.0, "lt", "{:.1f}%"
+            "筹码分散", shareholder_change, dispersion_max, "lt", "{:.1%}"
         )
         if shareholder_change is not None and dispersion_gap:
-            gap_items.append({"gate": "确认追强", "item": "筹码分散", "gap": dispersion_gap})
+            gap_items.append({"gate": "确认追强", "item": "筹码分散", "gap": dispersion_gap, "direction": "lt"})
         gate2_checks = {
             "净利同比达标": bool(profit_yoy is not None and profit_yoy >= profit_yoy_min),
             "无业绩雷/降级": bool(verdict not in ("veto", "warn")) if verdict else (profit_yoy is not None),
@@ -1494,10 +1495,25 @@ class TimingEngine:
                 f"/主线，差距不可量化)"
             )
 
+        tech_data["defensive_gate_audit"] = {
+            "gap_items": gap_items,
+            "check_total": len(gate1_checks) + len(gate2_checks) + 1,
+            "checks_passed": (
+                sum(1 for value in gate1_checks.values() if value)
+                + sum(1 for value in gate2_checks.values() if value)
+                + (1 if sector_status == "main_trend" else 0)
+            ),
+        }
         return {
             "passed": not evidence,
             "evidence": evidence,
             "gap_items": gap_items,
+            "check_total": len(gate1_checks) + len(gate2_checks) + 1,
+            "checks_passed": (
+                sum(1 for value in gate1_checks.values() if value)
+                + sum(1 for value in gate2_checks.values() if value)
+                + (1 if sector_status == "main_trend" else 0)
+            ),
             "min_gate_gap": min((x["gap"] for x in gap_items), default=100.0),
             "projected_volume": projected,
             "snapshot": snapshot,
@@ -1836,6 +1852,29 @@ class TimingEngine:
 
     # ============ 出场信号 ============
 
+    def _volume_context(self, tech_data: Dict[str, Any]) -> str:
+        """输出量能的判定口径，禁止只给一个无法复核的量比。"""
+        ratio = tech_data.get("volume_ratio")
+        try:
+            ratio = float(ratio) if ratio is not None else None
+        except (TypeError, ValueError):
+            ratio = None
+        if ratio is None:
+            return "量能:数据未取到"
+        snapshot = tech_data.get("tech_signals", {}).get("volume_snapshot", {})
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        source = str(snapshot.get("volume_ratio_source") or tech_data.get("volume_ratio_source") or "口径未标注")
+        text = f"量能:量比{ratio:.2f}x(口径:{source}"
+        prev_ratio = snapshot.get("volume_vs_prev_day")
+        try:
+            prev_ratio = float(prev_ratio) if prev_ratio is not None else None
+        except (TypeError, ValueError):
+            prev_ratio = None
+        if prev_ratio is not None:
+            text += f",较前日{prev_ratio:.2f}x"
+        return text + ")"
+
     def check_exit_signals(
         self,
         stock_code: str,
@@ -1910,7 +1949,12 @@ class TimingEngine:
             and current_price <= stop_loss_calc.stop_loss_price
         )
         if stop_triggered:
-            vol_ratio = tech_data.get('volume_ratio', 1.0)
+            vol_ratio = tech_data.get('volume_ratio')
+            if vol_ratio is not None:
+                try:
+                    vol_ratio = float(vol_ratio)
+                except (TypeError, ValueError):
+                    vol_ratio = None
             heavy_vol_thresh = self._cfg("exit", "breakdown", "heavy_volume_ratio", default=1.3)
 
             # C1: 硬触发，不再要求三重确认
@@ -1919,8 +1963,16 @@ class TimingEngine:
                           f'（[{paired_strategy}]买入理由的直接否定，X 被证伪），硬触发')
             else:
                 reason = f'跌破{stop_loss_calc.chosen_support:.2f}(止损{stop_loss_calc.stop_loss_price:.2f})，硬触发'
+            if current_price > 0 and stop_loss_calc.stop_loss_price > 0:
+                stop_gap_pct = (
+                    (current_price - stop_loss_calc.stop_loss_price) / current_price * 100
+                )
+                reason += f'，止损距现价{stop_gap_pct:.1f}%'
             # 量能/投票作为附加信息（不影响触发，只影响推送级别描述）
-            if vol_ratio > heavy_vol_thresh:
+            if vol_ratio is None:
+                reason += f'，{self._volume_context(tech_data)}'
+                urgency = '重要'
+            elif vol_ratio > heavy_vol_thresh:
                 reason += f'，放量破位(量比{vol_ratio:.2f})'
                 urgency = '紧急'
             elif vol_ratio > 0.8:
@@ -2070,6 +2122,34 @@ class TimingEngine:
         elif tech_vote == '偏空':
             weakness.append(('medium', f'{tech_vote}({tech_score:+.1f})'))
         # 温和偏空和中性不作为卖出信号 — 只是轻微偏空，不构成卖出理由
+
+        # ── 极端超卖共振：只降级技术走弱，不拦截破位止损 ──
+        rsi6 = tech.get('rsi6')
+        kdj_j = kdj.get('j') if kdj else None
+        obv = tech.get('obv') or {}
+        oversold_tags = []
+        try:
+            rsi6_oversold = rsi6 is not None and float(rsi6) <= self._cfg(
+                "exit", "oversold", "rsi6_min", default=25.0
+            )
+            if rsi6_oversold:
+                oversold_tags.append(f'RSI6超卖({float(rsi6):.1f})')
+        except (TypeError, ValueError):
+            rsi6_oversold = False
+        try:
+            kdj_j_oversold = kdj_j is not None and float(kdj_j) <= self._cfg(
+                "exit", "oversold", "kdj_j_max", default=5.0
+            )
+            if kdj_j_oversold:
+                oversold_tags.append(f'KDJ-J超卖({float(kdj_j):.1f})')
+        except (TypeError, ValueError):
+            kdj_j_oversold = False
+        boll_below = boll.get('position') == 'below'
+        if boll_below:
+            oversold_tags.append('布林下轨')
+        if obv.get('direction') == '下行':
+            oversold_tags.append('OBV下行')
+        oversold_resonance = bool(rsi6_oversold and kdj_j_oversold and boll_below)
 
         # ── 均线乖离（冲高止盈：价格偏离均线过远）──
         ma5 = tech_data.get('ma5')
@@ -2314,9 +2394,24 @@ class TimingEngine:
                 weak_trigger = strong >= 1 or medium >= graded_medium_min
             else:
                 weak_trigger = strong >= 1 or medium >= 3  # 旧 AND 计票行为
-            if weak_trigger:
+            if weak_trigger and oversold_resonance:
+                labels = [f'[{lvl}]{lbl}' for lvl, lbl in weakness]
+                reason = '[超卖观察·非执行级] ' + '；'.join(labels)
+                if oversold_tags:
+                    reason += '；' + '；'.join(oversold_tags)
+                reason += f'；{self._volume_context(tech_data)}'
+                reason += '；确认:放量站上MA5；失效:跌破布林下轨且MACD绿柱扩大'
+                signals.append(ExitSignal(
+                    stock_code=stock_code, stock_name=stock_name,
+                    exit_type='技术走弱', trigger_price=current_price,
+                    stop_loss_price=stop_loss_calc.stop_loss_price,
+                    reason=reason, urgency='观察', mode_constrained=True,
+                    sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
+                ))
+            elif weak_trigger:
                 labels = [f'[{lvl}]{lbl}' for lvl, lbl in weakness]
                 reason = '；'.join(labels)
+                reason += f'；{self._volume_context(tech_data)}'
                 if graded_or_enabled and strong == 0 and medium >= graded_medium_min:
                     reason += (
                         f'——【分级OR·止损类】技术走弱 medium{medium}/{graded_medium_min}'
@@ -2353,7 +2448,7 @@ class TimingEngine:
                 strong_weakness = sum(1 for level, _ in weakness if level == "strong")
                 medium_weakness = sum(1 for level, _ in weakness if level == "medium")
                 parts = [
-                    f"止损未触发(现价{current_price:.2f}>{stop_loss_calc.stop_loss_price:.2f})",
+                    self._risk_stop_text(stock_code, current_price, stop_loss_calc),
                     f"冲高止盈(strong {strong_exhaustion}/2)",
                     "MA5压制(未同时满足多头排列/MA5上升/跌破阈值)",
                     (
@@ -2481,6 +2576,52 @@ class TimingEngine:
             )
         except Exception:
             return ""
+
+    def run_daily_event_unfreeze(
+        self, tech_scores: Dict[str, float], today=None,
+    ) -> List[Dict]:
+        """日终仲裁入口：解冻判定只由批处理驱动，展示层不再二次推断。"""
+        return self._lifecycle.run_daily_unfreeze(tech_scores, today=today)
+
+    def _risk_stop_text(self, stock_code: str, current_price: float,
+                        stop_loss_calc: StopLossCalc) -> str:
+        """风控区双轨：事件结构位Z与当日技术支撑跟踪线同屏。"""
+        active_events = self._lifecycle.get_active_events(stock_code)
+        event_stops = sorted({
+            float(event.stop_loss) for event in active_events
+            if event.stop_loss and float(event.stop_loss) > 0
+        })
+        if not self._backtest_mode and stop_loss_calc.stop_loss_price > 0:
+            try:
+                from datetime import date
+                from ..feedback.signal_ledger import record_tracking_stop
+                from ..rules_version import get_rules_version
+                log_date = date.today().isoformat()
+                for event in active_events:
+                    if not event.stop_loss or float(event.stop_loss) <= 0:
+                        continue
+                    record_tracking_stop(
+                        event.event_id,
+                        log_date,
+                        float(event.stop_loss),
+                        float(stop_loss_calc.stop_loss_price),
+                        current_price,
+                        get_rules_version(),
+                    )
+            except Exception as e:
+                logger.debug("跟踪止损日志写入失败 %s: %s", stock_code, e)
+        prefix = (
+            "事件止损Z: "
+            + "/".join(f"{price:.2f}" for price in event_stops)
+            + "(结构位) | 跟踪止损"
+            if event_stops else "跟踪止损"
+        )
+        if stop_loss_calc.stop_loss_price > 0:
+            return (
+                f"{prefix}未触发(现价{current_price:.2f}>"
+                f"{stop_loss_calc.stop_loss_price:.2f})"
+            )
+        return f"{prefix} 数据未取到"
 
     # ============ 止损价计算 ============
 
@@ -2928,6 +3069,8 @@ class TimingEngine:
             # 不用 K 线均量近似值；无接口数据（回测/停牌/接口缺失）时才用 K 线兜底
             if realtime.get("volume_ratio"):
                 data["volume_ratio"] = realtime["volume_ratio"]
+                data["volume_ratio_source"] = "行情接口"
+                data["volume_ratio_raw"] = realtime["volume_ratio"]
             quote = realtime.get("quote") or {}
             if quote.get("outer_volume") is not None:
                 data["outer_volume"] = quote["outer_volume"]
@@ -3108,6 +3251,7 @@ class TimingEngine:
                     kline_data,
                     market_mode,
                     volume_ratio=data.get("volume_ratio"),
+                    volume_ratio_source=data.get("volume_ratio_source") or "K线5日均量",
                     realtime_quote=data,
                 )
                 if tech:

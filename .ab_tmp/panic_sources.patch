@@ -1,0 +1,41 @@
+﻿*** Begin Patch
+*** Update File: src/loop/market_mode_adaptive.py
+@@
+             from ..decision.mode_rules import (
+                 build_mode_transition_matrix,
+                 evaluate_market_panic,
+             )
+-            index_drop = (
+-                market_env.get("csi300_change_pct")
+-                if market_env and market_env.get("csi300_close")
+-                else None
+-            )
++            index_drop = None
++            if index_kline and len(index_kline) >= 2:
++                try:
++                    last = float(index_kline[-1].get("close") or 0)
++                    prev = float(index_kline[-2].get("close") or 0)
++                    if last > 0 and prev > 0:
++                        index_drop = (last / prev - 1.0) * 100.0
++                except (TypeError, ValueError):
++                    index_drop = None
++            gem_star_drop = None
++            if gem_sci_tech:
++                gem = gem_sci_tech.get("gem") or {}
++                star = gem_sci_tech.get("star") or {}
++                drops = []
++                for item in (gem, star):
++                    try:
++                        change = float(item.get("change_pct") or 0)
++                    except (TypeError, ValueError):
++                        continue
++                    if change < 0:
++                        drops.append(-change)
++                gem_star_drop = max(drops) if drops else 0.0
+             market_panic = evaluate_market_panic(
+                 index_drop=index_drop,
+-                gem_star_drop=None,
++                gem_star_drop=gem_star_drop,
+                 ad_ratio=(market_env or {}).get("ad_ratio"),
+             )
+*** End Patch

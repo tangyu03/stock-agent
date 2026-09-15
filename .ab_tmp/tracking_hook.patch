@@ -1,0 +1,32 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/timing_engine.py
+@@
+     def _risk_stop_text(self, stock_code: str, current_price: float,
+                         stop_loss_calc: StopLossCalc) -> str:
+         """风控区双轨：事件结构位Z与当日技术支撑跟踪线同屏。"""
+         active_events = self._lifecycle.get_active_events(stock_code)
+         event_stops = sorted({
+             float(event.stop_loss) for event in active_events
+             if event.stop_loss and float(event.stop_loss) > 0
+         })
++        if not self._backtest_mode and stop_loss_calc.stop_loss_price > 0:
++            try:
++                from datetime import date
++                from ..feedback.signal_ledger import record_tracking_stop
++                from ..rules_version import get_rules_version
++                log_date = date.today().isoformat()
++                for event in active_events:
++                    if not event.stop_loss or float(event.stop_loss) <= 0:
++                        continue
++                    record_tracking_stop(
++                        event.event_id,
++                        log_date,
++                        float(event.stop_loss),
++                        float(stop_loss_calc.stop_loss_price),
++                        current_price,
++                        get_rules_version(),
++                    )
++            except Exception as e:
++                logger.debug("跟踪止损日志写入失败 %s: %s", stock_code, e)
+         prefix = (
+*** End Patch

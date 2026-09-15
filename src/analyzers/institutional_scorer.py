@@ -42,6 +42,7 @@ Phase2-C 数据源技术性缺陷整改（用户实测批评）：
 """
 import logging
 import time
+import traceback
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
@@ -107,6 +108,40 @@ def _mark_api_failure(api_name: str, reason: str):
     _api_fail_count[api_name] += 1
     if _api_fail_count[api_name] >= _API_FAIL_THRESHOLD and not _api_disabled[api_name]:
         _api_disabled[api_name] = True
+
+
+def _log_source_exception(code: str, source: str, exc: Exception) -> None:
+    """把数据源异常写入独立错误日志；推送正文只保留兜底文案。"""
+    try:
+        from pathlib import Path
+
+        log_path = (
+            Path(__file__).resolve().parents[2]
+            / "data" / "logs" / "data_source_errors.log"
+        )
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(
+                f"{datetime.now().isoformat(timespec='seconds')} | "
+                f"code={str(code).zfill(6)} | source={source} | "
+                f"{traceback.format_exc()}\n"
+            )
+    except Exception:
+        logger.exception("数据源异常日志写入失败 %s/%s", code, source)
+
+
+def _safe_vote_source(code: str, source: str, fetcher, *args, **kwargs) -> Dict[str, Any]:
+    """单个数据源崩溃时返回中性兜底，不污染整张个股卡。"""
+    try:
+        return fetcher(*args, **kwargs)
+    except Exception as exc:
+        logger.exception("数据源异常 %s/%s", source, code)
+        _log_source_exception(code, source, exc)
+        return {
+            "vote": 0,
+            "detail": f"{source}→数据异常(已记录)",
+            "raw": {},
+        }
         logger.warning(
             "机构持仓 API %s 连续失败 %d 次（最近: %s），本 session 内不再尝试",
             api_name, _api_fail_count[api_name], reason[:80],
@@ -851,6 +886,24 @@ def _fetch_lhb_institutional(code: str) -> Dict[str, Any]:
         if not net_col:
             return {"vote": 0, "detail": f"龙虎榜净额列异常: {list(stock_rows.columns)[:8]}", "raw": {}}
 
+        date_col = None
+        for c in ["上榜日", "龙虎榜日期", "交易日", "交易日期", "TRADE_DATE", "DATE", "日期"]:
+            if c in stock_rows.columns:
+                date_col = c
+                break
+        if date_col:
+            date_values = stock_rows[date_col].dropna()
+            try:
+                latest_date = max(
+                    str(value)[:10].replace("/", "-")
+                    for value in date_values
+                )
+                lhb_as_of = latest_date if len(latest_date) == 10 else "数据未取到"
+            except (TypeError, ValueError):
+                lhb_as_of = "数据未取到"
+        else:
+            lhb_as_of = "数据未取到"
+
         # 汇总该股票近30日所有龙虎榜净额
         total_net = float(stock_rows[net_col].sum())
         appear_count = len(stock_rows)
@@ -1273,14 +1326,23 @@ def score_institutional_holding(
 
     # 调用 4 个数据源
     votes = {
-        "north_bound": _fetch_margin_balance(code),
-        "lhb": _fetch_lhb_institutional(code),
-        "main_force": _fetch_main_force_flow(code),
-        "shareholder": _fetch_shareholder_count(code),
+        "north_bound": _safe_vote_source(
+            code, "两融", _fetch_margin_balance, code,
+        ),
+        "lhb": _safe_vote_source(
+            code, "龙虎榜", _fetch_lhb_institutional, code,
+        ),
+        "main_force": _safe_vote_source(
+            code, "主力资金", _fetch_main_force_flow, code,
+        ),
+        "shareholder": _safe_vote_source(
+            code, "股东户数", _fetch_shareholder_count, code,
+        ),
     }
     top10_ratio = _fetch_top10_institutional_ratio(code)
 
     vote_scores = [v["vote"] for v in votes.values()]
+    covered_sources = sum(1 for v in votes.values() if bool(v.get("raw")))
     # 【P1-3】数据时效分层：每个子项都透出数据日；超过 5 日仅展示不投票。
     # age_days 为日历日保守近似（缺日历时只标注 @N/A，不静默降权）。
     vote_freshness: Dict[str, Dict[str, Any]] = {}
@@ -1375,6 +1437,10 @@ def score_institutional_holding(
         voting_sources = fast_sources
     else:
         voting_sources = tuple(votes.keys())
+    scoped_votes = [votes[src] for src in voting_sources if src in votes]
+    bullish_count = sum(1 for v in scoped_votes if v.get("vote", 0) > 0)
+    bearish_count = sum(1 for v in scoped_votes if v.get("vote", 0) < 0)
+    neutral_count = len(scoped_votes) - bullish_count - bearish_count
     valid_vote_sources = sum(
         1 for src in voting_sources
         if (votes.get(src) or {}).get("vote", 0) != 0
@@ -1387,6 +1453,10 @@ def score_institutional_holding(
         "votes": votes,
         "vote_freshness": vote_freshness,
         "valid_vote_sources": valid_vote_sources,
+        "covered_sources": covered_sources,
+        "voting_source_scope": (
+            "快源" if layering_on else "全源"
+        ),
         "bullish_count": bullish_count,
         "bearish_count": bearish_count,
         "neutral_count": neutral_count,
@@ -1417,6 +1487,9 @@ def score_institutional_holding(
     )
 
     return result
+
+
+_REAL_INSTITUTIONAL_SCORING = score_institutional_holding
 
 
 def score_institutional_for_sector(stock_codes: List[str]) -> Dict[str, Any]:

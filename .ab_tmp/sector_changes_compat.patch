@@ -1,0 +1,7 @@
+﻿*** Begin Patch
+*** Update File: src/orchestrator/engine.py
+@@
+-        env["sector_changes"] = batch.sector_changes
++        env["sector_changes"] = getattr(batch, "sector_changes", None)
+*** End Patch
+*** End Patch

@@ -173,11 +173,38 @@ class TestDailyReviewTop:
             def get_current_holdings(self):
                 return []
         review._logger = _StubLogger()
+        review._get_observation_t0_codes = lambda track_date: []
+        review._collect_actual_ratios = lambda: {}
+        review._get_market_summary = lambda: "  大盘离线桩"
+        review._get_signal_summary = lambda: "  信号离线桩"
+        review._get_holding_summary = lambda: "  持仓离线桩"
+        review._get_t0_summary = lambda: "  做T离线桩"
+        review._get_tomorrow_focus = lambda: "  明日离线桩"
 
         monkeypatch.setattr(
             "src.feedback.event_tracker.build_event_tracking_table",
             lambda **kw: build_event_tracking_table(
                 as_of=date(2026, 9, 5), closed_trades=_SIX_SIGNALS_9_3, events=[]),
+        )
+        monkeypatch.setattr(
+            "src.feedback.event_tracker.collect_in_flight_events",
+            lambda **kw: [],
+        )
+        monkeypatch.setattr(
+            "src.feedback.observation_tracker.fill_observation_checkpoints",
+            lambda **kw: {"filled": 0, "missing": 0},
+        )
+        monkeypatch.setattr(
+            "src.data_layer.stock_data.batch_get_realtime_quotes",
+            lambda codes: {},
+        )
+        monkeypatch.setattr(
+            "src.analyzers.market_env.get_market_environment",
+            lambda **kw: {},
+        )
+        monkeypatch.setattr(
+            "src.analyzers.gem_sci_tech_scorer.get_gem_sci_tech_analysis",
+            lambda **kw: {},
         )
         report = review.generate()
         head = report.splitlines()[:8]

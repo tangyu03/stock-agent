@@ -1,0 +1,9 @@
+﻿*** Begin Patch
+*** Update File: src/feedback/signal_ledger.py
+@@
+-    cursor.execute("""
++    cursor.execute("DROP VIEW IF EXISTS signal_ledger")
++    cursor.execute("""
+     CREATE VIEW IF NOT EXISTS signal_ledger AS
+*** End Patch
+*** End Patch

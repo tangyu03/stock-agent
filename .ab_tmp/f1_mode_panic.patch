@@ -1,0 +1,15 @@
+﻿*** Begin Patch
+*** Update File: src/orchestrator/unified_engine.py
+@@
+ def _panic_bottom_blocker(tech_data: Dict) -> str:
+-    index_drop = abs(float(tech_data.get("index_daily_drop", 0) or 0))
+-    gem_star_drop = abs(float(tech_data.get("gem_sci_tech_drop", 0) or 0))
+-    ad_ratio = float(tech_data.get("advance_decline_ratio", 1.0) or 1.0)
+-    market_panic = index_drop > 4.0 or gem_star_drop > 5.0 or ad_ratio < 0.15
++    from ..decision.mode_rules import evaluate_market_panic
++    market_panic = evaluate_market_panic(
++        index_drop=tech_data.get("index_daily_drop"),
++        gem_star_drop=tech_data.get("gem_sci_tech_drop"),
++        ad_ratio=tech_data.get("advance_decline_ratio"),
++    )["triggered"]
+*** End Patch

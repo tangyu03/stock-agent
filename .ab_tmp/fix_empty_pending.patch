@@ -1,0 +1,11 @@
+﻿*** Begin Patch
+*** Update File: src/feedback/event_tracker.py
+@@
+ def build_virtual_fill_counts(
+@@
+ ) -> str:
+     """撮合计数唯一派生源：事件列表 group-by，不再独立维护计数。"""
+-    if not rows:
++    if not rows and not pending_historical:
+         return "撮合计数: 样本0/30"
+*** End Patch

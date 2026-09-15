@@ -1,0 +1,7 @@
+﻿*** Begin Patch
+*** Update File: tests/test_audit_followups.py
+@@
+-def sqlite_db(tmp_path, monkeypatch):
++def sqlite_db(monkeypatch):
+*** End Patch
+*** End Patch

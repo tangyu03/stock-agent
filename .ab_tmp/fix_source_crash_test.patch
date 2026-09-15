@@ -1,0 +1,19 @@
+﻿*** Begin Patch
+*** Update File: tests/test_f0_audit_fixes.py
+@@
+-def test_source_crash_falls_back_and_logs(monkeypatch, tmp_path):
++def test_source_crash_falls_back_and_logs(monkeypatch):
+     import src.analyzers.institutional_scorer as scorer
+ 
+-    log_path = tmp_path / "data_source_errors.log"
++    log_dir = Path(".ab_tmp") / "source-crash-logs"
++    log_dir.mkdir(parents=True, exist_ok=True)
++    log_path = log_dir / f"test-{uuid.uuid4().hex}.log"
+*** Update File: tests/test_f0_audit_fixes.py
+@@
+-# -*- coding: utf-8 -*-
+ from datetime import date
++from pathlib import Path
++import uuid
+*** End Patch
+*** End Patch

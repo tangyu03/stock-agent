@@ -1,0 +1,121 @@
+﻿*** Begin Patch
+*** Update File: src/feedback/signal_ledger.py
+@@
+ def get_signal_ledger(
+@@
+         return [dict(row) for row in cursor.fetchall()]
+ 
+ 
++def _snapshot_status(status: object) -> str:
++    value = str(status or "")
++    return "filled" if value == "triggered" else value
++
++
+ def backfill_snapshots_from_transition_logs() -> dict:
+@@
+-    filled = 0
+-    skipped = 0
++    filled = 0
++    skipped = 0
+     missing: List[dict] = []
+@@
+         events = [dict(row) for row in cursor.execute(
+             "SELECT * FROM signal_events ORDER BY born_date"
+         )]
+         for event in events:
+             logs = [dict(row) for row in cursor.execute(
+                 "SELECT * FROM signal_event_logs WHERE event_id=? ORDER BY id",
+                 (event["event_id"],),
+             )]
+-            candidates = []
++            existing = {
++                row["snapshot_date"]: dict(row)
++                for row in cursor.execute(
++                    "SELECT snapshot_date, status, source FROM "
++                    "signal_event_daily_snapshots WHERE event_id=?",
++                    (event["event_id"],),
++                )
++            }
++            candidates: dict[str, dict] = {}
+             for log in logs:
+                 try:
+                     raw = log.get("trigger_data") or "{}"
+                     data = json.loads(raw) if isinstance(raw, str) else raw
+                 except Exception:
+                     data = {}
+                 snapshot_date = str(data.get("today") or log.get("created_at") or "")[:10]
+                 if not snapshot_date:
+                     continue
+-                for key in ("close", "price", "day_low"):
++                slot = candidates.setdefault(snapshot_date, {
++                    "price": 0.0,
++                    "status": _snapshot_status(log.get("to_status") or event["status"]),
++                    "source": "transition_log",
++                })
++                if log.get("to_status"):
++                    slot["status"] = _snapshot_status(log.get("to_status"))
++                for key in ("close", "price"):
+                     try:
+                         price = float(data.get(key) or 0)
+                     except (TypeError, ValueError):
+                         continue
+                     if price > 0:
+-                        candidates.append((snapshot_date, price, "transition_log"))
+-                        break
++                        slot["price"] = price
++                        slot["source"] = "transition_log"
+             reason = str(event.get("invalid_reason") or "")
+             match = re.search(r"收盘(?:价)?([0-9]+(?:\.[0-9]+)?)", reason)
+             if match:
+                 date_text = ""
+                 for log in logs:
+@@
+                     if date_text:
+                         break
+-                if date_text:
+-                    candidates.append((date_text, float(match.group(1)), "terminal_reason"))
+-            if not candidates:
++                if date_text and date_text not in candidates:
++                    candidates[date_text] = {
++                        "price": float(match.group(1)),
++                        "status": _snapshot_status(event["status"]),
++                        "source": "terminal_reason",
++                    }
++            if not candidates and not existing:
+                 missing.append({
+                     "signal_id": event["event_id"],
+                     "stock_name": event["stock_name"],
+                     "reason": "迁移日志无价格",
+                 })
+                 continue
+-            for snapshot_date, price, source in candidates:
++            for snapshot_date, item in candidates.items():
++                if snapshot_date in existing:
++                    skipped += 1
++                    continue
++                price = float(item.get("price") or 0)
++                if price <= 0:
++                    skipped += 1
++                    continue
+                 cursor.execute(
+                     """
+                     INSERT OR IGNORE INTO signal_event_daily_snapshots
+                     (event_id, snapshot_date, close_price, status, source)
+                     VALUES (?, ?, ?, ?, ?)
+                     """,
+-                    (event["event_id"], snapshot_date, price, event["status"], source),
++                    (
++                        event["event_id"], snapshot_date, price,
++                        str(item.get("status") or _snapshot_status(event["status"])),
++                        str(item.get("source") or "transition_log"),
++                    ),
+                 )
+-                filled += cursor.rowcount
+-            skipped += len(candidates)
++                if cursor.rowcount:
++                    filled += 1
++                else:
++                    skipped += 1
+         conn.commit()
+*** End Patch
+*** End Patch

@@ -1,0 +1,96 @@
+﻿*** Begin Patch
+*** Update File: src/feedback/event_tracker.py
+@@
+ def build_watch_ladder(
+@@
+-) -> List[Dict]:
+-    """27×5 矩阵压成一张候梯表：谁差几个条件，谁排前面。"""
++) -> List[Dict]:
++    """把观察矩阵压成候选梯；硬性禁入与活跃在飞事件不参与排序。"""
+@@
+     for stock in stocks or []:
+         code = str(stock.get("code", ""))
+         if not code:
+             continue
++        if code in in_flight_by_code:
++            continue
++        diagnostic = str((entry_diagnostics or {}).get(code, ""))
++        if "板块退潮" in diagnostic and "禁止新" in diagnostic:
++            rows.append({
++                "stock_code": code,
++                "code": code,
++                "stock_name": stock.get("name", code),
++                "name": stock.get("name", code),
++                "fail_count": 0,
++                "strategy": "全部策略",
++                "mode_required": "板块未退潮",
++                "mode_eligible": False,
++                "cross_mode": False,
++                "hard_blocked": True,
++                "failures": [],
++                "reason": "禁止买入：板块退潮",
++                "in_flight": False,
++                "in_flight_event_id": "",
++                "in_flight_entry_type": "",
++                "in_flight_status_label": "",
++            })
++            continue
+         groups = _strategy_missing_groups((entry_diagnostics or {}).get(code, ""))
+*** Update File: src/push/pushplus.py
+@@
+-        current_mode_ladder = [
+-            item for item in watch_ladder if not item.get("cross_mode")
+-        ]
++        current_mode_ladder = [
++            item for item in watch_ladder
++            if not item.get("cross_mode") and not item.get("hard_blocked")
++        ]
+         cross_mode_ladder = [item for item in watch_ladder if item.get("cross_mode")]
++        hard_blocked_ladder = [item for item in watch_ladder if item.get("hard_blocked")]
++        if hard_blocked_ladder:
++            content += "<b>禁止买入</b><br/>"
++            for item in hard_blocked_ladder[:5]:
++                content += (
++                    f"&nbsp;&nbsp;{_esc(stock_identity(item))} | "
++                    f"{_esc(item.get('reason', ''))}<br/>"
++                )
++            content += "<br/>"
+*** Update File: tests/test_event_broadcast.py
+@@
+-    def test_watch_ladder_marks_in_flight_event(self):
++    def test_watch_ladder_excludes_active_in_flight_event(self):
+@@
+-        row = build_watch_ladder(
++        rows = build_watch_ladder(
+             diagnostics,
+             [{"code": "002975", "name": "博杰股份"}],
+             in_flight_events=in_flight,
+-        )[0]
+ 
+-        assert row["in_flight"] is True
+-        assert row["in_flight_status_label"] == "已成交"
+-        assert row["in_flight_event_id"].endswith("价量突破")
+-        assert "⚠在飞：价量突破·已成交#" in row["reason"]
++        assert rows == []
+@@
+         assert "需模式:恐慌/撤退" in rows[1]["reason"]
++
++    def test_sector_retreat_is_hard_block_not_candidate(self):
++        rows = build_watch_ladder(
++            {
++                "301666": (
++                    "板块退潮，禁止新入场\n策略检查:\n"
++                    "- 全部策略: 板块退潮，禁止新买入\n"
++                ),
++            },
++            [{"code": "301666", "name": "大普微"}],
++        )
++
++        assert len(rows) == 1
++        row = rows[0]
++        assert row["hard_blocked"] is True
++        assert row["reason"] == "禁止买入：板块退潮"
++        assert "本模式可入" not in row["reason"]
++        assert "缺" not in row["reason"]
+*** End Patch
+*** End Patch

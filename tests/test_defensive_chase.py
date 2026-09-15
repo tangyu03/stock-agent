@@ -306,7 +306,7 @@ class TestBlockerDisclosure:
         chase = [b for b in blockers if b.startswith("确认追强")]
         assert len(chase) == 1
         assert "三重门" in chase[0]
-        assert "RSI14未过热" in chase[0]
+        assert "RSI14超5%" in chase[0]
 
     def test_gate_text_passes_silently_when_all_gates_green(self):
         """三重门全过（信号应已生成）→ 拦截文案不带'未过'细节"""

@@ -1,0 +1,52 @@
+﻿*** Begin Patch
+*** Update File: src/feedback/signal_ledger.py
+@@
+ def record_daily_snapshot(
+@@
+     if not event_id or not snapshot_date:
+         return False
+-
+-
+-def record_tracking_stop(
++    try:
++        with get_conn() as conn:
++            cursor = conn.cursor()
++            ensure_signal_ledger_schema(cursor)
++            cursor.execute(
++                """
++                INSERT OR IGNORE INTO signal_event_daily_snapshots
++                (event_id, snapshot_date, close_price, status)
++                VALUES (?, ?, ?, ?)
++                """,
++                (event_id, snapshot_date, close_price, status),
++            )
++            conn.commit()
++            return cursor.rowcount > 0
++    except Exception:
++        return False
++
++
++def record_tracking_stop(
+@@
+     cursor.execute(
+         f"SELECT * FROM signal_tracking_stop_logs{where} ORDER BY log_date, event_id",
+         params,
+     )
+     return [dict(row) for row in cursor.fetchall()]
+-    try:
+-        with get_conn() as conn:
+-            cursor = conn.cursor()
+-            ensure_signal_ledger_schema(cursor)
+-            cursor.execute(
+-                """
+-                INSERT OR IGNORE INTO signal_event_daily_snapshots
+-                (event_id, snapshot_date, close_price, status)
+-                VALUES (?, ?, ?, ?)
+-                """,
+-                (event_id, snapshot_date, close_price, status),
+-            )
+-            conn.commit()
++            return cursor.rowcount > 0
+-    except Exception:
+-        return False
+*** End Patch

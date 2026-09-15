@@ -12,7 +12,7 @@ TIME_EXIT = "time_exit"
 
 
 MATCH_COUNT_LABELS = {
-    TRIGGERED: "在飞",
+    TRIGGERED: "等待回踩",
     FILLED: "成交",
     FROZEN: "冻结",
     STRUCT_CANCEL: "结构失败撤单",
@@ -32,6 +32,10 @@ def canonical_match_status(status: str, invalid_reason: str = "") -> str:
     if value != "invalidated":
         return value
     reason = str(invalid_reason or "")
-    if "止损线" in reason or "止损" in reason:
+    if (
+        "信号止损" in reason
+        or "先触及止损价" in reason
+        or "信号口径认错" in reason
+    ):
         return SIG_STOP
     return STRUCT_CANCEL
