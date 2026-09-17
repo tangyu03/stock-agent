@@ -10,8 +10,8 @@ from src.analyzers.signal_plan import (
 from src.decision.live_scheduler import schedule_live_signals
 from src.push.templates import _execution_plan
 from src.push.templates import render_entry_signal
-from src.push.templates import render_exit_signal
 from src.orchestrator.unified_engine import _volume_breakout_blocker
+from src.push.templates import render_exit_signal
 
 
 def test_volume_snapshot_uses_prior_day_quantiles():
@@ -587,11 +587,59 @@ def test_observation_render_uses_compact_reasoning_format():
     assert "②时机:RSI14=30.3(不投票)" in rendered
     # 【分型引擎】③从陈列升级为分型；无内外盘时降级为"盘口数据不足"+数据行
     assert "③量能 [盘口数据不足]" in rendered
-    assert "量比0.86(缩量)" in rendered
+    assert "接口量比0.86@时间未标注(缩量;口径未标注)" in rendered
     assert "④资金:🔴资金看空" in rendered or "资金看空(-3票" in rendered
     assert "⑤拦截:技术投票偏空" in rendered
     assert "⑥风控:止损未触发" in rendered
     assert "技术面" not in rendered
+
+
+def test_watch_ladder_reason_is_rendered_in_observation_card():
+    data = {
+        "stock_name": "大普微",
+        "stock_code": "301666",
+        "current_price": 100.0,
+        "note": "买入: 策略检查:\n- 确认追强: 缺 ADX | 卖出: 止损未触发",
+        "candidate_reason": "确认追强(当前模式可评估)：缺 ADX",
+    }
+
+    _, rendered = render_exit_signal(data)
+
+    assert "最近策略:确认追强(当前模式可评估)：缺 ADX" in rendered
+
+
+def test_report_does_not_render_standalone_watch_ladder(monkeypatch):
+    from src.push.pushplus import PushPlus
+
+    captured = {}
+
+    def _send(self, title, content, level="常规"):
+        captured.update({"title": title, "content": content})
+        return True
+
+    monkeypatch.setattr(PushPlus, "send", _send)
+    PushPlus.__new__(PushPlus).send_intraday_report(
+        {
+            "market_mode": "defend",
+            "market_score": 5.0,
+            "watch_ladder": [{
+                "stock_name": "大普微",
+                "stock_code": "301666",
+                "reason": "确认追强(当前模式可评估)：缺 ADX",
+            }],
+        },
+        observations=[{
+            "stock_name": "大普微",
+            "stock_code": "301666",
+            "current_price": 100.0,
+            "note": "买入: 策略检查 | 卖出: 止损未触发",
+            "candidate_reason": "确认追强(当前模式可评估)：缺 ADX",
+        }],
+    )
+
+    assert "未触发候选" not in captured["content"]
+    assert "未触发说明" not in captured["content"]
+    assert "最近策略:确认追强(当前模式可评估)：缺 ADX" in captured["content"]
 
 
 def test_template_renders_machine_tags():

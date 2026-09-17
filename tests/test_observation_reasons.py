@@ -6,7 +6,7 @@ def test_entry_diagnostics_field_exists():
     assert batch.entry_diagnostics == {}
 
 
-def test_retreating_sector_has_highest_priority():
+def test_retreating_sector_is_context_not_global_block():
     reason = _explain_no_entry(
         market_mode='retreat',
         sector_status='retreating',
@@ -15,7 +15,8 @@ def test_retreating_sector_has_highest_priority():
             'institutional_holding': {'vote_score': -2},
         },
     )
-    assert '板块退潮' in reason
+    assert '板块:退潮' in reason
+    assert '新买入未触发：板块退潮' not in reason
     assert '机构 -2' in reason
 
 

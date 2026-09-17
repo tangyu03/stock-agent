@@ -1,0 +1,20 @@
+*** Begin Patch
+*** Update File: src/analyzers/volume_pattern.py
+@@
+-    # 九型定义：bias +1偏多 / -1偏空 / 0中性（冲突检测与一览行共用）
++# 九型定义：bias +1偏多 / -1偏空 / 0中性（冲突检测与一览行共用）
+@@
+-    down = change_pct is not None and float(change_pct) < 0
++    down = change_pct is not None and float(change_pct) < 0
++    try:
++        rsi_value2 = float(rsi6) if rsi6 is not None else None
++    except (TypeError, ValueError):
++        rsi_value2 = None
++    if (position == "高位" and rsi_value2 is not None and rsi_value2 > 70
++            and top_divergence):
++        return "派发嫌疑观察"
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+-        return target in ("filled", "frozen", *TERMINAL_EVENT_STATUSES)
++        return target in ("filled", "frozen", "pending_confirm", *TERMINAL_EVENT_STATUSES)
+*** End Patch

@@ -217,7 +217,7 @@ class Orchestrator:
         _pl = env.get("position_limit", 0.5)
         _canonical_pl = {"attack": 0.8, "defend": 0.5, "retreat": 0.1}.get(market_mode, 0.5)
         logger.info(
-            "环境推导: 模式=%s 评分=%.1f position_limit=%.2f 外盘降级=%s S3降级=%s 降级前模式=%s",
+            "环境推导: 模式=%s 评分=%.1f position_limit=%.2f 外盘降级=%s 预期背离降级=%s 降级前模式=%s",
             market_mode,
             float(env.get("market_score", 0) or 0),
             _pl,
@@ -503,6 +503,18 @@ class Orchestrator:
                 'detail': ' '.join(score_gate_items),
             }
 
+        # 退潮板块不是新买入闸门；只对实际持仓降级为“不加仓”。
+        no_add_by_code = {}
+        for s in scheduled.get('position_advice', []) or []:
+            if s.position_action == '不加仓' and s.stock_code not in no_add_by_code:
+                no_add_by_code[s.stock_code] = {
+                    'stock_code': s.stock_code,
+                    'stock_name': s.stock_name,
+                    'entry_type': s.entry_type,
+                    'reason': '不加仓：板块退潮',
+                }
+        env['position_no_add'] = list(no_add_by_code.values())
+
         sector_counts: Dict[str, int] = {}
         for s in scheduled['buy']:
             orig = next(
@@ -538,9 +550,12 @@ class Orchestrator:
             tracked_observations = []
             for item in observation_batch:
                 code = str(item.get('stock_code', ''))
+                candidate = ladder_by_code.get(code)
+                if candidate:
+                    item['candidate_reason'] = candidate.get('reason', '')
                 tracked = dict(item)
                 tracked['entry_diagnostic'] = batch.entry_diagnostics.get(code, '')
-                tracked['intercept_reason'] = (ladder_by_code.get(code) or {}).get('reason', '')
+                tracked['intercept_reason'] = (candidate or {}).get('reason', '')
                 tracked_observations.append(tracked)
             market_env = env.get('market_env') or {}
             from ..feedback.observation_tracker import record_observation_t0

@@ -954,6 +954,10 @@ def calc_tech_indicators(
         "kline": kline,
         "today_volume": volumes[-1] if volumes else None,
         "volume_ratio": vol_ratio,
+        "volume_ratio_source": volume_ratio_source,
+        "volume_ratio_sample_time": realtime_quote.get("volume_ratio_sample_time") if realtime_quote else None,
+        "data_date": realtime_quote.get("data_date") if realtime_quote else None,
+        "kline_includes_today": realtime_quote.get("kline_includes_today") if realtime_quote else None,
     })
     vol_signal = volume_snapshot.label
     # 【P0-1】外推口径展示：盘中累计量对比全天均量结构性偏小（分子只走了半天），
@@ -1090,13 +1094,29 @@ def calc_tech_indicators(
 
     # ── 量能组：统一量能快照 + 当日价格方向 ──
     vol_vote = 0
+    early = bool(volume_snapshot.is_early_window)
+    volume_ratio_available = bool(
+        not early or volume_snapshot.volume_ratio_effective is not None
+    )
+    volume_ratio_label = "同期量比" if early else "接口量比"
+    volume_sample_time = (
+        volume_snapshot.same_period_sample_time
+        if early
+        else volume_snapshot.volume_ratio_sample_time
+    )
+    volume_caliber = (
+        volume_snapshot.same_period_caliber
+        if early
+        else volume_snapshot.volume_ratio_caliber
+    )
     volume_active = not volume_snapshot.dirty and (
-        volume_snapshot.volume_hot
+        (volume_snapshot.volume_hot and volume_ratio_available)
         or volume_snapshot.turnover_hot
         or (
-            volume_snapshot.volume_ratio is not None
+            volume_ratio_available
+            and volume_snapshot.volume_ratio_effective is not None
             and volume_snapshot.volume_ratio_p75 is not None
-            and volume_snapshot.volume_ratio > volume_snapshot.volume_ratio_p75
+            and volume_snapshot.volume_ratio_effective > volume_snapshot.volume_ratio_p75
         )
         or (
             volume_snapshot.volume_vs_ma60 is not None
@@ -1108,29 +1128,55 @@ def calc_tech_indicators(
     else:
         change_pct = 0.0
     if not volume_active:
-        if volume_snapshot.shrinking:
+        if volume_snapshot.shrinking and volume_ratio_available:
             details_by_cat["volume"].append("缩量(中性不投票)")
+        elif early and volume_snapshot.volume_ratio_effective is None:
+            details_by_cat["volume"].append("量能:数据未取到(早盘需同期量比;不投票)")
         else:
             details_by_cat["volume"].append("量能正常(中性不投票)")
     elif change_pct > vol_stagnation_pct:
         vol_vote = 1
+        ratio_text = (
+            f"({volume_ratio_label}:数据未取到(早盘需同期量比;换手证据)"
+            if volume_snapshot.volume_ratio_effective is None
+            else (
+                f"({volume_ratio_label}{volume_snapshot.volume_ratio_effective:.2f}x"
+                f"@{volume_sample_time or '时间未标注'}(口径:{volume_caliber})"
+            )
+        )
         details_by_cat["volume"].append(
             f"放量上涨{change_pct*100:+.1f}%"
-            f"(量比{volume_snapshot.volume_ratio or 0:.2f}x"
+            f"{ratio_text}"
             f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x{_proj_note})"
         )
     elif change_pct < -vol_stagnation_pct:
         vol_vote = -1
+        ratio_text = (
+            f"({volume_ratio_label}:数据未取到(早盘需同期量比;换手证据)"
+            if volume_snapshot.volume_ratio_effective is None
+            else (
+                f"({volume_ratio_label}{volume_snapshot.volume_ratio_effective:.2f}x"
+                f"@{volume_sample_time or '时间未标注'}(口径:{volume_caliber})"
+            )
+        )
         details_by_cat["volume"].append(
             f"放量下跌{change_pct*100:+.1f}%"
-            f"(量比{volume_snapshot.volume_ratio or 0:.2f}x"
+            f"{ratio_text}"
             f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x{_proj_note})"
         )
     else:
         vol_vote = -1
+        ratio_text = (
+            f"({volume_ratio_label}:数据未取到(早盘需同期量比;换手证据)"
+            if volume_snapshot.volume_ratio_effective is None
+            else (
+                f"({volume_ratio_label}{volume_snapshot.volume_ratio_effective:.2f}x"
+                f"@{volume_sample_time or '时间未标注'}(口径:{volume_caliber})"
+            )
+        )
         details_by_cat["volume"].append(
             f"放量滞涨{change_pct*100:+.1f}%"
-            f"(量比{volume_snapshot.volume_ratio or 0:.2f}x"
+            f"{ratio_text}"
             f",60日均量{volume_snapshot.volume_vs_ma60 or 0:.2f}x{_proj_note})"
         )
 

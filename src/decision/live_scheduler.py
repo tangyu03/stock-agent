@@ -329,6 +329,8 @@ def schedule_live_signals(
         # 持仓者的输出永远是持有/加仓/减仓/止损四选一
         if code in held_map:
             held = held_map[code]
+            sector_status = str(sig.get('sector_status') or '')
+            no_add = sector_status == 'retreating'
             position_advices.append(ScheduledSignal(
                 stock_code=code,
                 stock_name=sig.get('stock_name', code),
@@ -342,11 +344,12 @@ def schedule_live_signals(
                 execution_plan=plan,
                 market_mode=market_mode,
                 audience='holding',
-                position_action='加仓',
+                position_action='不加仓' if no_add else '加仓',
                 hypothesis=hypothesis,
                 schedule_note=(
                     f'持仓{int(held.get("shares") or 0)}股@{held.get("cost_price", 0):.2f} | '
-                    f'买入事件对持仓者=加仓评估（不是重新买入）| '
+                    + ('板块退潮，禁止加仓 | ' if no_add else '')
+                    + f'买入事件对持仓者=加仓评估（不是重新买入）| '
                     f'假说: {hypothesis.get("sentence", "")}'
                 ),
             ))

@@ -1,0 +1,82 @@
+﻿*** Begin Patch
+*** Update File: tests/test_volume_pattern.py
+@@
+         "institutional_holding": {"vote_score": 0, "votes": {}},
+         }
+-        assert pattern_summary_line(jingzhida) == "精智达[缩量阴跌·等待]"
++        # P1-9：主动差-16.7%(≤-8%) 的真实样本归真实抛压，不再仅按量能档贴阴跌
++        assert pattern_summary_line(jingzhida) == "精智达[真实抛压·风控]"
++
++        # 阴跌窄域（量比≤1.0 且 跌幅≤1.5% 且 主动差>-8%）仍输出缩量阴跌等待
++        grinding = {
++            "stock_name": "精智达", "stock_code": "688627",
++            "current_price": 40.0, "change_pct": -1.2,
++            "volume_ratio": 0.6, "turnover_rate": 1.5,
++            "ma5": 41.0, "ma10": 41.5, "ma20": 41.0,
++            "tech_signals": {"order_flow": {
++                "available": True, "outer_volume": 500, "inner_volume": 553,
++                "imbalance_pct": -5.0,
++            }},
++            "institutional_holding": {"vote_score": 0, "votes": {}},
++        }
++        assert pattern_summary_line(grinding) == "精智达[缩量阴跌·等待]"
+*** Update File: tests/test_p0_audit_0916.py
+@@
+ def test_v29_down_with_negative_drive_remains_real_selling_pressure():
+     from src.analyzers.volume_pattern import classify
+ 
+     assert classify(-4.0, -0.20, "明显放量", "破位") == "真实抛压型"
+ 
+ 
++def test_p19_hengdongguang_0917_is_real_selling_not_grinding():
++    """P1-9：蘅东光 9-17（-5.05%/主动差-14.0%）必须归入真实抛压，禁止阴跌。
++
++    二维判定：主动差≤-8% 或 跌幅≥3% → 真实抛压；量比≤1.0 且 跌幅≤1.5%
++    → 阴跌；中间地带 → 抛压待确认型混合标签。
++    """
++    from src.analyzers.volume_pattern import classify
++
++    # 蘅东光 9-17 主证据：跌幅 5.05%、主动差 -14%，任意量能档都不得贴阴跌
++    for vgear in ("缩量", "平量", "温和放量", "明显放量", "剧烈放量"):
++        assert classify(-5.05, -0.14, vgear, "中继") == "真实抛压型"
++        assert classify(-5.05, -0.14, vgear, "破位") == "真实抛压型"
++
++    # 边界：跌幅≥3% 或 主动差≤-8%
++    assert classify(-3.0, -0.01, "缩量", "中继") == "真实抛压型"
++    assert classify(-2.0, -0.10, "缩量", "中继") == "真实抛压型"
++
++    # 阴跌窄域：量比≤1.0 且 跌幅≤1.5%
++    assert classify(-1.5, -0.06, "缩量", "破位") == "阴跌不止型"
++    assert classify(-1.0, -0.02, "平量", "低位") == "阴跌不止型"
++
++    # 中间地带 → 混合标签，不得贴阴跌
++    assert classify(-2.0, -0.05, "缩量", "中继") == "抛压待确认型"
++    assert classify(-2.5, -0.04, "平量", "中继") == "抛压待确认型"
++
++
++def test_p19_deep_drop_never_pairs_with_grinding_label():
++    """P1-9 验收：跌幅>3% 的票与阴跌标签不得共存（全量回放矩阵）。"""
++    from src.analyzers.volume_pattern import build_volume_pattern
++
++    for drop in (-3.1, -4.0, -5.05, -7.5):
++        for drive_pct in (-1.0, -5.0, -14.0):
++            for vr in (0.7, 1.0, 1.8, 3.0, 5.5):
++                data = {
++                    "stock_code": "430047", "stock_name": "蘅东光",
++                    "current_price": 10.0, "change_pct": drop,
++                    "volume_ratio": vr, "turnover_rate": 3.0,
++                    "ma5": 10.5, "ma10": 10.2, "ma20": 9.8,
++                    "prior_high": 12.0, "recent_high": 12.0,
++                    "gain_20d": 0.05, "ma20_falling": False,
++                    "tech_signals": {"order_flow": {
++                        "available": True,
++                        "outer_volume": 400, "inner_volume": 600,
++                        "imbalance_pct": drive_pct,
++                    }},
++                }
++                result = build_volume_pattern(data)
++                assert result["pattern"] == "真实抛压型"
++
++
+ def test_v29_early_missing_volume_does_not_blind_high_distribution_evidence():
+*** End Patch

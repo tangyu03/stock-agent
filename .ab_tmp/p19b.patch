@@ -1,0 +1,64 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/volume_pattern.py
+@@
+ # 下跌但外盘占优：既不能按“真实抛压”，也不能按“资金接货”单边定性。
+ _DIVERGENCE_PATTERN = "放量下跌分歧型"
+ 
++# P1-9 分型二维判定（主动差×跌幅）边界：蘅东光 9-17(-5.05%/主动差-14%) 必须归真实抛压，
++# 禁止仅按量能档（缩量）贴阴跌；中间地带输出混合标签，不名不符实。
++DRIVE_REAL_SELL_PCT = -0.08   # 主动差 ≤ -8% → 真实抛压
++CHANGE_REAL_SELL_PCT = -3.0   # 跌幅 ≥ 3% → 真实抛压
++CHANGE_GRINDING_PCT = -1.5    # 量比≤1.0 且 跌幅 ≤1.5% → 阴跌窄域
++_PENDING_SELL_PATTERN = "抛压待确认型"
++
+ # 分型定义：bias +1偏多 / -1偏空 / 0中性（冲突检测与一览行共用）
+ _PATTERN_DEFS = {
+*** Update File: src/analyzers/volume_pattern.py
+@@
+     "阴跌不止型": {
+         "short": "缩量阴跌", "bias": -1,
+         "verdict": "趋势未止，等右侧",
+         "strategy": "等待", "strategy_short": "等待",
+         "confirms": ["放量止跌(量比1.5+)", "收盘收复MA5", "外盘转占优"],
+         "confirm_target": "等右侧信号",
+     },
++    _PENDING_SELL_PATTERN: {
++        "short": "抛压待确认", "bias": -1,
++        "verdict": "下跌且内盘占优但量能/跌幅未达抛压阈值，按抛压预案观察",
++        "strategy": "观察等抛压确认", "strategy_short": "观察",
++        "confirms": ["主动差跌破-8%", "跌幅扩大至3%+", "放量下破日内低点"],
++        "confirm_target": "抛压确认复核",
++    },
+     _DIVERGENCE_PATTERN: {
+         "short": "放量下跌分歧", "bias": 0,
+         "verdict": "下跌但外盘占优，承接/对倒分歧，不判出逃",
+*** Update File: src/analyzers/volume_pattern.py
+@@
+ _BEARISH_PATTERNS = {
+     "真实抛压型", "高位滞涨派发", "对倒诱多嫌疑",
+-    "巨量分歧型", "派发嫌疑观察",
++    "巨量分歧型", "派发嫌疑观察", _PENDING_SELL_PATTERN,
+ }
+ _DIVERGENCE_PATTERNS = {_DIVERGENCE_PATTERN}
+*** Update File: src/analyzers/volume_pattern.py
+@@
+     if down:
+-        # 主动差等于零不能证明“真实抛压”；只有内盘明确占优才保留该结论。
+-        if drive < 0 and expanding:
+-            return "真实抛压型"
+-        return "阴跌不止型"
++        # P1-9 主动差×跌幅二维判定：主动差≤-8% 或 跌幅≥3% → 真实抛压；
++        # 量比≤1.0(缩量/平量) 且 跌幅≤1.5% → 阴跌窄域；中间地带输出混合标签。
++        if drive <= DRIVE_REAL_SELL_PCT or up_pct <= CHANGE_REAL_SELL_PCT:
++            return "真实抛压型"
++        if vgear in ("缩量", "平量") and up_pct >= CHANGE_GRINDING_PCT:
++            return "阴跌不止型"
++        return _PENDING_SELL_PATTERN
+*** Update File: src/analyzers/volume_pattern.py
+@@
+     if pattern == "缩量滞涨观察":
+         return 1
++    if pattern == _PENDING_SELL_PATTERN:
++        return 2
+     return 2  # 对倒诱多嫌疑 / 阴跌不止型 / 承接型上涨
+*** End Patch

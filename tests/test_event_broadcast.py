@@ -60,6 +60,7 @@ class TestInFlightBroadcast:
         assert "买544.14" in text
         assert "止损498.26" in text
         assert "目标583.01" in text
+        assert 'RRR0.85' in text
         assert "现价549.63" in text
         assert "距买点+1.0%" in text
         assert "至2026-09-13" in text
@@ -172,23 +173,23 @@ class TestWatchLadderAndCounts:
         assert rows[1]["mode_required"] == "恐慌/撤退"
         assert "需市场模式进入恐慌/撤退" in rows[1]["reason"]
 
-    def test_sector_retreat_is_hard_block_not_candidate(self):
+    def test_sector_retreat_does_not_create_hard_block(self):
         rows = build_watch_ladder(
             {
                 "301666": (
-                    "板块退潮，禁止新入场\n策略检查:\n"
-                    "- 全部策略: 板块退潮，禁止新买入\n"
+                    "板块:退潮\n策略检查:\n"
+                    "- 确认追强: 缺 ADX\n"
                 ),
             },
             [{"code": "301666", "name": "大普微"}],
+            market_mode="defend",
         )
 
         assert len(rows) == 1
         row = rows[0]
-        assert row["hard_blocked"] is True
-        assert row["reason"] == "新买入未触发：板块退潮"
-        assert "当前模式可评估" not in row["reason"]
-        assert "缺" not in row["reason"]
+        assert row.get("hard_blocked") is not True
+        assert "缺 ADX" in row["reason"]
+        assert "当前模式可评估" in row["reason"]
 
     def test_virtual_fill_counts_uses_lifecycle_states(self):
         rows = [

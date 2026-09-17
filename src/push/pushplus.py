@@ -307,12 +307,19 @@ class PushPlus:
                 f"(评分≤1): {_esc(score_gate.get('detail', ''))}<br/>"
             )
 
-        # 【P2-8】板块集中只是一行提醒，管理边界仍在执行系统。
         concentration = environment.get("sector_concentration") or {}
-        if concentration:
-            content += (
-                f"<b>板块提示</b><br/>&nbsp;&nbsp;{concentration.get('line', '')}<br/>"
-            )
+        position_no_add = environment.get("position_no_add") or []
+        # 【P2-8】板块提示不单开“持仓不加仓”版块，只作为板块行补充。
+        if concentration or position_no_add:
+            content += "<b>板块提示</b><br/>"
+            if concentration:
+                content += f"&nbsp;&nbsp;{_esc(concentration.get('line', ''))}<br/>"
+            for item in position_no_add[:10]:
+                content += (
+                    f"&nbsp;&nbsp;持仓不加仓: {_esc(stock_identity(item))} | "
+                    f"{_esc(item.get('reason', ''))}<br/>"
+                )
+            content += "<br/>"
 
         virtual_counts = environment.get("virtual_fill_counts")
         if virtual_counts:
@@ -328,45 +335,6 @@ class PushPlus:
                 content += (
                     f"&nbsp;&nbsp;{_esc(stock_identity(item))}{holding_hint}"
                     f" | {_esc(reason)}<br/>"
-                )
-            content += "<br/>"
-
-        # 【P1-5】候梯只解释观察票为什么未触发，不是买入指令。
-        watch_ladder = environment.get("watch_ladder") or []
-        if watch_ladder:
-            content += (
-                "<b>未触发说明</b><br/>&nbsp;&nbsp;以下只解释为什么没有买入信号；"
-                "买入只看“买入信号”区。<br/><br/>"
-            )
-        current_mode_ladder = [
-            item for item in watch_ladder
-            if not item.get("cross_mode") and not item.get("hard_blocked")
-        ]
-        cross_mode_ladder = [item for item in watch_ladder if item.get("cross_mode")]
-        hard_blocked_ladder = [item for item in watch_ladder if item.get("hard_blocked")]
-        if hard_blocked_ladder:
-            content += "<b>未触发买入(板块退潮)</b><br/>"
-            for item in hard_blocked_ladder[:5]:
-                content += (
-                    f"&nbsp;&nbsp;{_esc(stock_identity(item))} | "
-                    f"{_esc(item.get('reason', ''))}<br/>"
-                )
-            content += "<br/>"
-        if current_mode_ladder:
-            content += "<b>未触发候选(当前模式可评估)</b><br/>"
-            for item in current_mode_ladder[:5]:
-                content += (
-                    f"&nbsp;&nbsp;{_esc(stock_identity(item))} | "
-                    f"{_esc(item.get('reason', ''))}<br/>"
-                )
-            content += "<br/>"
-
-        if cross_mode_ladder:
-            content += "<b>未触发候选(当前模式不可触发)</b><br/>"
-            for item in cross_mode_ladder[:5]:
-                content += (
-                    f"&nbsp;&nbsp;{_esc(stock_identity(item))} | "
-                    f"{_esc(item.get('reason', ''))}<br/>"
                 )
             content += "<br/>"
 

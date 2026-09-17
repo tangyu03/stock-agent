@@ -823,12 +823,8 @@ class TimingEngine:
         # C5: 记录当前 market_mode 供 _calculate_target_range 使用
         self._current_market_mode = market_mode
 
-        # D5 板块生命周期进场侧过滤（2026-07-25 整改）
-        # 帖24/26/50：资金下沉二三线=行情后段降仓级；历史顶板块只精选不普涨
-        # sector_status: main_trend / rotational / retreating
-        # retreating 板块：不允许新进场（只允许出场）
-        if sector_status == 'retreating':
-            return []  # 板块退潮，不进场
+        # D5 板块状态只作为信号上下文；不再做入场侧全局闸门。
+        # 退潮板块的执行约束在调度端处理：已持有标的禁止加仓，空仓标的仍按策略评估。
 
         # D6 黑名单机制（2026-07-25 整改）
         # 帖5/帖14：板块级pass清单 + 情绪性拉黑 + 拥挤主线回避
@@ -1072,8 +1068,25 @@ class TimingEngine:
         tech_signals = tech_data.get("tech_signals") or {}
         ma5, ma10, ma20 = tech_data.get("ma5"), tech_data.get("ma10"), tech_data.get("ma20")
         ma_alignment = bool(ma5 and ma10 and ma20 and ma5 > ma10 > ma20)
+        projected_ratio = getattr(volume_snapshot, "projected_volume_vs_ma60", None)
+        projection_mode = getattr(volume_snapshot, "projection_mode", "")
+        projected_threshold = float(
+            self._cfg("volume_projection", "breakout_threshold", default=1.2)
+        )
+        actual_volume = getattr(volume_snapshot, "volume_vs_ma60", None)
+        projection_triggered = bool(
+            projection_mode == "ok"
+            and projected_ratio is not None
+            and float(projected_ratio) >= projected_threshold
+            and (actual_volume is None or float(actual_volume) <= 1.0)
+        )
         entry_snapshot = {
             "volume_ratio": getattr(volume_snapshot, "volume_ratio", None),
+            "volume_vs_ma60": actual_volume,
+            "projected_volume_vs_ma60": projected_ratio,
+            "projection_mode": projection_mode,
+            "projection_threshold": projected_threshold,
+            "projection_triggered": projection_triggered,
             "ma_alignment": ma_alignment,
             "rsi": tech_signals.get("rsi"),
             "sector_status": sector_status,
@@ -1258,9 +1271,6 @@ class TimingEngine:
         if not stock_oversold:
             return None
 
-        if sector == "retreating":
-            return None
-
         # D1: 市场恐慌(必要)+充分条件+个股超卖 三重确认
         all_conds = panic_market + panic_sufficient + stock_oversold
         trigger_reason = ";".join(all_conds)
@@ -1290,9 +1300,6 @@ class TimingEngine:
         """
         if mode not in ("attack", "defend"):
             return None
-        if sector == "retreating":
-            return None
-
         # 周线MACD过滤
         if not tech_data.get("weekly_macd_up"):
             return None
@@ -1529,9 +1536,6 @@ class TimingEngine:
         """
         if mode not in ("attack", "defend"):
             return None
-        if sector == "retreating":
-            return None
-
         defensive_gate = None
         if mode == "defend":
             cfg = self._cfg("defensive_chase") or {}
@@ -1592,6 +1596,15 @@ class TimingEngine:
                 "防守降仓放行(三重门全过: 四确认+基本面+板块联动；"
                 "仓位=单笔风险预算÷止损距离，非 1/3 惯例)"
             )
+        # 【P0-2】高位回落票不允许把 MA20 突破机械当作低位突破；
+        # 必须量能（已过）+资金同向双重确认，否则只观察不发买入。
+        deep_pullback, drawdown_pct, high_52w = self._deep_pullback_from_52w(tech_data)
+        if deep_pullback and not self._fund_flow_confirms(tech_data):
+            tech_data["entry_blocked_reason"] = (
+                f"高位回落{drawdown_pct:.1f}%，突破需资金同向；"
+                f"资金投票未确认，仅观察"
+            )
+            return None
         return EntrySignal(
             stock_code=code,
             stock_name=name,
@@ -1626,8 +1639,6 @@ class TimingEngine:
         Z = MA10（延续结构破位即逻辑死亡），W = 延伸目标位。
         """
         if mode not in ("attack", "defend"):
-            return None
-        if sector == "retreating":
             return None
         cfg = self._cfg("trend_continuation") or {}
         if not cfg.get("enabled", True):
@@ -1718,9 +1729,6 @@ class TimingEngine:
         """
         if mode not in ("attack", "defend"):
             return None
-        if sector == "retreating":
-            return None
-
         # RS line 过滤
         require_rs = self._cfg("volume_breakout", "require_rs_above_ma", default=True)
         if mode == "attack" and require_rs:
@@ -1819,6 +1827,16 @@ class TimingEngine:
         if not volume_breakout and not projected_breakout and not is_limit_up_today:
             return None
 
+        # 【P0-2】52周高点回落超过25%的“低位反抽”，单看量能不够：
+        # 要求量能（已过）+资金同向双重确认，否则只观察不发买入。
+        deep_pullback, drawdown_pct, high_52w = self._deep_pullback_from_52w(tech_data)
+        if deep_pullback and not self._fund_flow_confirms(tech_data):
+            tech_data["entry_blocked_reason"] = (
+                f"距52周高回落{drawdown_pct:.1f}%，突破需资金同向；"
+                f"资金投票未确认，仅观察"
+            )
+            return None
+
         vol_ratio = volume_snapshot.volume_vs_ma60 or 0
         if volume_breakout:
             volume_text = f"量能突破60日均量({vol_ratio:.1f}倍)"
@@ -1850,22 +1868,74 @@ class TimingEngine:
             confidence="高",
         )
 
+    def _deep_pullback_from_52w(self, tech_data: Dict[str, Any]) -> tuple[bool, float, Optional[float]]:
+        """判断价格距 52 周高点是否深度回落；数据不足时不制造低位结论。"""
+        current = _number_or_none(tech_data.get("current_price"))
+        if current is None or current <= 0:
+            return False, 0.0, None
+
+        high_52w = _number_or_none(
+            tech_data.get("high_52w", tech_data.get("high_250d"))
+        )
+        if high_52w is None or high_52w <= 0:
+            kline = tech_data.get("kline") or []
+            if len(kline) < 250:
+                return False, 0.0, None
+            highs = [
+                _number_or_none(k.get("最高", k.get("high")))
+                for k in kline[-250:]
+            ]
+            highs = [value for value in highs if value is not None and value > 0]
+            if not highs:
+                return False, 0.0, None
+            high_52w = max(highs)
+
+        drawdown_pct = max(0.0, (high_52w / current - 1.0) * 100.0)
+        return drawdown_pct >= 25.0, drawdown_pct, high_52w
+
+    def _fund_flow_confirms(self, tech_data: Dict[str, Any]) -> bool:
+        """52周深度回落票的资金确认：完整覆盖窗口且主力净流同向。"""
+        from .signal_plan import build_fund_snapshot
+
+        fund = build_fund_snapshot(tech_data.get("institutional_holding"), tech_data)
+        return bool(fund.flow_coverage_complete and fund.main_vote > 0)
+
     # ============ 出场信号 ============
 
     def _volume_context(self, tech_data: Dict[str, Any]) -> str:
         """输出量能的判定口径，禁止只给一个无法复核的量比。"""
-        ratio = tech_data.get("volume_ratio")
+        snapshot = tech_data.get("tech_signals", {}).get("volume_snapshot", {})
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        early = bool(snapshot.get("is_early_window"))
+        ratio = (
+            snapshot.get("same_period_volume_ratio")
+            if early
+            else snapshot.get("volume_ratio_effective", tech_data.get("volume_ratio"))
+        )
         try:
             ratio = float(ratio) if ratio is not None else None
         except (TypeError, ValueError):
             ratio = None
         if ratio is None:
+            if early:
+                return "量能:数据未取到(早盘需同期量比)"
             return "量能:数据未取到"
-        snapshot = tech_data.get("tech_signals", {}).get("volume_snapshot", {})
-        if not isinstance(snapshot, dict):
-            snapshot = {}
-        source = str(snapshot.get("volume_ratio_source") or tech_data.get("volume_ratio_source") or "口径未标注")
-        text = f"量能:量比{ratio:.2f}x(口径:{source}"
+        label = "同期量比" if early else "接口量比"
+        sample_time = (
+            snapshot.get("same_period_sample_time")
+            if early
+            else snapshot.get("volume_ratio_sample_time")
+        )
+        source = (
+            snapshot.get("same_period_caliber")
+            if early
+            else snapshot.get("volume_ratio_caliber")
+            or tech_data.get("volume_ratio_source")
+            or "口径未标注"
+        )
+        time_text = f"@{sample_time}" if sample_time else "@时间未标注"
+        text = f"量能:{label}{ratio:.2f}x@{sample_time or '时间未标注'}(口径:{source}"
         prev_ratio = snapshot.get("volume_vs_prev_day")
         try:
             prev_ratio = float(prev_ratio) if prev_ratio is not None else None
@@ -1935,6 +2005,47 @@ class TimingEngine:
 
         _bearish_votes = {"强烈看空", "偏空", "温和偏空"}
         is_bearish = tech_vote in _bearish_votes
+
+        # 【P0-1】结构位与止损之间的灰区不再是空白：收盘跌破结构位给出
+        # 减仓/清仓指令；量比缺失时保守给减仓，不伪造“持有正常”。
+        gray_zone = None
+        if paired_position and (paired_position.get("z_reference") or 0) > 0:
+            structure_ref = float(paired_position["z_reference"])
+            paired_stop = float(stop_loss_calc.stop_loss_price)
+            if structure_ref > paired_stop > 0 and paired_stop < current_price < structure_ref:
+                try:
+                    gray_volume = (
+                        float(tech_data.get("volume_ratio"))
+                        if tech_data.get("volume_ratio") is not None else None
+                    )
+                except (TypeError, ValueError):
+                    gray_volume = None
+                if gray_volume is not None and gray_volume < 0.8:
+                    gray_action = "灰区清仓"
+                    gray_urgency = "紧急"
+                    volume_text = f"量比{gray_volume:.2f}<0.8，缩量失守"
+                else:
+                    gray_action = "灰区减仓"
+                    gray_urgency = "重要"
+                    volume_text = (
+                        f"量比{gray_volume:.2f}≥0.8" if gray_volume is not None
+                        else "量比数据未取到，按保守减仓"
+                    )
+                signals.append(ExitSignal(
+                    stock_code=stock_code, stock_name=stock_name,
+                    exit_type=gray_action,
+                    trigger_price=current_price,
+                    stop_loss_price=paired_stop,
+                    reason=(
+                        f'收盘{current_price:.2f}跌破结构位{structure_ref:.2f}，'
+                        f'未到止损{paired_stop:.2f}；{volume_text}，'
+                        f'执行{gray_action[2:]}（持有/减仓/清仓中取一）'
+                    ),
+                    urgency=gray_urgency, mode_constrained=False,
+                    sector_status=sector_status, sector_name=sector_name,
+                    tech_data=tech_data, source="paired",
+                    paired_strategy=paired_strategy,
+                ))
 
         # 1. 破位止损 — C1 整改（2026-07-22）：硬触发
         # ----------------------------------------------------------------
@@ -3072,6 +3183,10 @@ class TimingEngine:
                 data["volume_ratio_source"] = "行情接口"
                 data["volume_ratio_raw"] = realtime["volume_ratio"]
             quote = realtime.get("quote") or {}
+            stamp = str(quote.get("timestamp", "") or "")
+            if stamp.isdigit() and len(stamp) >= 14:
+                data["volume_ratio_sample_time"] = stamp
+                data["data_date"] = f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]}"
             if quote.get("outer_volume") is not None:
                 data["outer_volume"] = quote["outer_volume"]
             if quote.get("inner_volume") is not None:
@@ -3096,6 +3211,10 @@ class TimingEngine:
 
         if not self._backtest_mode and kline:
             kline = self._sync_last_kline_with_realtime(kline, realtime.get("quote") if realtime else None)
+            last_bar_date = str(kline[-1].get("date", kline[-1].get("日期", "")))[:10]
+            data["kline_includes_today"] = bool(
+                data.get("data_date") and last_bar_date == data["data_date"]
+            )
 
         if kline:
             data["kline"] = kline
@@ -3142,7 +3261,13 @@ class TimingEngine:
 
                     vol_ma60_window = self._cfg("tech_data", "volume_ma60_window", default=60)
                     if len(volumes) >= vol_ma60_window:
-                        data["volume_ma60"] = sum(volumes[-vol_ma60_window:]) / vol_ma60_window
+                        # 盘中最后一根已是今日累计量，60日基准必须剔除今日，否则放量自我稀释。
+                        if data.get("kline_includes_today") and len(volumes) > vol_ma60_window:
+                            data["volume_ma60"] = (
+                                sum(volumes[-(vol_ma60_window + 1):-1]) / vol_ma60_window
+                            )
+                        else:
+                            data["volume_ma60"] = sum(volumes[-vol_ma60_window:]) / vol_ma60_window
                         data["today_volume"] = volumes[-1]
 
                     extreme_window = self._cfg("tech_data", "recent_extreme_window", default=20)
@@ -3279,6 +3404,14 @@ class TimingEngine:
         # 机构持仓打分（4 数据源投票，API 失败默认中性，session 缓存 1 小时）
         try:
             from .institutional_scorer import score_institutional_holding
+            # 【P0-6】大宗交易第五资金源：生产侧注入真实抓取器；
+            # 无龙虎榜无两融的标的（北交所）由该源补位。
+            try:
+                from ..data_layer.block_trade import fetch_block_trade_stats
+                from .institutional_scorer import set_block_trade_fetcher
+                set_block_trade_fetcher(fetch_block_trade_stats)
+            except Exception:
+                pass
             inst_score = score_institutional_holding(
                 stock_code,
                 turnover_available=bool(data.get("turnover_rate")),

@@ -116,6 +116,67 @@ def u_fraction_at(now: Optional[datetime] = None, config: Optional[Dict] = None)
     return None
 
 
+def trading_minute_fraction_at(now: Optional[datetime] = None) -> Optional[float]:
+    """当前累计交易分钟占全天 240 分钟的比例（线性，不含 U 型假设）。"""
+    now = now or datetime.now()
+    if now.weekday() >= 5:
+        return 1.0
+    current = now.hour * 60 + now.minute
+    if current < 9 * 60 + 30:
+        return 0.0
+    if current < 11 * 60 + 30:
+        return (current - 9 * 60 - 30) / 240.0
+    if current < 13 * 60:
+        return 120.0 / 240.0
+    if current < 15 * 60:
+        return (120.0 + current - 13 * 60) / 240.0
+    return 1.0
+
+
+def parse_sample_time(sample_time) -> Optional[datetime]:
+    """解析量比采样时间；HH:MM 固定映射到周一，避免周末换算成收盘口径。"""
+    if isinstance(sample_time, datetime):
+        return sample_time
+    text = str(sample_time or "").strip()
+    if not text:
+        return None
+    try:
+        if text.isdigit() and len(text) >= 14:
+            return datetime.strptime(text[:14], "%Y%m%d%H%M%S")
+        if ":" in text:
+            hh, mm = text.split(":")[:2]
+            return datetime(2000, 1, 3, int(hh), int(mm), second=0, microsecond=0)
+    except (ValueError, TypeError):
+        return None
+    return None
+
+
+def same_period_ratio_from_interface(
+    interface_ratio: Optional[float],
+    sample_time=None,
+    config: Optional[Dict] = None,
+) -> Optional[float]:
+    """把接口量比换算为同期累计量比。
+
+    接口量比 = 当日分钟均量 / 过去5日全天分钟均量。要和过去5日同时点
+    累计量对齐，用 U 型分位替换线性时间分位：
+      同期量比 = 接口量比 × (已开市分钟/240) ÷ U型分位
+    缺时间分位或 U 型分位时返回 None，不用接口量比冒充同期口径。
+    """
+    ratio = float(interface_ratio) if interface_ratio is not None else None
+    if ratio is None or ratio <= 0:
+        return None
+    sample_dt = parse_sample_time(sample_time)
+    if sample_dt is None:
+        return None
+
+    linear = trading_minute_fraction_at(sample_dt)
+    u_fraction = u_fraction_at(sample_dt, config)
+    if linear is None or linear <= 0 or u_fraction is None or u_fraction <= 0:
+        return None
+    return round(ratio * linear / u_fraction, 3)
+
+
 def project_volume_ratio(
     raw_ratio: Optional[float],
     change_pct: Optional[float],

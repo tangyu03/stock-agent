@@ -65,10 +65,19 @@ def _signed_amount(amount) -> str:
 
 
 def _main_flow_window(fund: dict) -> str:
-    """Return a truthful window label for mixed fund-flow sources."""
+    """Return a truthful window label for mixed fund-flow sources.
+
+    P1-7：覆盖不足时改标实际覆盖天数（近N日净额），覆盖完整才允许
+    显示 expected 日窗口，禁止“3日净额(覆盖1/3日)”式误导组合。
+    """
+    expected_days = int(fund.get("flow_expected_days") or 0)
+    covered_days = int(fund.get("flow_coverage_days") or 0)
+    if expected_days > 0:
+        partial = "" if covered_days >= expected_days else ",部分覆盖降权"
+        if covered_days >= expected_days:
+            return f"{expected_days}日窗口(覆盖{covered_days}/{expected_days}日)"
+        return f"近{covered_days}日净额(覆盖{covered_days}/{expected_days}日{partial})"
     source = str(fund.get("source") or "")
-    if "3日" in source:
-        return "3日快照"
     count = len(fund.get("main_flows") or [])
     return f"{count}日累计" if count else "窗口:N/A"
 
@@ -319,6 +328,17 @@ def _institutional(data) -> str:
                 super_large = raw.get("latest_super_large_net")
                 large = raw.get("latest_large_net")
                 extras = []
+                expected_days = int(raw.get("expected_days") or 0)
+                if expected_days > 0:
+                    covered_days = int(raw.get("coverage_days") or 0)
+                    partial = "" if covered_days >= expected_days else ",部分覆盖降权"
+                    # P1-7：覆盖不足时改标实际覆盖天数，覆盖完整才显示 expected 日窗口
+                    if covered_days >= expected_days:
+                        extras.append(f"{expected_days}日窗口覆盖{covered_days}/{expected_days}日")
+                    else:
+                        extras.append(
+                            f"近{covered_days}日净额覆盖{covered_days}/{expected_days}日{partial}"
+                        )
                 points = raw.get("fund_flow_5d") or []
                 if points:
                     labels = []
@@ -390,6 +410,37 @@ def _institutional(data) -> str:
         if inst.get("flow_analyst_conflict"):
             parts.append("⚠资金与研报反向(双标签呈现，禁止单标签定性)")
 
+    # 【P0-6】大宗交易第五资金源（笔数/折溢价/连续性/营业部）：
+    # 近20日折价大宗超阈值强制挂派发确认候选；北交所无两融/龙虎榜时补位。
+    block_trade = inst.get("block_trade")
+    if isinstance(block_trade, dict) and block_trade.get("as_of"):
+        try:
+            from ..data_layer.block_trade import (
+                block_trade_distribution_trigger,
+                render_block_trade_line,
+            )
+            trigger = block_trade_distribution_trigger(
+                block_trade, block_trade.get("float_cap"),
+            )
+            block_line = render_block_trade_line(block_trade, trigger)
+            if block_line:
+                parts.append(block_line)
+        except Exception:
+            pass
+
+    # P1-8：两融/主动差背离裁决行（观察卡 ④资金 同样强制输出，两源矛盾不静默）
+    try:
+        from ..analyzers.signal_plan import margin_drive_adjudication
+        flow = (data.get("tech_signals") or {}).get("order_flow") or {}
+        _drive = None
+        if flow.get("available") and flow.get("imbalance_pct") is not None:
+            _drive = float(flow["imbalance_pct"]) / 100.0
+        _conflict, _note = margin_drive_adjudication(inst, _drive)
+        if _conflict and _note:
+            parts.append(f"⚖{_note}")
+    except Exception:
+        pass
+
     return " | ".join(parts)
 
 
@@ -438,10 +489,22 @@ def _entry_decision_lines(data) -> list[str]:
         super_text = _signed_amount(fund.get("latest_super_large_net")) or "N/A"
         large_text = _signed_amount(fund.get("latest_large_net")) or "N/A"
         funds_text += f" | 超大单{super_text}/大单{large_text}→{_vote_text(int(fund.get('vote', 0) or 0))}"
+    machine_tags = [str(tag) for tag in (fund.get("machine_tags") or []) if tag]
+    if machine_tags:
+        funds_text += " | " + "/".join(machine_tags)
     lines.append(f"④资金:{funds_text}")
+
+    # P1-8：两融/主动差背离裁决行（拦截栏强制输出，优先级+依据）
+    if fund.get("margin_drive_conflict") and fund.get("margin_drive_conflict_note"):
+        lines.append(f"⑥裁决:{_esc(fund['margin_drive_conflict_note'])}")
 
     note = str(data.get("trigger_reason") or data.get("note") or "")
     trigger_text = note.split(" | 调度:", 1)[0] or "无触发明细"
+    conflict_note = str(fund.get("fund_tech_conflict_note") or "")
+    if conflict_note:
+        trigger_text = (
+            conflict_note + (" | " + trigger_text if trigger_text != "无触发明细" else "")
+        )
     lines.append(f"⑤触发:{_esc(trigger_text)}")
     fundamental_text = _fundamental_line(data)
     if fundamental_text:
@@ -531,6 +594,9 @@ def _render_compact_observation_signal(data):
     content += f"&nbsp;&nbsp;④资金:{_esc(_institutional(data) or '无数据')}<br/>"
     buy_text = _esc(buy_note.replace("买入: ", "", 1) or "无买入拦截明细")
     buy_text = buy_text.replace("\n", "<br/>&nbsp;&nbsp;&nbsp;&nbsp;")
+    candidate_reason = str(data.get("candidate_reason") or "")
+    if candidate_reason:
+        content += f"&nbsp;&nbsp;最近策略:{_esc(candidate_reason)}<br/>"
     exit_text = _esc(exit_note or "无卖出检查明细")
     exit_text = exit_text.replace("\n", "<br/>&nbsp;&nbsp;&nbsp;&nbsp;")
     content += f"&nbsp;&nbsp;⑤拦截:{buy_text}<br/>"
@@ -710,10 +776,15 @@ def _tech(data):
     if ma5 and ma10 and ma20:
         order = "多头排列" if ma5 > ma10 > ma20 else "空头排列" if ma5 < ma10 < ma20 else "交叉震荡"
         parts.append(f"MA:{order}({_val(ma5)}/{_val(ma10)}/{_val(ma20)})")
-    vr = data.get("volume_ratio")
     volume_snapshot = data.get("tech_signals", {}).get("volume_snapshot", {})
     if not isinstance(volume_snapshot, dict):
         volume_snapshot = {}
+    early = bool(volume_snapshot.get("is_early_window"))
+    vr = (
+        volume_snapshot.get("same_period_volume_ratio")
+        if early
+        else volume_snapshot.get("volume_ratio_effective", data.get("volume_ratio"))
+    )
     if vr:
         if vr < 1.0:
             label = "缩量"
@@ -721,14 +792,26 @@ def _tech(data):
             label = "放量"
         else:
             label = "量平"
-        source = volume_snapshot.get("volume_ratio_source") or data.get("volume_ratio_source") or "口径未标注"
-        volume_text = f"量比:{vr:.2f}x{label}(口径:{source}"
+        source = (
+            volume_snapshot.get("same_period_caliber")
+            if early
+            else volume_snapshot.get("volume_ratio_caliber")
+            or data.get("volume_ratio_source")
+            or "口径未标注"
+        )
+        sample_time = (
+            volume_snapshot.get("same_period_sample_time")
+            if early
+            else volume_snapshot.get("volume_ratio_sample_time")
+        )
+        time_text = f"@{sample_time}" if sample_time else "@时间未标注"
+        volume_text = f"量比:{label}{vr:.2f}x@{sample_time or '时间未标注'}(口径:{source}"
         prev_ratio = volume_snapshot.get("volume_vs_prev_day")
         if prev_ratio is not None:
             volume_text += f",较前日{float(prev_ratio):.2f}x"
         parts.append(volume_text + ")")
     else:
-        parts.append("量比:数据未取到")
+        parts.append("量比:数据未取到(早盘需同期量比)" if early else "量比:数据未取到")
     ts = data.get("tech_signals",{})
     if ts:
         ema = ts.get("ema_cross","")

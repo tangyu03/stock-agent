@@ -1,10 +1,13 @@
 """Single-source execution planning for entry signals."""
 
+import logging
 from datetime import date
 from pathlib import Path
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # 【二】数据层一致性守卫默认值（口径统一：全链路成交量统一为“股”）
@@ -47,6 +50,17 @@ class VolumeSnapshot:
     projected_volume_vs_ma60: Optional[float] = None
     projection_mode: str = ""        # ok / pre_window / limit_locked / non_trading ...
     projection_note: str = ""
+    # v2.9: number + caliber + source + sample time are inseparable.
+    volume_ratio_caliber: str = "口径未标注"
+    volume_ratio_sample_time: Optional[str] = None
+    same_period_volume_ratio: Optional[float] = None
+    same_period_caliber: str = "数据未取到"
+    same_period_sample_time: Optional[str] = None
+    volume_ratio_effective: Optional[float] = None
+    is_early_window: bool = False
+    kline_cumulative_volume_ratio: Optional[float] = None
+    volume_caliber_conflict: bool = False
+    volume_caliber_conflict_note: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()
@@ -58,6 +72,14 @@ class FundSnapshot:
     main_total: Optional[float] = None
     main_vote: int = 0
     main_strong: bool = False
+    flow_coverage_days: int = 0
+    flow_expected_days: int = 0
+    flow_coverage_complete: bool = False
+    source_conflict: bool = False
+    cross_source: str = ""
+    cross_total: Optional[float] = None
+    fund_tech_conflict: bool = False
+    fund_tech_conflict_note: str = ""
     super_large_flows: List[float] = field(default_factory=list)
     large_flows: List[float] = field(default_factory=list)
     latest_super_large_net: Optional[float] = None
@@ -71,6 +93,8 @@ class FundSnapshot:
     top10_institutional_change_points: Optional[float] = None
     institutional_shareholder_divergence: bool = False
     suspected_distribution: bool = False
+    margin_drive_conflict: bool = False
+    margin_drive_conflict_note: str = ""
     machine_tags: List[str] = field(default_factory=list)
     source: str = ""
 
@@ -163,6 +187,41 @@ def _guard_value(guard: Optional[Dict], key: str) -> float:
     return float(DATA_GUARD_DEFAULTS[key])
 
 
+def _last_bar_date(item: Dict[str, Any]) -> str:
+    return str(item.get("date", item.get("日期", "")))[:10]
+
+
+def get_history_excluding_today(
+    kline: List[Dict[str, Any]],
+    today_volume: Optional[float] = None,
+    today_date: Optional[str] = None,
+    kline_includes_today: Optional[bool] = None,
+) -> List[float]:
+    """返回历史成交量序列；若最后一根是今日 bar，则剔除今日。
+
+    盘中实时行情会被同步进最后一根 K 线。60日均量、5日均量等“历史基准”
+    不能用当日盘中累计量抬高分母，否则放量会自我稀释。
+    """
+    volumes = [
+        _number(item.get("volume", item.get("成交量", 0))) or 0.0
+        for item in kline
+    ]
+    if not volumes:
+        return []
+    last_date = _last_bar_date(kline[-1]) if kline else ""
+    if kline_includes_today is None:
+        last_is_today = bool(
+            (today_date and last_date == today_date)
+            or (
+                today_volume is not None
+                and _number(volumes[-1]) == today_volume
+            )
+        )
+    else:
+        last_is_today = bool(kline_includes_today)
+    return volumes[:-1] if last_is_today else volumes
+
+
 def build_volume_snapshot(
     tech_data: Dict[str, Any],
     min_samples: int = 60,
@@ -194,17 +253,34 @@ def build_volume_snapshot(
     volume_ratio_raw = _number(tech_data.get("volume_ratio_raw"))
     if volume_ratio_raw is None:
         volume_ratio_raw = volume_ratio
-    volume_ma60 = _number(tech_data.get("volume_ma60"))
-    if volume_ma60 is None and len(volumes) >= 60:
-        volume_ma60 = sum(volumes[-60:]) / 60
+    today_date = tech_data.get("data_date") or tech_data.get("quote_date")
+    history_volumes = get_history_excluding_today(
+        kline,
+        today_volume=today_volume,
+        today_date=today_date,
+        kline_includes_today=tech_data.get("kline_includes_today"),
+    )
+    volume_ma60 = None
+    if len(history_volumes) >= 60:
+        volume_ma60 = sum(history_volumes[-60:]) / 60
+    supplied_volume_ma60 = _number(tech_data.get("volume_ma60"))
+    if supplied_volume_ma60 is not None and len(history_volumes) < 60:
+        volume_ma60 = supplied_volume_ma60
     volume_vs_ma60 = (
         today_volume / volume_ma60
         if today_volume and volume_ma60 and volume_ma60 > 0
         else None
     )
     prev_day_volume = (
-        volumes[-2] if len(volumes) >= 2 and volumes[-2] and volumes[-2] > 0 else None
+        history_volumes[-1]
+        if len(history_volumes) >= 1 and history_volumes[-1] > 0
+        else None
     )
+    kline_cumulative_volume_ratio = None
+    if today_volume and len(history_volumes) >= 5:
+        base5 = sum(history_volumes[-5:]) / 5
+        if base5 > 0:
+            kline_cumulative_volume_ratio = today_volume / base5
     volume_vs_prev_day = (
         today_volume / prev_day_volume
         if today_volume and prev_day_volume and prev_day_volume > 0
@@ -262,14 +338,80 @@ def build_volume_snapshot(
         volume_ratio_p90=_percentile(volume_ratios, 0.90),
         sample_count=min(len(turnover_history), len(volume_ratios)),
     )
+    snapshot.kline_cumulative_volume_ratio = kline_cumulative_volume_ratio
+
+    sample_time = tech_data.get("volume_ratio_sample_time")
+    if sample_time is not None:
+        snapshot.volume_ratio_sample_time = str(sample_time)
+    if volume_ratio_source == "行情接口":
+        snapshot.volume_ratio_caliber = "接口量比(5日分钟均量)"
+    elif volume_ratio_source:
+        snapshot.volume_ratio_caliber = str(volume_ratio_source)
+
+    try:
+        from .volume_projection import (
+            parse_sample_time,
+            same_period_ratio_from_interface,
+            trading_minute_fraction_at,
+        )
+        _time_text = snapshot.volume_ratio_sample_time
+        _sample_dt = parse_sample_time(_time_text)
+        if volume_ratio_source == "行情接口" and volume_ratio_raw is not None:
+            snapshot.same_period_volume_ratio = same_period_ratio_from_interface(
+                volume_ratio_raw, sample_time=_sample_dt or _time_text,
+                config=projection_config,
+            )
+            snapshot.same_period_sample_time = snapshot.volume_ratio_sample_time
+            snapshot.same_period_caliber = (
+                "同期累计量比(5日同期,U曲线校准)"
+                if snapshot.same_period_volume_ratio is not None
+                else "同期量比数据未取到"
+            )
+        _minute_fraction = (
+            trading_minute_fraction_at(_sample_dt) if _sample_dt is not None else None
+        )
+        if _minute_fraction is not None:
+            snapshot.is_early_window = (
+                0 < _minute_fraction < (10 * 60 + 30 - 9 * 60 - 30) / 240.0
+            )
+        if snapshot.is_early_window or (
+            volume_ratio_source == "行情接口" and not snapshot.volume_ratio_sample_time
+        ):
+            # 早盘缺失同期口径、或接口量比缺采样时间时必须诚实降级，
+            # 接口原始量比不得回流为正式证据。
+            snapshot.volume_ratio_effective = snapshot.same_period_volume_ratio
+        else:
+            snapshot.volume_ratio_effective = volume_ratio
+
+        if (
+            volume_ratio_source == "行情接口"
+            and volume_ratio_raw is not None
+            and kline_cumulative_volume_ratio is not None
+            and _minute_fraction
+        ):
+            expected = volume_ratio_raw * _minute_fraction
+            deviation = abs(kline_cumulative_volume_ratio - expected) / expected
+            if deviation >= 0.25:
+                snapshot.volume_caliber_conflict = True
+                snapshot.volume_caliber_conflict_note = (
+                    f"量能口径对账异常: K线累计{kline_cumulative_volume_ratio:.2f}x "
+                    f"vs 接口同期折算{expected:.2f}x(偏差{deviation:.0%})"
+                )
+    except Exception as e:
+        logger.debug("量能同期口径计算失败: %s", str(e)[:60])
 
     has_turnover = (
         snapshot.turnover_rate is not None
         and snapshot.turnover_p25 is not None
         and snapshot.turnover_p90 is not None
     )
+    evidence_ratio = (
+        snapshot.volume_ratio_effective
+        if snapshot.is_early_window
+        else snapshot.volume_ratio
+    )
     has_volume = (
-        snapshot.volume_ratio is not None
+        evidence_ratio is not None
         and snapshot.volume_ratio_p25 is not None
         and snapshot.volume_ratio_p90 is not None
     )
@@ -281,13 +423,13 @@ def build_volume_snapshot(
     )
     snapshot.volume_hot = bool(
         has_volume
-        and snapshot.volume_ratio is not None
-        and snapshot.volume_ratio > (snapshot.volume_ratio_p90 or 0)
+        and evidence_ratio is not None
+        and evidence_ratio > (snapshot.volume_ratio_p90 or 0)
     )
     snapshot.shrinking = bool(
         has_volume
-        and snapshot.volume_ratio is not None
-        and snapshot.volume_ratio < (snapshot.volume_ratio_p25 or 0)
+        and evidence_ratio is not None
+        and evidence_ratio < (snapshot.volume_ratio_p25 or 0)
     )
     if snapshot.turnover_hot:
         snapshot.label = "换手过热"
@@ -527,6 +669,49 @@ def _build_execution_tiers(
     return tiers
 
 
+def _order_flow_drive(tech_data: Dict[str, Any]) -> Optional[float]:
+    """从 tech_data 提取主动差 D（小数，imbalance_pct %→/100）。缺失返回 None。"""
+    flow = ((tech_data or {}).get("tech_signals") or {}).get("order_flow") or {}
+    if not flow.get("available"):
+        return None
+    imbalance = _number(flow.get("imbalance_pct"))
+    if imbalance is None:
+        return None
+    return imbalance / 100.0
+
+
+def margin_drive_adjudication(
+    institutional: Optional[Dict[str, Any]],
+    drive: Optional[float],
+) -> Tuple[bool, str]:
+    """P1-8 两融/主动差背离裁决。
+
+    两融变动>5% 且 主动差<-5%（或反向显著）→ (True, 裁决行文案)。
+    两融为 T-1 滞后披露、主动差为当日实时成交，冲突时以主动差为准。
+    无冲突/数据不足 → (False, "")。
+    """
+    if drive is None:
+        return False, ""
+    votes = (institutional or {}).get("votes") or {}
+    raw = (votes.get("north_bound") or {}).get("raw") or {}
+    margin_change = _number(raw.get("change_pct"))
+    if margin_change is None:
+        return False, ""
+    if margin_change > 0.05 and drive < -0.05:
+        return True, (
+            f"裁决:两融逆势加杠杆({margin_change * 100:+.1f}%) vs 主动卖出"
+            f"(主动差{drive * 100:+.1f}%)——两融T-1滞后披露,以当日主动差为准,"
+            "当日不追,等资金回补确认"
+        )
+    if margin_change < -0.05 and drive > 0.05:
+        return True, (
+            f"裁决:两融撤退({margin_change * 100:+.1f}%) vs 主动买入"
+            f"(主动差{drive * 100:+.1f}%)——两融T-1滞后披露,以当日主动差为准,"
+            "杠杆撤退不单独否决"
+        )
+    return False, ""
+
+
 def build_fund_snapshot(
     institutional: Optional[Dict[str, Any]],
     tech_data: Optional[Dict[str, Any]] = None,
@@ -541,7 +726,14 @@ def build_fund_snapshot(
     latest_large = _latest(large_flows) if large_flows else raw.get("latest_large_net")
     main_flows = [_number(value) for value in flows if _number(value) is not None]
 
-    main_vote = int(main.get("vote", 0) or 0)
+    source = str(raw.get("source") or "")
+    coverage_days = int(_number(raw.get("coverage_days")) or len(main_flows))
+    expected_days = int(
+        _number(raw.get("expected_days"))
+        or (3 if "3日" in source else 5 if "5日" in source else len(main_flows))
+    )
+    coverage_complete = bool(expected_days > 0 and coverage_days >= expected_days)
+    main_vote = int(main.get("vote", 0) or 0) if coverage_complete else 0
     main_strong = bool(raw.get("strong"))
     if main.get("vote") and "strong" not in raw and len(main_flows) >= 3:
         main_strong = (
@@ -567,6 +759,8 @@ def build_fund_snapshot(
     top10_change = _number(top10.get("change_points"))
 
     machine_tags: List[str] = []
+    if not coverage_complete and expected_days > 0:
+        machine_tags.append(f"资金覆盖{coverage_days}/{expected_days}日,部分覆盖降权")
     if disagreement:
         machine_tags.append("大资金分歧")
     if (
@@ -582,6 +776,12 @@ def build_fund_snapshot(
     if main_total is None:
         main_total = sum(value for value in main_flows if value is not None) if flows else None
 
+    source_conflict = bool(raw.get("source_conflict"))
+    cross_source = str(raw.get("cross_source") or "")
+    cross_total = _number(raw.get("cross_total"))
+    if source_conflict:
+        machine_tags.append("资金源冲突")
+
     suspected_distribution = bool(
         main_total is not None
         and main_total > 0
@@ -593,11 +793,54 @@ def build_fund_snapshot(
     if suspected_distribution:
         machine_tags.append("疑似派发")
 
+    tech_score = _net_technical_votes(tech_data or {})
+    conflict_note = ""
+    fund_tech_conflict = False
+    if (
+        main_total is not None
+        and coverage_complete
+        and tech_score is not None
+        and (
+            (main_total > 0 and tech_score < 0)
+            or (main_total < 0 and tech_score > 0)
+        )
+    ):
+        float_market_cap = _number(
+            ((tech_data or {}).get("valuation") or {}).get("float_market_cap")
+            or ((tech_data or {}).get("valuation") or {}).get("market_cap")
+        )
+        cap_value = float_market_cap * 1e8 if float_market_cap else None
+        large = abs(main_total) > 5e8 or (cap_value and abs(main_total) > cap_value * 0.005)
+        if large:
+            fund_tech_conflict = True
+            conflict_note = (
+                f"资金-技术冲突: 主力{expected_days}日{main_total / 1e8:+.2f}亿 vs 技术{tech_score:+.1f}; "
+                "技术右侧规则优先，大额资金只作环境观察，不单独解除入场闸门"
+            )
+            machine_tags.append("资金-技术冲突")
+
+    # P1-8 两融/主动差背离裁决：两融变动>5% 且 主动差<-5%（或反向显著）时，
+    # 拦截栏强制输出裁决行（优先级+依据），禁止两源矛盾静默陈列。
+    drive = _order_flow_drive(tech_data or {})
+    margin_drive_conflict, margin_drive_conflict_note = margin_drive_adjudication(
+        institutional, drive,
+    )
+    if margin_drive_conflict:
+        machine_tags.append("两融/主动差背离")
+
     return FundSnapshot(
         main_flows=main_flows,
         main_total=main_total,
         main_vote=main_vote,
         main_strong=main_strong,
+        flow_coverage_days=coverage_days,
+        flow_expected_days=expected_days,
+        flow_coverage_complete=coverage_complete,
+        source_conflict=source_conflict,
+        cross_source=cross_source,
+        cross_total=cross_total,
+        fund_tech_conflict=fund_tech_conflict,
+        fund_tech_conflict_note=conflict_note,
         super_large_flows=[_number(value) for value in super_flows if _number(value) is not None],
         large_flows=[_number(value) for value in large_flows if _number(value) is not None],
         latest_super_large_net=latest_super,
@@ -611,6 +854,8 @@ def build_fund_snapshot(
         top10_institutional_change_points=top10_change,
         institutional_shareholder_divergence="机构散户分歧" in machine_tags,
         suspected_distribution=suspected_distribution,
+        margin_drive_conflict=margin_drive_conflict,
+        margin_drive_conflict_note=margin_drive_conflict_note,
         machine_tags=machine_tags,
         source=str(raw.get("source") or "问财逐日序列"),
     )

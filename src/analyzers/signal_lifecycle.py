@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # 状态语义的唯一解释：valid 是“已触发、买单等待回踩”；
 # filled 是“价格已触及买点”；triggered 只是旧库里的 filled 别名。
 TERMINAL_REENTRY_STATUSES = ("invalidated",)
-ACTIVE_EVENT_STATUSES = ("valid", "filled", "frozen")
+ACTIVE_EVENT_STATUSES = ("valid", "filled", "frozen", "pending_confirm")
 LEGACY_TRIGGERED_STATUS = "triggered"
 TERMINAL_EVENT_STATUSES = (
     "invalidated", "expired", "chase_abandon",
@@ -41,6 +41,7 @@ _STATUS_DISPLAY = {
     "valid": "已触发",
     "filled": "已成交",
     "frozen": "已冻结",
+    "pending_confirm": "待确认",
     "invalidated": "已失效",
     "expired": "已过期",
     "chase_abandon": "追高放弃",
@@ -63,12 +64,14 @@ def can_transition_status(current: str, target: str) -> bool:
     if current == target:
         return True
     if current == "valid":
-        return target in ("filled", "frozen", *TERMINAL_EVENT_STATUSES)
+        return target in ("filled", "frozen", "pending_confirm", *TERMINAL_EVENT_STATUSES)
     if current == "filled":
         return target in (
-            "frozen", "sig_target", "sig_stop", "time_exit",
+            "frozen", "pending_confirm", "sig_target", "sig_stop", "time_exit",
         )
     if current == "frozen":
+        return target in ("valid", "filled", *TERMINAL_EVENT_STATUSES)
+    if current == "pending_confirm":
         return target in ("valid", "filled", *TERMINAL_EVENT_STATUSES)
     return False
 _RULE_VERSION_DISPLAY = {
@@ -294,6 +297,12 @@ def _default_rule_entry(current: str, target: str, reason: str = "") -> str:
         return "R3.9时间离场"
     if target == "frozen":
         return "R4.1事件冻结"
+    if target == "pending_confirm":
+        return "R3.10外推量能待确认"
+    if current == "pending_confirm" and target == "invalidated":
+        return "R3.11外推量能次日不足"
+    if current == "pending_confirm" and target in ("valid", "filled"):
+        return "R3.12外推量能确认恢复"
     if current == "frozen":
         return "R4.2事件解冻"
     if target == "invalidated":
@@ -371,7 +380,9 @@ class InMemorySignalEventStore:
             event.invalid_reason = reason
             if event.status == "frozen":
                 event.frozen_prev_status = from_status
-            elif from_status == "frozen":
+            elif event.status == "pending_confirm":
+                event.frozen_prev_status = from_status
+            elif from_status in ("frozen", "pending_confirm"):
                 event.frozen_prev_status = ""
             self.logs.append({
                 "event_id": event_id,
@@ -428,13 +439,14 @@ class DbSignalEventStore:
                 if entry_type:
                     cursor.execute(
                         "SELECT * FROM signal_events WHERE stock_code=? "
-                        "AND status IN ('valid','filled','frozen','triggered') AND entry_type=?",
+                        "AND status IN ('valid','filled','frozen','pending_confirm','triggered') "
+                        "AND entry_type=?",
                         (stock_code, entry_type),
                     )
                 else:
                     cursor.execute(
                         "SELECT * FROM signal_events WHERE stock_code=? "
-                        "AND status IN ('valid','filled','frozen','triggered')",
+                        "AND status IN ('valid','filled','frozen','pending_confirm','triggered')",
                         (stock_code,),
                     )
                 return [self._row_to_event(r) for r in cursor.fetchall()]
@@ -546,14 +558,14 @@ class DbSignalEventStore:
                     return False
                 current = normalize_status(existing["status"])
                 target = normalize_status(status)
-                if target == "frozen":
+                if target in ("frozen", "pending_confirm"):
                     cursor.execute(
                         "UPDATE signal_events SET status=?, invalid_reason=?, "
                         "frozen_prev_status=?, updated_at=? WHERE event_id=?",
                         (target, reason, current,
                          datetime.now().isoformat(timespec="seconds"), event_id),
                     )
-                elif current == "frozen":
+                elif current in ("frozen", "pending_confirm"):
                     cursor.execute(
                         "UPDATE signal_events SET status=?, invalid_reason=?, "
                         "frozen_prev_status='', updated_at=? WHERE event_id=?",
@@ -757,6 +769,56 @@ class SignalLifecycle:
             trigger_data=trigger_data, rule_entry="R4.2事件解冻",
         )
 
+    def apply_projection_recheck(
+        self, actual_ratios: Dict[str, float], trade_date: Optional[date] = None,
+    ) -> List[Dict]:
+        """盘后复核：外推触发的活跃事件在实际量能严重不足时转待确认。"""
+        trade_date = trade_date or date.today()
+        notices: List[Dict] = []
+        for code, raw_actual in (actual_ratios or {}).items():
+            try:
+                actual_ratio = float(raw_actual)
+            except (TypeError, ValueError):
+                continue
+            if actual_ratio <= 0:
+                continue
+            for event in self.get_active_events(code):
+                try:
+                    snapshot = json.loads(event.entry_snapshot or "{}")
+                except Exception:
+                    snapshot = {}
+                if not snapshot.get("projection_triggered"):
+                    continue
+                try:
+                    threshold = float(snapshot.get("projection_threshold") or 1.2)
+                except (TypeError, ValueError):
+                    threshold = 1.2
+                if actual_ratio >= threshold * 0.8:
+                    continue
+                reason = (
+                    f"外推量能盘后未确认: 实际{actual_ratio:.2f}x < "
+                    f"触发阈值{threshold:.2f}x的80%，转入待确认"
+                )
+                self.store.update_status(
+                    event.event_id, "pending_confirm", reason,
+                    trigger_data={
+                        "actual_ratio": actual_ratio,
+                        "projection_threshold": threshold,
+                        "trade_date": trade_date.isoformat(),
+                    },
+                )
+                notices.append({
+                    "stock_code": code,
+                    "stock_name": event.stock_name,
+                    "exit_type": "外推量能待确认",
+                    "trigger_price": event.entry_price,
+                    "stop_loss_price": event.stop_loss,
+                    "reason": f"[{event.entry_type}] {reason}",
+                    "urgency": "重要",
+                    "event_id": event.event_id,
+                })
+        return notices
+
     # ---------- 每轮评估 ----------
 
     def evaluate_events(
@@ -838,6 +900,47 @@ class SignalLifecycle:
                     },
                 )
                 notices.append(_notice("追高放弃", reason, "常规"))
+                continue
+
+            if event.status == "pending_confirm":
+                try:
+                    next_day_volume = (
+                        float(volume_ratio) if volume_ratio is not None else None
+                    )
+                except (TypeError, ValueError):
+                    next_day_volume = None
+                if next_day_volume is not None and next_day_volume < 1.0:
+                    reason = (
+                        f"外推量能盘后未确认，次日量比{next_day_volume:.2f}<1.0，"
+                        "撤销回踩买入指令"
+                    )
+                    self.invalidate(
+                        event.event_id, reason,
+                        trigger_data={
+                            "volume_ratio": next_day_volume,
+                            "today": today.isoformat(),
+                            "rule": "外推量能次日复核",
+                        },
+                    )
+                    notices.append(_notice("信号作废", reason, "重要"))
+                elif next_day_volume is not None:
+                    target = event.frozen_prev_status or "valid"
+                    if target not in ("valid", "filled"):
+                        target = "valid"
+                    reason = (
+                        f"外推量能次日复核通过，量比{next_day_volume:.2f}≥1.0，"
+                        "恢复原状态"
+                    )
+                    self.store.update_status(
+                        event.event_id, target, reason,
+                        trigger_data={
+                            "volume_ratio": next_day_volume,
+                            "today": today.isoformat(),
+                            "rule": "外推量能次日复核",
+                        },
+                        rule_entry="R3.12外推量能确认恢复",
+                    )
+                    notices.append(_notice("外推量能确认", reason, "常规"))
                 continue
 
             if event.status == "frozen":

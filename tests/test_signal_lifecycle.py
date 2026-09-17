@@ -177,6 +177,19 @@ class TestLifecycleInvalidation:
         assert "退潮" in notices[0]["reason"]
         assert te._lifecycle.get_active_events("688028") == []
 
+    def test_retreating_sector_does_not_block_valid_entry_signal(self, monkeypatch):
+        """退潮只拦已持仓加仓；空仓标的的入场信号仍按策略条件生成。"""
+        from src.analyzers.timing_engine import get_backtest_timing_engine
+        te = get_backtest_timing_engine()
+        tech = _breakout_day_tech()
+        monkeypatch.setattr(te, "_fetch_tech_data", lambda code, mode="defend": tech)
+
+        signals = te.check_entry_signals(
+            "688099", "测试", "defend", sector_status="retreating"
+        )
+        assert len(signals) == 1
+        assert signals[0].entry_type == "价量突破"
+
     def test_daily_close_state_machine(self):
         """日内低点触及 Y 且收盘守住 Y → 成交；收盘破 Y → 回踩撤单。"""
         from src.analyzers.signal_lifecycle import (
@@ -246,7 +259,7 @@ class TestLifecycleInvalidation:
 class TestAudienceRouting:
     """【三】受众：买入事件只对空仓者成立；持仓者输出四选一"""
 
-    def _entry(self, code="688028"):
+    def _entry(self, code="688028", sector_status=""):
         return {
             "stock_code": code,
             "stock_name": "沃尔德",
@@ -262,6 +275,7 @@ class TestAudienceRouting:
                 "benchmark_price": 89.5,
                 "execution_tiers": [{"role": "main", "price": 89.5}],
             },
+            "sector_status": sector_status,
         }
 
     def test_held_stock_gets_position_advice_not_buy(self):
@@ -277,6 +291,30 @@ class TestAudienceRouting:
         assert advice.audience == "holding"
         assert advice.position_action == "加仓"                # 四选一
         assert "假说" in advice.schedule_note
+
+    def test_held_retreating_sector_becomes_no_add(self):
+        from src.decision.live_scheduler import schedule_live_signals
+        scheduled = schedule_live_signals(
+            [self._entry(sector_status="retreating")], [],
+            holdings=[{"code": "688028", "stock_name": "沃尔德",
+                       "shares": 1000, "cost_price": 85.0}],
+        )
+        assert scheduled["buy"] == []
+        assert len(scheduled["position_advice"]) == 1
+        advice = scheduled["position_advice"][0]
+        assert advice.audience == "holding"
+        assert advice.position_action == "不加仓"
+        assert "板块退潮，禁止加仓" in advice.schedule_note
+
+    def test_empty_retreating_sector_gets_normal_buy(self):
+        from src.decision.live_scheduler import schedule_live_signals
+        scheduled = schedule_live_signals(
+            [self._entry(sector_status="retreating")], [],
+            holdings=[],
+        )
+        assert len(scheduled["buy"]) == 1
+        assert scheduled["buy"][0].audience == "empty"
+        assert scheduled["position_advice"] == []
 
     def test_empty_position_gets_normal_buy(self):
         from src.decision.live_scheduler import schedule_live_signals

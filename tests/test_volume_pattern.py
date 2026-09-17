@@ -118,8 +118,21 @@ class TestPosition:
         assert position_gear(30.0, 29, 28, 27, 0.05, 0.35, False) == "高位"
 
     def test_near_high_without_gain_is_not_high(self):
-        # 贴前高但20日没涨够 → 不是高位，走 MA 排列
-        assert position_gear(30.0, 29, 28, 27, 0.05, 0.10, False) == "中继"
+        # P0-1：贴前高5% + 涨幅10% + MA20偏离<5% + 缺口>3% → 三子指标均弱 → 中继
+        assert position_gear(28.2, 28.1, 27.9, 27.6, 0.05, 0.10, False) == "中继"
+
+    def test_position_gear_ma20_dev_and_gap(self):
+        # P0-1：MA20偏离>5% 或 距前高≤3% → 高位（无需20日涨幅>30%）
+        assert position_gear(30.0, 29, 28, 27, 0.05, 0.10, False) == "高位"
+        assert position_gear(27.9, 28, 28.1, 28.2, 0.02, 0.10, False) == "高位"
+
+    def test_near_high_without_gain_and_flat_ma_is_not_low(self):
+        # P0-1：贴前高但20日涨幅不足、MA非多头 → 至少中继，禁止落低位兜底桶
+        assert position_gear(100.0, 95, 96, 97, 0.04, 0.10, False) == '中继'
+
+    def test_near_high_breakdown_still_counts(self):
+        # P0-1：贴前高但收盘<MA20 且 MA20 向下 → 破位优先于中继
+        assert position_gear(90.0, 95, 96, 97, 0.04, 0.10, True) == '破位'
 
     def test_continuation_is_bullish_alignment(self):
         assert position_gear(30.0, 29, 28, 27, None, None, None) == "中继"
@@ -153,9 +166,20 @@ class TestKlineInputs:
 
     def test_insufficient_kline(self):
         assert kline_position_inputs([{"收盘": 10.0}]) == {
-            "gain_20d": None, "ma20_falling": None,
+            "gain_20d": None, "ma20_falling": None, "high_52w": None,
         }
-        assert kline_position_inputs(None) == {"gain_20d": None, "ma20_falling": None}
+        assert kline_position_inputs(None) == {
+            "gain_20d": None, "ma20_falling": None, "high_52w": None,
+        }
+
+    def test_kline_inputs_high_52w(self):
+        # P0-1：近250日最高价（数据不足时用可得窗口）
+        highs = [10.0 + i * 0.1 for i in range(30)]
+        closes = [10.0 + i * 0.1 for i in range(30)]
+        out = kline_position_inputs(
+            [{"收盘": c, "最高": h} for c, h in zip(closes, highs)]
+        )
+        assert out["high_52w"] == max(highs[-250:])
 
 
 # ============================================================
@@ -168,10 +192,10 @@ class TestMatrix:
         assert classify(-4.2, 0.025, "缩量", "破位") == "抛压衰竭型"
         assert classify(-2.0, 0.01, "平量", "低位") == "抛压衰竭型"
 
-    def test_capital_absorption(self):
-        # 跌 + D>0 + 温和/明显放量 + 低位/中继 → 资金接货型
-        assert classify(-3.0, 0.08, "温和放量", "低位") == "资金接货型"
-        assert classify(-5.0, 0.10, "明显放量", "中继") == "资金接货型"
+    def test_down_with_positive_drive_is_divergence(self):
+        # 跌 + D>0 + 放量 → 外盘/价格方向矛盾，不能单边叫资金接货或出逃
+        assert classify(-3.0, 0.08, "温和放量", "低位") == "放量下跌分歧型"
+        assert classify(-5.0, 0.10, "明显放量", "中继") == "放量下跌分歧型"
 
     def test_wash_trade_trap(self):
         # 跌 + D>0 + 剧烈放量 + 高位 → 对倒诱多嫌疑
@@ -187,14 +211,21 @@ class TestMatrix:
         assert classify(-1.5, -0.06, "缩量", "破位") == "阴跌不止型"
         assert classify(-1.0, -0.02, "平量", "低位") == "阴跌不止型"
 
-    def test_bearish_breakdown_overrides_absorption(self):
-        # 矩阵外兜底：跌 + D>0 + 放量 + 破位 → 外盘占优与趋势矛盾，按真实抛压
-        assert classify(-6.0, 0.12, "明显放量", "破位") == "真实抛压型"
+    def test_bearish_breakdown_with_positive_drive_stays_divergence(self):
+        # 破位不能把外盘占优反向解释成“主动性出逃”；等资金/均价裁决
+        assert classify(-6.0, 0.12, "明显放量", "破位") == "放量下跌分歧型"
 
     def test_carried_rally(self):
-        # 涨/平 + D<0 → 承接型上涨
-        assert classify(3.0, -0.10, "温和放量", "中继") == "承接型上涨"
-        assert classify(0.0, -0.05, "平量", "低位") == "承接型上涨"
+        # 涨/平 + D<0 + 主力净流转正 → 承接型上涨（P1-10 必要条件）
+        assert classify(3.0, -0.10, '温和放量', '中继', main_force_net=0.2) == '承接型上涨'
+        assert classify(0.0, -0.05, '平量', '低位', main_force_net=0.1) == '承接型上涨'
+
+    def test_carried_rally_without_main_force_is_stall(self):
+        # P1-10：涨/平 + D<0 但无主力承接证据 → 降为缩量滞涨观察
+        assert classify(3.0, -0.10, '温和放量', '中继') == '缩量滞涨观察'
+        assert classify(0.46, -0.019, '缩量', '中继', main_force_net=0.0) == '缩量滞涨观察'
+        assert classify(0.46, -0.019, '缩量', '中继', main_force_net=-0.5) == '缩量滞涨观察'
+
 
     def test_distribution_at_high(self):
         # 涨 + D>=0 + 剧烈放量 + 高位 → 高位滞涨派发
@@ -329,17 +360,66 @@ class TestStarsAndRender:
         assert star_rating("真实抛压型", None, None, None) == 3
         assert star_rating("阴跌不止型", None, None, None) == 2
 
+    def test_overbought_caps_star_and_kills_resonance(self):
+        # P0-2：RSI6>72 时星级封顶 + 健康推进型禁用方向与力度共振判读句
+        data = _feirongda_data(
+            change_pct=3.0, current_price=30.0,
+            ma5=29, ma10=28, ma20=27, prior_high=30.5, recent_high=30.5,
+            gain_20d=0.35, rsi6=75,
+            tech_signals={'order_flow': {
+                'available': True, 'outer_volume': 1000, 'inner_volume': 900,
+                'imbalance_pct': 8.0,
+            }},
+            institutional_holding={'vote_score': 1, 'votes': {}},
+        )
+        result = build_volume_pattern(data)
+        assert result['pattern'] == '健康推进型'
+        assert result['star'] == 1
+        assert '短线过热' in result['summary_short']
+        assert '方向与力度共振' not in result['verdict']
+        assert '回踩确认优先' in result['verdict']
+        rendered = ' '.join(render_volume_pattern(result))
+        assert '★☆☆' in rendered
+        assert 'RSI6=75超买' in rendered
+
+    def test_sample_time_formatted_readable(self):
+        # P2-13：14位时间戳格式化为 MM-DD HH:MM，不得连排进条件句/数据行
+        data = _feirongda_data(
+            execution_plan={'volume_snapshot': {
+                'volume_ratio': 0.89, 'turnover_rate': 6.55,
+                'volume_ratio_sample_time': '20260917140219',
+                'volume_ratio_caliber': '实时接口',
+            }},
+        )
+        lines = render_volume_pattern(build_volume_pattern(data))
+        assert '接口量比0.89@09-17 14:02' in lines[1]
+        assert any('接口量比@09-17 14:02 回升1.2+' in line for line in lines)
+        assert all('20260917140219' not in line for line in lines)
+
+    def test_early_window_same_period_time_formatted(self):
+        # P2-13：早盘同期量比时间戳同样格式化
+        data = _feirongda_data(
+            execution_plan={'volume_snapshot': {
+                'volume_ratio': 3.0, 'turnover_rate': 6.55, 'is_early_window': True,
+                'same_period_volume_ratio': 1.5,
+                'same_period_sample_time': '20260917094200',
+                'same_period_caliber': '同期累计',
+            }},
+        )
+        lines = render_volume_pattern(build_volume_pattern(data))
+        assert '同期量比1.50@09-17 09:42' in lines[1]
+
     def test_feirongda_acceptance_render(self):
         """方案 4.2 验收样例逐字段。"""
         lines = render_volume_pattern(build_volume_pattern(_feirongda_data()))
         assert lines[0] == "③量能 [抛压衰竭型] ★★★"
         assert lines[1] == (
-            "③·数据: 量比0.89(缩量) | 换手6.55%(活跃) "
-            "| 主动差+2.5%(外盘占优) | 位置:破位"
+            "③·数据: 接口量比0.89@时间未标注(缩量;口径未标注) | 换手6.55%(活跃) "
+            "| 主动差+2.5%(外盘占优) | 位置:破位(距前高-9.6%｜MA20偏离-9.3%｜20日涨幅-15.0%)"
         )
         assert "RSI6=21超卖" in lines[2] and "跌不动了" in lines[2]
         assert any("量价资金背离" in line for line in lines)
-        assert any("量比回升1.2+" in line and "低吸复核" in line for line in lines)
+        assert any("接口量比@时间未标注 回升1.2+" in line and "低吸复核" in line for line in lines)
 
     def test_render_without_order_flow(self):
         data = _feirongda_data(tech_signals={})
@@ -418,9 +498,24 @@ class TestTemplateIntegration:
                 "available": True, "outer_volume": 500, "inner_volume": 700,
                 "imbalance_pct": -16.7,
             }},
+        "institutional_holding": {"vote_score": 0, "votes": {}},
+        }
+        # P1-9：主动差-16.7%(≤-8%) 的真实样本归真实抛压，不再仅按量能档贴阴跌
+        assert pattern_summary_line(jingzhida) == "精智达[真实抛压·风控]"
+
+        # 阴跌窄域（量比≤1.0 且 跌幅≤1.5% 且 主动差>-8%）仍输出缩量阴跌等待
+        grinding = {
+            "stock_name": "精智达", "stock_code": "688627",
+            "current_price": 40.0, "change_pct": -1.2,
+            "volume_ratio": 0.6, "turnover_rate": 1.5,
+            "ma5": 41.0, "ma10": 41.5, "ma20": 41.0,
+            "tech_signals": {"order_flow": {
+                "available": True, "outer_volume": 500, "inner_volume": 553,
+                "imbalance_pct": -5.0,
+            }},
             "institutional_holding": {"vote_score": 0, "votes": {}},
         }
-        assert pattern_summary_line(jingzhida) == "精智达[缩量阴跌·等待]"
+        assert pattern_summary_line(grinding) == "精智达[缩量阴跌·等待]"
 
 
 # ============================================================

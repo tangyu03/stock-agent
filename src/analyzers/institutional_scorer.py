@@ -81,6 +81,9 @@ _main_force_failures: Dict[str, int] = {}
 _MAIN_FORCE_FAILURE_THRESHOLD = 1
 _fund_flow_rank_cache: Dict[str, float] = {}
 _fund_flow_rank_cache_at = 0.0
+_fund_flow_rank_cross_cache: Dict[str, float] = {}
+_fund_flow_rank_cross_cache_at = 0.0
+_fund_flow_rank_cross_source = ""
 _FUND_FLOW_RANK_TTL = 15 * 60
 _MAIN_FORCE_FALLBACK_BACKOFF_STEPS = (30, 60, 120, 300)
 _main_force_fallback_failures = 0
@@ -340,6 +343,104 @@ def _load_fund_flow_rank_snapshot() -> Optional[Dict[str, float]]:
         return None
 
 
+def _fund_flow_rank_provider(source: str):
+    import akshare as ak
+
+    if source == "eastmoney":
+        return {
+            "source": "eastmoney",
+            "func": ak.stock_individual_fund_flow_rank,
+            "kwargs": {"indicator": "3日"},
+            "timeout": 20,
+            "code_columns": ("代码", "股票代码"),
+            "net_columns": _FUND_FLOW_RANK_NET_COLUMNS,
+            "amount_parser": _coerce_fund_flow_number,
+        }
+    if source == "ths":
+        return {
+            "source": "ths",
+            "func": ak.stock_fund_flow_individual,
+            "kwargs": {"symbol": "3日排行"},
+            "timeout": 35,
+            "code_columns": ("股票代码", "代码"),
+            "net_columns": ("资金流入净额",),
+            "amount_parser": _coerce_chinese_amount,
+        }
+    return None
+
+
+def _load_fund_flow_rank_cross_snapshot(primary_source: str) -> Optional[Dict[str, float]]:
+    """Load the opposite 3-day snapshot once for same-window source auditing."""
+    global _fund_flow_rank_cross_cache_at, _fund_flow_rank_cross_source
+    other = "ths" if primary_source == "eastmoney" else "eastmoney"
+    now = time.monotonic()
+    if (
+        _fund_flow_rank_cross_source == other
+        and now - _fund_flow_rank_cross_cache_at < _FUND_FLOW_RANK_TTL
+    ):
+        return _fund_flow_rank_cross_cache or None
+
+    provider = _fund_flow_rank_provider(other)
+    if provider is None:
+        return None
+    try:
+        def call_provider(**kwargs):
+            return provider["func"](**kwargs)
+
+        call_provider.__name__ = provider["func"].__name__
+        df = call_ak_with_retry(
+            call_provider,
+            retries=0,
+            timeout=provider["timeout"],
+            **provider["kwargs"],
+        )
+        if df is None or getattr(df, "empty", True):
+            _fund_flow_rank_cross_cache.clear()
+            _fund_flow_rank_cross_cache_at = now
+            _fund_flow_rank_cross_source = other
+            return None
+
+        code_col = next(
+            (c for c in provider["code_columns"] if c in df.columns), None
+        )
+        net_col = next(
+            (c for c in provider["net_columns"] if c in df.columns), None
+        )
+        if not code_col or not net_col:
+            _fund_flow_rank_cross_cache.clear()
+            _fund_flow_rank_cross_cache_at = now
+            _fund_flow_rank_cross_source = other
+            return None
+
+        parsed: Dict[str, float] = {}
+        for _, row in df.iterrows():
+            raw_code = _coerce_stock_code(row[code_col])
+            value = provider["amount_parser"](row[net_col])
+            if raw_code and raw_code.isdigit() and value is not None:
+                parsed[raw_code] = value
+        if not parsed:
+            _fund_flow_rank_cross_cache.clear()
+            _fund_flow_rank_cross_cache_at = now
+            _fund_flow_rank_cross_source = other
+            return None
+
+        _fund_flow_rank_cross_cache.clear()
+        _fund_flow_rank_cross_cache.update(parsed)
+        _fund_flow_rank_cross_cache_at = now
+        _fund_flow_rank_cross_source = other
+        logger.info(
+            "资金流对账源 %s 已缓存 %d 只股票（TTL %d 分钟）",
+            other, len(parsed), _FUND_FLOW_RANK_TTL // 60,
+        )
+        return _fund_flow_rank_cross_cache
+    except Exception as exc:
+        logger.debug("资金流对账源失败 %s: %s", other, str(exc)[:80])
+        _fund_flow_rank_cross_cache.clear()
+        _fund_flow_rank_cross_cache_at = now
+        _fund_flow_rank_cross_source = other
+        return None
+
+
 def _evaluate_main_force_flows(net_flows: List[float]) -> Dict[str, Any]:
     """按最近 5 日累计方向生成投票；强票只表示节奏，不追加票数。"""
     if len(net_flows) < 3:
@@ -368,6 +469,8 @@ def _evaluate_main_force_flows(net_flows: List[float]) -> Dict[str, Any]:
         "detail": detail,
         "raw": {
             "net_flows": valid_flows,
+            "coverage_days": len(valid_flows),
+            "expected_days": 5,
             "total": total,
             "inflow_days": inflow_days,
             "outflow_days": outflow_days,
@@ -493,13 +596,37 @@ def _fetch_main_force_flow_fallback(code: str) -> Optional[Dict[str, Any]]:
         if _fund_flow_rank_source == "eastmoney"
         else "stock_fund_flow_individual(3日排行)"
     )
+    cross_snapshot = _load_fund_flow_rank_cross_snapshot(_fund_flow_rank_source)
+    cross_total = cross_snapshot.get(clean_code) if cross_snapshot else None
+    cross_label = "东财主力3日" if _fund_flow_rank_cross_source == "eastmoney" else "同花顺3日净额"
+    source_conflict = bool(cross_total is not None and total * cross_total < 0)
+    if source_conflict:
+        vote = 0
+        direction = "方向冲突"
+
+    detail = f"{source_label}{direction}（合计 {total/1e8:.2f} 亿，批量源）"
+    if cross_total is not None:
+        detail += f"；对账源{cross_label}{cross_total/1e8:.2f}亿"
+    elif cross_snapshot is None:
+        detail += f"；对账源{cross_label}不可用，未完成双源复核"
+    else:
+        detail += f"；对账源{cross_label}无该股，未完成双源复核"
+    if source_conflict:
+        detail += "；双源方向冲突，降为中性"
+
     return {
         "vote": vote,
-        "detail": f"{source_label}{direction}（合计 {total/1e8:.2f} 亿，批量源）",
+        "detail": detail,
         "raw": {
             "net_flows": [total],
+            "coverage_days": 1,
+            "expected_days": 3,
             "total": total,
             "source": source_api,
+            "cross_source": _fund_flow_rank_cross_source or None,
+            "cross_total": cross_total,
+            "cross_available": cross_snapshot is not None,
+            "source_conflict": source_conflict,
         },
     }
 
@@ -507,14 +634,20 @@ def _fetch_main_force_flow_fallback(code: str) -> Optional[Dict[str, Any]]:
 def _reset_institutional_state():
     """重置所有状态（仅供测试用）"""
     global _api_disabled, _api_fail_count
+    global _block_trade_fetcher
     global _fund_flow_rank_cache_at
+    global _fund_flow_rank_cross_cache_at, _fund_flow_rank_cross_source
     global _main_force_fallback_failures, _main_force_fallback_block_until
     global _fund_flow_rank_source, _fund_flow_rank_last_error
     _api_disabled = {k: False for k in _api_disabled}
     _api_fail_count = {k: 0 for k in _api_fail_count}
+    _block_trade_fetcher = None
     _main_force_failures.clear()
     _fund_flow_rank_cache.clear()
     _fund_flow_rank_cache_at = 0.0
+    _fund_flow_rank_cross_cache.clear()
+    _fund_flow_rank_cross_cache_at = 0.0
+    _fund_flow_rank_cross_source = ""
     _main_force_fallback_failures = 0
     _main_force_fallback_block_until = 0.0
     _fund_flow_rank_source = ""
@@ -1283,6 +1416,37 @@ def _fetch_top10_institutional_ratio(code: str) -> Optional[Dict[str, Any]]:
 # 主入口：综合打分
 # ---------------------------------------------------------------------------
 
+# 【P0-6】大宗交易第五资金源（笔数/折溢价/连续性/营业部）。
+# 默认不启用（避免无网环境阻塞打分）；生产侧通过
+# set_block_trade_fetcher(fetch_block_trade_stats) 注入真实抓取器。
+_block_trade_fetcher = None
+
+
+def set_block_trade_fetcher(fetcher) -> None:
+    """注入大宗交易抓取器（测试用 mock 或生产用 akshare 封装）。"""
+    global _block_trade_fetcher
+    _block_trade_fetcher = fetcher
+
+
+def _fetch_block_trade_info(code: str):
+    """近20日折价大宗统计（P0-6）。fetcher 未注入或失败时返回 None。"""
+    if _block_trade_fetcher is None:
+        return None
+    try:
+        stats = _block_trade_fetcher(code)
+    except Exception as e:
+        logger.debug("大宗交易源失败 %s: %s", code, str(e)[:80])
+        return None
+    if not stats or not isinstance(stats, dict):
+        return None
+    try:
+        from ..data_layer.block_trade import block_trade_distribution_trigger
+        stats["trigger"] = block_trade_distribution_trigger(stats)
+    except Exception as e:
+        logger.debug("大宗触发规则失败 %s: %s", code, str(e)[:80])
+    return stats
+
+
 def score_institutional_holding(
     code: str,
     turnover_available: Optional[bool] = None,
@@ -1461,6 +1625,8 @@ def score_institutional_holding(
         "bearish_count": bearish_count,
         "neutral_count": neutral_count,
         "top10_institutional_ratio": top10_ratio,
+        # 【P0-6】大宗交易第五资金源（近20日折价大宗统计+派发确认候选触发）
+        "block_trade": _fetch_block_trade_info(code),
         "data_sufficient": data_sufficient,
         "downweighted": not data_sufficient,
         "data_reason": "" if data_sufficient else "主力资金缺失/换手率缺失",

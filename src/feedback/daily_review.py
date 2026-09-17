@@ -67,12 +67,55 @@ class DailyReview:
         # 误差进记录表（作废条件的数据基础设施）
         try:
             from ..analyzers.volume_projection import finalize_day_projection
-            from ..data_layer.stock_data import get_stock_data
-            finalized = finalize_day_projection(self._collect_actual_ratios())
+            actual_ratios = self._collect_actual_ratios()
+            finalized = finalize_day_projection(actual_ratios)
             if finalized:
                 lines.append(f"  外推误差回填: {finalized} 条（收盘 vs 盘中外推，已入记录表）")
+            from ..analyzers.timing_engine import get_timing_engine
+            downgraded = get_timing_engine()._lifecycle.apply_projection_recheck(actual_ratios)
+            if downgraded:
+                lines.append(f"  外推量能盘后降级: {len(downgraded)} 条（已转待确认）")
         except Exception as e:
             logger.debug("外推误差回填失败: %s", str(e)[:60])
+
+        # 0.6 【P0-5】派发状态机：昨日嫌疑票今日必须出现在任一终态或延续态，
+        # 不得静默消失（蘅东光 9-16→9-17 案例）；转换写日志供后验记分。
+        lines.append("🕵️ 派发状态机:")
+        try:
+            from ..feedback.distribution_watch import (
+                list_active_suspects,
+                record_distribution_state,
+                render_distribution_summary,
+            )
+            suspects = list_active_suspects()
+            if suspects:
+                try:
+                    from ..data_layer.stock_data import batch_get_realtime_quotes
+                    quote_rows = batch_get_realtime_quotes(
+                        [s["stock_code"] for s in suspects]
+                    )
+                except Exception:
+                    quote_rows = {}
+                for s in suspects:
+                    code = s["stock_code"]
+                    quote = quote_rows.get(code) or {}
+                    try:
+                        change_pct = float(quote.get("change_pct") or 0)
+                    except (TypeError, ValueError):
+                        change_pct = None
+                    try:
+                        record_distribution_state(
+                            code,
+                            s.get("stock_name") or "",
+                            as_of=date.today().isoformat(),
+                            price_change_pct=change_pct,
+                        )
+                    except Exception as e:
+                        logger.debug("派发状态机推进失败 %s: %s", code, str(e)[:80])
+            lines.append(render_distribution_summary(as_of=date.today().isoformat()))
+        except Exception as e:
+            lines.append(f"  派发状态机生成失败: {str(e)[:60]}")
+        lines.append("")
 
         # 1. 今日大盘
         lines.append("📊 大盘表现:")

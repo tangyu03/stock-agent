@@ -1,0 +1,98 @@
+﻿*** Begin Patch
+*** Update File: tests/test_p0_audit_0916.py
+@@
+                 result = build_volume_pattern(data)
+                 assert result["pattern"] == "真实抛压型"
+ 
+ 
++def test_p18_margin_drive_divergence_forces_adjudication_line():
++    """P1-8：臻宝 9-17 两融+11.3% 逆势加杠杆 vs 主动差-14% → 强制输出裁决行。"""
++    from src.analyzers.signal_plan import build_fund_snapshot
++    from src.push.templates import _entry_decision_lines
++
++    institutional = {
++        "vote_score": 1,
++        "votes": {"north_bound": {
++            "vote": 1,
++            "detail": "融资余额增加11.3%（2.35→2.61亿）",
++            "raw": {"latest": 2.61e8, "prev": 2.35e8, "change_pct": 0.113,
++                    "as_of": "20260916"},
++        }},
++    }
++    tech = {"tech_signals": {"order_flow": {
++        "available": True, "outer_volume": 400, "inner_volume": 600,
++        "imbalance_pct": -14.0,
++    }}}
++    fund = build_fund_snapshot(institutional, tech)
++    assert fund.margin_drive_conflict is True
++    assert "裁决" in fund.margin_drive_conflict_note
++    assert "11.3%" in fund.margin_drive_conflict_note
++    assert "两融/主动差背离" in fund.machine_tags
++
++    lines = _entry_decision_lines({
++        "trigger_reason": "技术右侧",
++        "tech_signals": {"category_votes": {
++            "trend": {"vote": 1, "details": []},
++            "momentum": {"vote": 0, "details": []},
++            "pattern": {"vote": 0, "details": []},
++        }},
++        "execution_plan": {"fund_snapshot": fund.as_dict()},
++    })
++    joined = "\n".join(lines)
++    assert "⑥裁决" in joined
++    assert "11.3%" in joined and "-14.0%" in joined
++
++
++def test_p18_observation_card_shows_margin_drive_adjudication():
++    """P1-8：观察卡 ④资金 同样强制输出两融/主动差裁决行。"""
++    from src.push.templates import _institutional
++
++    content = _institutional({
++        "institutional_holding": {
++            "vote_score": 1,
++            "vote_label": "资金看多",
++            "bullish_count": 1, "bearish_count": 0,
++            "votes": {"north_bound": {
++                "vote": 1,
++                "detail": "融资余额增加11.3%（2.35→2.61亿）",
++                "raw": {"latest": 2.61e8, "prev": 2.35e8,
++                        "change_pct": 0.113, "as_of": "20260916"},
++            }},
++        },
++        "tech_signals": {"order_flow": {
++            "available": True, "outer_volume": 400, "inner_volume": 600,
++            "imbalance_pct": -14.0,
++        }},
++    })
++    assert "裁决" in content
++    assert "两融逆势加杠杆" in content
++
++
++def test_p18_no_adjudication_when_sources_agree_or_mild():
++    """P1-8 反向验收：同向或幅度不足时不得输出裁决行。"""
++    from src.analyzers.signal_plan import build_fund_snapshot
++
++    institutional = {
++        "vote_score": 1,
++        "votes": {"north_bound": {
++            "vote": 1, "detail": "融资余额增加",
++            "raw": {"latest": 2.61e8, "prev": 2.35e8, "change_pct": 0.113,
++                    "as_of": "20260916"},
++        }},
++    }
++    # 两融+11.3% 与 主动买入+14% 同向 → 无裁决
++    agree = build_fund_snapshot(institutional, {"tech_signals": {"order_flow": {
++        "available": True, "outer_volume": 600, "inner_volume": 400,
++        "imbalance_pct": 14.0,
++    }}})
++    assert agree.margin_drive_conflict is False
++    # 主动差幅度不足(-4% > -5%) → 无裁决
++    mild = build_fund_snapshot(institutional, {"tech_signals": {"order_flow": {
++        "available": True, "outer_volume": 480, "inner_volume": 520,
++        "imbalance_pct": -4.0,
++    }}})
++    assert mild.margin_drive_conflict is False
++
++
+ def test_v29_early_missing_volume_does_not_blind_high_distribution_evidence():
+*** End Patch

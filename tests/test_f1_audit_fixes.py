@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
+from datetime import datetime, timedelta
+
 import pytest
+
+
+today = datetime.now().strftime("%Y-%m-%d")
+yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 def test_fund_counts_are_scoped_to_fast_sources(monkeypatch):
@@ -10,15 +16,15 @@ def test_fund_counts_are_scoped_to_fast_sources(monkeypatch):
     monkeypatch.setitem(scorer._FUND_LAYERING, "slow_sources", ("main_force", "shareholder"))
     monkeypatch.setattr(scorer, "_fetch_margin_balance", lambda code: {
         "vote": 1, "detail": "两融增加",
-        "raw": {"as_of": "2026-09-11"},
+        "raw": {"as_of": today},
     })
     monkeypatch.setattr(scorer, "_fetch_lhb_institutional", lambda code: {
         "vote": -1, "detail": "净卖出",
-        "raw": {"as_of": "2026-09-10"},
+        "raw": {"as_of": yesterday},
     })
     monkeypatch.setattr(scorer, "_fetch_main_force_flow", lambda code: {
         "vote": 1, "detail": "主力净流入",
-        "raw": {"as_of": "2026-09-11"},
+        "raw": {"as_of": today},
     })
     monkeypatch.setattr(scorer, "_fetch_shareholder_count", lambda code: {
         "vote": 1, "detail": "户数减少",

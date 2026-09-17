@@ -349,6 +349,9 @@ def render_in_flight_events(rows: List[Dict]) -> str:
             seg += f" 止损{stop:.2f}"
         if target:
             seg += f" 目标{target:.2f}"
+        if entry and stop and target and entry > stop:
+            # P0-4 RRR 强制披露：(目标-买点)/(买点-止损)；RRR<1.0 的处置在事件生成侧把关。
+            seg += f" RRR{(target - entry) / (entry - stop):.2f}"
         if current:
             seg += f" 现价{current:.2f}"
             if entry:
@@ -439,7 +442,7 @@ def build_watch_ladder(
     in_flight_events: Optional[List[Dict]] = None,
     market_mode: str = "defend",
 ) -> List[Dict]:
-    """把观察矩阵压成候选梯；硬闸门与活跃在飞事件不参与排序。"""
+    """把观察矩阵压成候选梯；活跃在飞事件不参与排序。"""
     rows: List[Dict] = []
     in_flight_by_code: Dict[str, Dict] = {}
     for event in in_flight_events or []:
@@ -461,28 +464,6 @@ def build_watch_ladder(
         if code in in_flight_by_code:
             continue
         diagnostic = str((entry_diagnostics or {}).get(code, ""))
-        if "板块退潮" in diagnostic and (
-            "禁止新" in diagnostic or "新买入未触发" in diagnostic
-        ):
-            rows.append({
-                "stock_code": code,
-                "code": code,
-                "stock_name": stock.get("name", code),
-                "name": stock.get("name", code),
-                "fail_count": 0,
-                "strategy": "全部策略",
-                "mode_required": "板块未退潮",
-                "mode_eligible": False,
-                "cross_mode": False,
-                "hard_blocked": True,
-                "failures": [],
-                "reason": "新买入未触发：板块退潮",
-                "in_flight": False,
-                "in_flight_event_id": "",
-                "in_flight_entry_type": "",
-                "in_flight_status_label": "",
-            })
-            continue
         groups = _strategy_missing_groups((entry_diagnostics or {}).get(code, ""))
         if not groups:
             continue

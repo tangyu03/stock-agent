@@ -1,0 +1,121 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_plan.py
+@@
+     institutional_shareholder_divergence: bool = False
+     suspected_distribution: bool = False
++    margin_drive_conflict: bool = False
++    margin_drive_conflict_note: str = ""
+     machine_tags: List[str] = field(default_factory=list)
+     source: str = ""
+*** Update File: src/analyzers/signal_plan.py
+@@
+     return tiers
+ 
+ 
++def _order_flow_drive(tech_data: Dict[str, Any]) -> Optional[float]:
++    """从 tech_data 提取主动差 D（小数，imbalance_pct %→/100）。缺失返回 None。"""
++    flow = ((tech_data or {}).get("tech_signals") or {}).get("order_flow") or {}
++    if not flow.get("available"):
++        return None
++    imbalance = _number(flow.get("imbalance_pct"))
++    if imbalance is None:
++        return None
++    return imbalance / 100.0
++
++
++def margin_drive_adjudication(
++    institutional: Optional[Dict[str, Any]],
++    drive: Optional[float],
++) -> Tuple[bool, str]:
++    """P1-8 两融/主动差背离裁决。
++
++    两融变动>5% 且 主动差<-5%（或反向显著）→ (True, 裁决行文案)。
++    两融为 T-1 滞后披露、主动差为当日实时成交，冲突时以主动差为准。
++    无冲突/数据不足 → (False, "")。
++    """
++    if drive is None:
++        return False, ""
++    votes = (institutional or {}).get("votes") or {}
++    raw = (votes.get("north_bound") or {}).get("raw") or {}
++    margin_change = _number(raw.get("change_pct"))
++    if margin_change is None:
++        return False, ""
++    if margin_change > 0.05 and drive < -0.05:
++        return True, (
++            f"裁决:两融逆势加杠杆({margin_change * 100:+.1f}%) vs 主动卖出"
++            f"(主动差{drive * 100:+.1f}%)——两融T-1滞后披露,以当日主动差为准,"
++            "当日不追,等资金回补确认"
++        )
++    if margin_change < -0.05 and drive > 0.05:
++        return True, (
++            f"裁决:两融撤退({margin_change * 100:+.1f}%) vs 主动买入"
++            f"(主动差{drive * 100:+.1f}%)——两融T-1滞后披露,以当日主动差为准,"
++            "杠杆撤退不单独否决"
++        )
++    return False, ""
++
++
+ def build_fund_snapshot(
+     institutional: Optional[Dict[str, Any]],
+     tech_data: Optional[Dict[str, Any]] = None,
+*** Update File: src/analyzers/signal_plan.py
+@@
+             )
+             machine_tags.append("资金-技术冲突")
+ 
++    # P1-8 两融/主动差背离裁决：两融变动>5% 且 主动差<-5%（或反向显著）时，
++    # 拦截栏强制输出裁决行（优先级+依据），禁止两源矛盾静默陈列。
++    drive = _order_flow_drive(tech_data or {})
++    margin_drive_conflict, margin_drive_conflict_note = margin_drive_adjudication(
++        institutional, drive,
++    )
++    if margin_drive_conflict:
++        machine_tags.append("两融/主动差背离")
++
+     return FundSnapshot(
+         main_flows=main_flows,
+         main_total=main_total,
+*** Update File: src/analyzers/signal_plan.py
+@@
+         institutional_shareholder_divergence="机构散户分歧" in machine_tags,
+         suspected_distribution=suspected_distribution,
++        margin_drive_conflict=margin_drive_conflict,
++        margin_drive_conflict_note=margin_drive_conflict_note,
+         machine_tags=machine_tags,
+         source=str(raw.get("source") or "问财逐日序列"),
+     )
+*** Update File: src/push/templates.py
+@@
+     if machine_tags:
+         funds_text += " | " + "/".join(machine_tags)
+     lines.append(f"④资金:{funds_text}")
+ 
++    # P1-8：两融/主动差背离裁决行（拦截栏强制输出，优先级+依据）
++    if fund.get("margin_drive_conflict") and fund.get("margin_drive_conflict_note"):
++        lines.append(f"⑥裁决:{_esc(fund['margin_drive_conflict_note'])}")
++
+     note = str(data.get("trigger_reason") or data.get("note") or "")
+     trigger_text = note.split(" | 调度:", 1)[0] or "无触发明细"
+*** Update File: src/push/templates.py
+@@
+             block_line = render_block_trade_line(block_trade, trigger)
+             if block_line:
+                 parts.append(block_line)
+         except Exception:
+             pass
+ 
++    # P1-8：两融/主动差背离裁决行（观察卡 ④资金 同样强制输出，两源矛盾不静默）
++    try:
++        from ..analyzers.signal_plan import margin_drive_adjudication
++        flow = (data.get("tech_signals") or {}).get("order_flow") or {}
++        _drive = None
++        if flow.get("available") and flow.get("imbalance_pct") is not None:
++            _drive = float(flow["imbalance_pct"]) / 100.0
++        _conflict, _note = margin_drive_adjudication(inst, _drive)
++        if _conflict and _note:
++            parts.append(f"⚖{_note}")
++    except Exception:
++        pass
++
+     return " | ".join(parts)
+*** End Patch

@@ -101,8 +101,55 @@ def test_batch_snapshot_is_parsed_and_cached(monkeypatch):
     assert first["raw"]["total"] == 120000000.0
     assert second["vote"] == -1
     assert third["vote"] == 0
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert len(inst._fund_flow_rank_cache) == 3
+
+
+def test_opposite_fund_flow_sources_are_neutralized(monkeypatch):
+    monkeypatch.setattr(
+        inst,
+        "_load_fund_flow_rank_snapshot",
+        lambda: {"600000": 229_000_000.0},
+    )
+    inst._fund_flow_rank_source = "ths"
+    inst._fund_flow_rank_cross_source = "eastmoney"
+    monkeypatch.setattr(
+        inst,
+        "_load_fund_flow_rank_cross_snapshot",
+        lambda primary_source: {"600000": -202_000_000.0},
+    )
+
+    result = inst._fetch_main_force_flow_fallback("600000")
+
+    assert result["vote"] == 0
+    assert result["raw"]["source_conflict"] is True
+    assert result["raw"]["cross_source"] == "eastmoney"
+    assert "双源方向冲突" in result["detail"]
+    assert "同花顺3日净额方向冲突" in result["detail"]
+    assert "东财主力3日-2.02亿" in result["detail"]
+
+
+def test_unavailable_cross_source_is_disclosed(monkeypatch):
+    monkeypatch.setattr(
+        inst,
+        "_load_fund_flow_rank_snapshot",
+        lambda: {"600000": 229_000_000.0},
+    )
+    inst._fund_flow_rank_source = "ths"
+    inst._fund_flow_rank_cross_source = "eastmoney"
+    monkeypatch.setattr(
+        inst,
+        "_load_fund_flow_rank_cross_snapshot",
+        lambda primary_source: None,
+    )
+
+    result = inst._fetch_main_force_flow_fallback("600000")
+
+    assert result["vote"] == 1
+    assert result["raw"]["source_conflict"] is False
+    assert result["raw"]["cross_available"] is False
+    assert "对账源东财主力3日不可用" in result["detail"]
+    assert "未完成双源复核" in result["detail"]
 
 
 def test_ths_snapshot_is_used_when_eastmoney_fails(monkeypatch):

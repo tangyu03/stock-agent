@@ -98,9 +98,7 @@ def _explain_no_entry(
     inst_score = float(institutional.get("vote_score", 0) or 0)
     strategy_reasons = _strategy_blockers(market_mode, sector_status, tech_data)
 
-    if sector_status == "retreating":
-        primary = "板块退潮，新买入未触发"
-    elif market_mode == "retreat":
+    if market_mode == "retreat":
         primary = "撤退模式只允许恐慌抄底"
     elif tech_score < 0:
         primary = "技术投票偏空，未触发买入"
@@ -126,9 +124,6 @@ def _strategy_blockers(
     tech_data: Dict,
 ) -> List[str]:
     """List the entry gate that failed for each of the five strategies."""
-    if sector_status == "retreating":
-        return ["全部策略: 新买入未触发（板块退潮）"]
-
     blockers: List[str] = []
     panic_reason = _panic_bottom_blocker(tech_data)
     if panic_reason:
@@ -528,7 +523,7 @@ def run_unified_analysis(
                 logger.debug("再入场判定失败 %s: %s", code, str(e)[:60])
             # 【P1-1】防守模式追强被拦 → 踏空成本入台账（四确认里至少创新高+放量
             # 才登记：不是每只下跌股都算磨空，只有“本可放行却被纪律拦下”的才算）
-            if chase_missed_enabled and sector != "retreating":
+            if chase_missed_enabled:
                 try:
                     current_price = float((entry_tech or {}).get("current_price") or 0)
                     # 【Phase5 回炉】锄 prior_high（剔除当日）：踏空台账的
