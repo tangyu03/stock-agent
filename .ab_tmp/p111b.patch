@@ -1,0 +1,98 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/institutional_scorer.py
+@@
+     return stats
+ 
+ 
++def annotate_source_status(
++    votes: Dict[str, Dict[str, Any]],
++    recovered: Optional[Dict[str, bool]] = None,
++    disabled: Optional[Dict[str, bool]] = None,
++) -> Dict[str, str]:
++    """P1-11 源可用性标注（纯函数）：实时 / 首日恢复 / 不可用 / 无数据。
++
++    有值票必须区分缓存与实时；故障源记不可用不参与投票。
++    返回 {src_name: source_status}，并就地追加 detail/raw 标注。
++    """
++    recovered = recovered or {}
++    disabled = disabled or {}
++    out: Dict[str, str] = {}
++    for src_name, v in votes.items():
++        if recovered.get(src_name):
++            status = "recovered_first_day"
++            if "首日恢复" not in str(v.get("detail") or ""):
++                v["detail"] = str(v.get("detail") or "") + "（首日恢复,无连续性）"
++            if not isinstance(v.get("raw"), dict):
++                v["raw"] = {}
++            v["raw"]["recovered_first_day"] = True
++        elif disabled.get(src_name):
++            status = "disabled"
++        elif v.get("raw"):
++            status = "realtime"
++        else:
++            status = "no_data"
++        if isinstance(v.get("raw"), dict):
++            v["raw"]["source_status"] = status
++        out[src_name] = status
++    return out
++
++
+ def score_institutional_holding(
+     code: str,
+     turnover_available: Optional[bool] = None,
+*** Update File: src/analyzers/institutional_scorer.py
+@@
+-    vote_freshness: Dict[str, Dict[str, Any]] = {}
++    # P1-11 源可用性标注：实时/首日恢复/不可用/无数据；有值票必须能区分缓存与实时。
++    source_status = annotate_source_status(
++        votes, dict(_api_recovered_today), dict(_api_disabled),
++    )
++    vote_freshness: Dict[str, Dict[str, Any]] = {}
+     for src_name, v in votes.items():
+         raw = v.get("raw") or {}
+         as_of = str(raw.get("as_of") or "") or None
+@@
+         vote_freshness[src_name] = {
+             "date": as_of,
+             "age_days": age_value,
+             "display_only": display_only,
+             "effective_weight": effective_weight,
++            "source_status": source_status.get(src_name, "unknown"),
+         }
+*** Update File: src/analyzers/institutional_scorer.py
+@@
+         "vote_label": vote_label,
+         "votes": votes,
+         "vote_freshness": vote_freshness,
++        "source_status": source_status,
+         "valid_vote_sources": valid_vote_sources,
+*** Update File: src/push/templates.py
+@@
+         if _conflict and _note:
+             parts.append(f"⚖{_note}")
+     except Exception:
+         pass
+ 
++    # P1-11 源可用性一致性标注：首日恢复/接口不可用/缓存 必须可见，禁止混合态静默。
++    source_status = inst.get("source_status") or {}
++    status_notes = []
++    status_icons = {
++        "recovered_first_day": "首日恢复",
++        "disabled": "接口不可用",
++    }
++    src_labels = {
++        "north_bound": "两融", "lhb": "龙虎榜",
++        "main_force": "主力", "shareholder": "股东",
++    }
++    for src_name, status in source_status.items():
++        if status in status_icons:
++            status_notes.append(
++                f"{src_labels.get(src_name, src_name)}{status_icons[status]}"
++            )
++    if inst.get("source_note"):
++        status_notes.append(inst["source_note"])
++    if status_notes:
++        parts.append("源状态:" + "/".join(status_notes))
++
+     return " | ".join(parts)
+*** End Patch

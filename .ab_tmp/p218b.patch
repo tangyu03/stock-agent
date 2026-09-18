@@ -1,0 +1,15 @@
+﻿*** Begin Patch
+*** Update File: src/push/pushplus.py
+@@
+         if exits:
+             content += f"<b>📤 卖出信号 ({len(exits)}条)</b><br/><br/>"
+             for i, s in enumerate(exits):
+                 _, card = render_exit_signal(s)
+                 content += card
+                 if i < len(exits) - 1:
+-                    content += "<br/>"
++                    # P2-18：卖出卡之间也用 <hr/> 分隔，与买入/观察卡一致，
++                    # 分块以个股卡片为原子，避免卖出卡跨页被切断。
++                    content += "<br/><hr/>"
+             content += "<br/>"
+*** End Patch

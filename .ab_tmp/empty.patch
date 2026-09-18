@@ -1,0 +1,6 @@
+﻿*** Begin Patch
+*** Update File: tests/test_p0_audit_0916.py
+@@
+ def test_p17_full_coverage_still_shows_expected_window():
+     """P1-7：覆盖3/3才允许显示3日窗口字样。"""
+*** End Patch

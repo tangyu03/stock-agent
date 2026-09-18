@@ -206,6 +206,15 @@ class DailyReview:
         except Exception as e:
             logger.debug("参数附录生成失败: %s", str(e)[:60])
 
+        # 6.1 【P2-16】后验自动记分：完结事件按策略/分型/位置三维累计，
+        # 报告尾部出现累计分型命中率区块（>=10 样本自动输出偏差方向）。
+        try:
+            from ..feedback.completion_scoring import render_completion_score_block
+            lines.append("")
+            lines.append(render_completion_score_block())
+        except Exception as e:
+            logger.debug("累计分型命中率区块生成失败: %s", str(e)[:60])
+
         report = "\n".join(lines)
         return report
 

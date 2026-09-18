@@ -29,6 +29,98 @@ def stock_identity(data) -> str:
     code = str((data or {}).get("stock_code") or "").strip() or "未知代码"
     return f"{name}({code})"
 
+def _action_watch_price(data, kind: str) -> str:
+    """行动摘要的需盯价格：执行档主档/触发价/止损价，取第一个可得者。"""
+    plan = data.get("execution_plan") or {}
+    tiers = plan.get("execution_tiers") or []
+    for tier in tiers:
+        role = str(tier.get("role") or "")
+        price = tier.get("price")
+        if role in ("main", "probe") and price:
+            try:
+                return f"{_val(float(price))}({_esc(str(tier.get('name') or role))})"
+            except (TypeError, ValueError):
+                continue
+    trigger = data.get("trigger_price")
+    if trigger:
+        try:
+            return f"{_val(float(trigger))}(触发价)"
+        except (TypeError, ValueError):
+            pass
+    stop = data.get("stop_loss_price") or data.get("stop_loss")
+    if stop:
+        try:
+            return f"{_val(float(stop))}(止损价)"
+        except (TypeError, ValueError):
+            pass
+    return ""
+
+def _action_summary_line(data, kind: str) -> str:
+    """单票行动摘要行：名称 触发事件 | 待验证条件 | 需盯价格。数据不足返回空串。"""
+    name = str((data or {}).get("stock_name") or "").strip()
+    code = str((data or {}).get("stock_code") or "").strip()
+    if not name or not code:
+        return ""
+    kind_text = {"买入": "买入", "卖出": "卖出", "观察": "观察"}.get(kind, kind)
+    event = str(data.get("entry_type") or data.get("exit_type") or "").strip()
+    event_text = f"{kind_text} {event}" if event else kind_text
+
+    # 待验证条件：分型确认条件（confirms），无则用确认目标/缺数据不放假结论
+    confirm_text = ""
+    try:
+        vp = build_volume_pattern(data or {})
+        if vp.get("available"):
+            confirms = [str(c) for c in (vp.get("confirms") or []) if c]
+            if confirms:
+                confirm_text = " | ".join(confirms[:2])
+    except Exception:
+        confirm_text = ""
+
+    price_text = ""
+    try:
+        current = data.get("current_price")
+        if current:
+            price_text = f"现价{_val(float(current))}"
+    except (TypeError, ValueError):
+        pass
+    watch = _action_watch_price(data, kind)
+    if watch:
+        price_text = f"{price_text} 盯:{watch}".strip()
+
+    parts = [f"{_esc(name)}({_esc(code)}) {_esc(event_text)}"]
+    if confirm_text:
+        parts.append(f"待验:{_esc(confirm_text)}")
+    if price_text:
+        parts.append(f"{_esc(price_text)}")
+    return " | ".join(parts)
+
+def render_action_summary(entries=None, exits=None, observations=None) -> str:
+    """页首今日行动摘要：一行一人（触发事件｜待验证条件｜需盯价格）。
+
+    P2-17：报告终点原为"防守"二字，读者不知道今天该做什么。行动行从
+    分型确认条件（confirms）与执行档/触发/止损价格派生，首屏即可回答
+    "今天动不动"。无任何行动时返回空串。
+    """
+    rows = []
+    for s in (entries or []):
+        row = _action_summary_line(s, "买入")
+        if row:
+            rows.append(row)
+    for s in (exits or []):
+        row = _action_summary_line(s, "卖出")
+        if row:
+            rows.append(row)
+    for s in (observations or []):
+        row = _action_summary_line(s, "观察")
+        if row:
+            rows.append(row)
+    if not rows:
+        return ""
+    block = ["<b>📌 今日行动摘要</b>"]
+    block.extend(f"&nbsp;&nbsp;{row}" for row in rows)
+    block.append("")
+    return "<br/>".join(block)
+
 def _fund_amount(amount: float) -> str:
     """格式化资金流向金额（元→亿/万），如 1.50亿流入, -3200万流出"""
     if amount is None:
@@ -441,6 +533,27 @@ def _institutional(data) -> str:
     except Exception:
         pass
 
+    # P1-11 源可用性一致性标注：首日恢复/接口不可用/缓存 必须可见，禁止混合态静默。
+    source_status = inst.get("source_status") or {}
+    status_notes = []
+    status_icons = {
+        "recovered_first_day": "首日恢复",
+        "disabled": "接口不可用",
+    }
+    src_labels = {
+        "north_bound": "两融", "lhb": "龙虎榜",
+        "main_force": "主力", "shareholder": "股东",
+    }
+    for src_name, status in source_status.items():
+        if status in status_icons:
+            status_notes.append(
+                f"{src_labels.get(src_name, src_name)}{status_icons[status]}"
+            )
+    if inst.get("source_note"):
+        status_notes.append(inst["source_note"])
+    if status_notes:
+        parts.append("源状态:" + "/".join(status_notes))
+
     return " | ".join(parts)
 
 
@@ -752,9 +865,12 @@ def _hypothesis_block(data):
         lines.append(f"X·因为: {_esc(str(x))[:120]}")
     if y:
         lines.append(f"Y·在{_val(y)}买入({_esc(y_note)})")
+    # P1-12：结构位(突破失败判定基准)与跟踪止损(风险出口)分开标注，事件面板两行分列。
+    if z_ref:
+        lines.append(f"结构位: {_val(z_ref)}（突破失败判定基准，收盘跌回即撤单）")
     if z:
-        ref_text = f"，结构位{_val(z_ref)}" if z_ref else ""
-        lines.append(f"Z·若{_esc(z_note)}{_ref_text_adj(ref_text)}出现({_val(z)})→认错离场")
+        z_suffix = f"，若{_esc(z_note)}出现" if z_note else ""
+        lines.append(f"Z·跟踪止损(风险出口){_val(z)}{z_suffix}→认错离场")
     if w:
         w_text = f"{_val(w[0])}" + (f"~{_val(w[-1])}" if len(w) > 1 and w[-1] > w[0] else "")
         lines.append(f"W·若{_esc(w_note)}出现({w_text})→兑现离场")
@@ -764,10 +880,6 @@ def _hypothesis_block(data):
     if not lines:
         return ""
     return "<b>可证伪假说</b><br/>" + "<br/>".join(f"&nbsp;&nbsp;{l}" for l in lines) + "<br/><br/>"
-
-
-def _ref_text_adj(ref_text):
-    return "(X的直接否定)" if not ref_text else f"(X的直接否定{ref_text})"
 
 
 def _tech(data):
@@ -1190,6 +1302,17 @@ def render_holding_health(data):
     content += f"<b>建议</b><br/>&nbsp;&nbsp;{adjustment}<br/>"
     return title, content
 
+
+
+def _mode_gate_expectation(mode: str) -> str:
+    """环境栏闸门预期提示：模式判定用昨日收盘，今日若收盘站回阈值则明日转档。"""
+    if mode == "attack":
+        return ""
+    if mode == "defend":
+        return "今日若收盘站回MA5，明日转进攻"
+    if mode == "retreat":
+        return "今日若收盘收复MA5×0.99，明日转防守"
+    return ""
 def render_environment_overview(data: Dict) -> str:
     """
     渲染环境总览 HTML 片段（可复用于盘前/盘中推送）。
@@ -1209,6 +1332,11 @@ def render_environment_overview(data: Dict) -> str:
     if data.get("invalidation_triggered"):
         content += "&nbsp;&nbsp;<b>⚠环境判定作废重估告警</b><br/>"
     content += f"&nbsp;&nbsp;模式:{mn}<br/>"
+    # D-修复：模式判定用昨日收盘（跌破MA5×0.99），大涨日早晨仍防守；环境栏
+    # 加一行“闸门预期”，让读者知道闸门何时可能打开（踏空台账4笔的直接来源）。
+    _gate_hint = _mode_gate_expectation(mode)
+    if _gate_hint:
+        content += f"&nbsp;&nbsp;闸门预期:{_gate_hint}<br/>"
     mode_matrix = data.get("mode_transition_matrix") or []
     if mode_matrix:
         matrix_parts = []

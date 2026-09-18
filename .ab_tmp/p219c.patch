@@ -1,0 +1,37 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/volume_pattern.py
+@@
+     if result["early_window"] and pattern not in _EARLY_OBSERVATION_PATTERNS:
+         pattern = "早盘观察"
+ 
++    # P2-19：量比分档×换手分档交叉校验——量比档显著高于换手档（≥2档）说明
++    # 量能证据内部矛盾（接口量比 13.16 剧烈放量 vs 换手 3.87% 活跃即此类），
++    # 分型降级为量能口径待定；派发嫌疑等非量能驱动观察态不得连坐。
++    gear_gap = None
++    if vgear and tgear:
++        v_idx = _VOLUME_GEAR_INDEX.get(vgear)
++        t_idx = _TURNOVER_GEAR_INDEX.get(tgear)
++        if v_idx is not None and t_idx is not None:
++            gear_gap = v_idx - t_idx
++    if gear_gap is not None and gear_gap >= GEAR_DEV_UP_DOWNGRADE:
++        gear_note = (
++            f"量比分档({vgear})高于换手分档({tgear}){gear_gap}档→量能口径矛盾"
++        )
++        existing_note = result.get("volume_caliber_conflict_note") or ""
++        result["volume_caliber_conflict_note"] = (
++            f"{existing_note}；{gear_note}" if existing_note else gear_note
++        )
++        if pattern not in _EARLY_OBSERVATION_PATTERNS:
++            pattern = _CALIBER_PENDING_PATTERN
++
+     defs = _PATTERN_DEFS[pattern]
+@@
+         "pattern": pattern,
++        "gear_gap": gear_gap,
+         "short": defs["short"],
+         # 星级只按实际有效证据源封顶；早盘量比缺失不能把位置/超买/背驰连坐。
+         # P0-3：早盘观察态星级封顶为 1。
+-        "star": 1 if pattern == "早盘观察"
++        "star": 1 if pattern in ("早盘观察", _CALIBER_PENDING_PATTERN)
+         else min(3, max(1, len(evidence_sources))),
+*** End Patch

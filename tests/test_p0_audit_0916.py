@@ -600,6 +600,121 @@ def test_p18_no_adjudication_when_sources_agree_or_mild():
     assert mild.margin_drive_conflict is False
 
 
+def test_p112_event_panel_splits_structure_and_tracking_stop():
+    """P1-12：事件面板两行分列——结构位(突破失败判定基准) 与 跟踪止损(风险出口)。"""
+    from src.push.templates import _hypothesis_block
+
+    html = _hypothesis_block({
+        "hypothesis": {
+            "sentence": "假说",
+            "x": "突破",
+            "y": 890.0,
+            "z": 821.99,
+            "z_note": "跌破结构位",
+            "z_reference": 889.12,
+            "w": [907.0],
+            "w_note": "兑现",
+        },
+        "event_id": "308",
+    })
+    assert "结构位: 889.12（突破失败判定基准，收盘跌回即撤单）" in html
+    assert "跟踪止损(风险出口)821.99" in html
+    assert "Z·跟踪止损" in html
+
+
+def test_p112_risk_stop_relabels_structure_and_tracking_stop():
+    """P1-12：风控双轨文本不得把事件止损标为结构位，两术语分列。"""
+    from src.analyzers.signal_lifecycle import SignalEvent
+    from src.analyzers.timing_engine import StopLossCalc, TimingEngine
+
+    engine = TimingEngine(backtest_mode=True)
+    engine._lifecycle.get_active_events = lambda code: [
+        SignalEvent(
+            event_id="evt-308", stock_code=code, stock_name="中际旭创",
+            entry_type="价量突破", entry_price=890.0,
+            stop_loss=821.99, breakout_level=889.12, status="filled",
+        ),
+    ]
+    text = engine._risk_stop_text(
+        "300308", 907.80,
+        StopLossCalc(
+            stock_code="300308", current_price=907.80,
+            support_candidates=[], chosen_support=900.0,
+            stop_loss_price=895.0, resistance=920.0,
+        ),
+    )
+    assert "结构位:889.12(突破失败判定基准)" in text
+    assert "事件跟踪止损:821.99(风险出口)" in text
+    assert "(结构位)" not in text
+
+
+def test_p111_source_status_annotation_pure():
+    """P1-11：源可用性标注——恢复首日必须带(首日恢复,无连续性)与 raw 标记。"""
+    from src.analyzers.institutional_scorer import annotate_source_status
+
+    votes = {
+        "main_force": {"vote": 1, "detail": "主力3日净流入", "raw": {"total": 1e8}},
+        "north_bound": {"vote": 0, "detail": "融资余额接口已短路", "raw": {}},
+        "lhb": {"vote": 0, "detail": "无数据", "raw": {}},
+    }
+    status = annotate_source_status(votes, recovered={"north_bound": True})
+    assert status["main_force"] == "realtime"
+    assert status["north_bound"] == "recovered_first_day"
+    assert status["lhb"] == "no_data"
+    assert "首日恢复,无连续性" in votes["north_bound"]["detail"]
+    assert votes["north_bound"]["raw"]["recovered_first_day"] is True
+    assert votes["north_bound"]["raw"]["source_status"] == "recovered_first_day"
+    assert "首日恢复" not in votes["main_force"]["detail"]
+
+    # 禁用源明确标注不可用，不参与投票
+    status2 = annotate_source_status(
+        {"main_force": {"vote": 0, "detail": "已短路", "raw": {}}},
+        disabled={"main_force": True},
+    )
+    assert status2["main_force"] == "disabled"
+
+
+def test_p111_mark_api_success_recovers_source():
+    """P1-11：曾短路源成功一次即恢复放行，并标记首日恢复。"""
+    import src.analyzers.institutional_scorer as mod
+
+    mod._reset_institutional_state()
+    mod._api_disabled["main_force"] = True
+    mod._mark_api_success("main_force")
+    assert mod._api_recovered_today["main_force"] is True
+    assert mod._api_disabled["main_force"] is False
+    mod._reset_institutional_state()
+    assert mod._api_recovered_today["main_force"] is False
+
+
+def test_p111_cache_hit_marks_timestamp():
+    """P1-11：缓存命中必须标注 缓存@时间戳，禁止无标识冒充当日实时值。"""
+    import importlib
+    import time
+
+    import src.analyzers.institutional_scorer as mod
+
+    # test_timing_engine 在模块导入期全局替换了 score_institutional_holding，
+    # 这里 reload 取真实实现验证缓存标记，并在 finally 恢复替换以隔离其他套件。
+    patched = mod.score_institutional_holding
+    try:
+        reloaded = importlib.reload(mod)
+        reloaded._institutional_session_cache.clear()
+        reloaded._institutional_session_cache["600000:True"] = {
+            "ts": time.time(),
+            "result": {"vote_score": 1, "stale": False, "votes": {}},
+        }
+        result = reloaded.score_institutional_holding(
+            "600000", turnover_available=True,
+        )
+        assert result.get("stale") is True
+        assert result.get("cache_ts")
+        assert "缓存@" in result.get("source_note", "")
+    finally:
+        mod.score_institutional_holding = patched
+        mod._institutional_session_cache.clear()
+
+
 def test_v29_early_missing_volume_does_not_blind_high_distribution_evidence():
     from src.analyzers.volume_pattern import build_volume_pattern
 
@@ -791,6 +906,43 @@ def test_p03_afternoon_keeps_real_selling_pressure():
     assert result["early_window"] is False
     assert result["pattern"] == "真实抛压型"
     assert result["star"] == 3
+
+
+def test_p219_zhenbao_gear_deviation_downgrades_to_pending():
+    """P2-19：臻宝类 量比13.16(剧烈放量) vs 换手3.87%(活跃) 档差2 → 自动降级待定。
+
+    接口量比与换手三源无对账曾静默通过（13.16 剧烈放量 vs 3.87% 活跃 名实不符），
+    现量比分档×换手分档交叉校验：量比档高出换手档≥2档即降级为量能口径待定。
+    """
+    from src.analyzers.volume_pattern import build_volume_pattern, render_volume_pattern
+
+    result = build_volume_pattern({
+        "change_pct": 1.0,
+        "volume_ratio": 13.16,
+        "turnover_rate": 3.87,
+        "current_price": 100.0,
+        "ma5": 101.0, "ma10": 102.0, "ma20": 103.0,
+        "prior_high": 104.0, "recent_high": 104.0,
+        "gain_20d": 0.05, "ma20_falling": False,
+        "tech_signals": {"order_flow": {
+            "available": True,
+            "outer_volume": 1200, "inner_volume": 800,
+            "imbalance_pct": 20.0,
+        }},
+        "execution_plan": {"volume_snapshot": {
+            "volume_ratio": 13.16,
+            "volume_ratio_effective": 13.16,
+            "is_early_window": False,
+            "turnover_rate": 3.87,
+        }},
+    })
+    assert result["pattern"] == "量能口径待定"
+    assert result["star"] == 1
+    assert result["gear_gap"] == 2
+    assert "量比分档(剧烈放量)高于换手分档(活跃)2档" in result["volume_caliber_conflict_note"]
+    rendered = "\n".join(render_volume_pattern(result))
+    assert "量能口径待定" in rendered
+    assert "量能证据待定" in rendered
 
 
 def test_p17_full_coverage_still_shows_expected_window():

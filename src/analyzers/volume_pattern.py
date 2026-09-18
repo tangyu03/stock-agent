@@ -77,6 +77,16 @@ CHANGE_REAL_SELL_PCT = -3.0   # 跌幅 ≥ 3% → 真实抛压
 CHANGE_GRINDING_PCT = -1.5    # 量比≤1.0 且 跌幅 ≤1.5% → 阴跌窄域
 _PENDING_SELL_PATTERN = "抛压待确认型"
 
+# P2-19 量比分档×换手分档交叉校验：量比档高出换手档≥2档（量能过猛但换手跟不上）
+# 是接口量比失真的典型特征（臻宝 量比13.16 剧烈放量 vs 换手3.87% 活跃），
+# 分型降级为量能口径待定，禁止按剧烈放量直接参与共振判读。
+_VOLUME_GEAR_INDEX = {label: i for i, (_, label) in enumerate(_VOLUME_GEARS)}
+_VOLUME_GEAR_INDEX[VOLUME_EXTREME_GEAR] = len(_VOLUME_GEARS)
+_TURNOVER_GEAR_INDEX = {label: i for i, (_, label) in enumerate(_TURNOVER_GEARS)}
+_TURNOVER_GEAR_INDEX[TURNOVER_EXTREME_GEAR] = len(_TURNOVER_GEARS)
+GEAR_DEV_UP_DOWNGRADE = 2
+_CALIBER_PENDING_PATTERN = "量能口径待定"
+
 # 分型定义：bias +1偏多 / -1偏空 / 0中性（冲突检测与一览行共用）
 _PATTERN_DEFS = {
     "抛压衰竭型": {
@@ -176,6 +186,13 @@ _PATTERN_DEFS = {
         "strategy": "观察等10:30复核", "strategy_short": "观察",
         "confirms": ["10:30后复核量能", "同期量比确认方向"],
         "confirm_target": "10:30复核",
+    },
+    _CALIBER_PENDING_PATTERN: {
+        "short": "量能待定", "bias": 0,
+        "verdict": "量比分档与换手分档矛盾，量能证据待定",
+        "strategy": "观察等量能对账", "strategy_short": "观察",
+        "confirms": ["收盘实际量能回补", "换手与量比分档收敛", "外盘/主动差确认方向"],
+        "confirm_target": "量能对账复核",
     },
 }
 
@@ -603,6 +620,18 @@ def _near_high_pct(close, prior_high, recent_high, high_52w=None) -> Optional[fl
     return (high - price) / high
 
 
+
+
+def _inject_ratio_caliber(item: str, ratio_label: str) -> str:
+    """把确认条件中的裸“量比”替换成带口径+采样时间的标签；已带口径前缀的项不重复注入。"""
+    if "量比" not in item:
+        return item
+    for prefix in ("同期量比", "接口量比"):
+        if prefix in item:
+            return item.replace(prefix, ratio_label, 1)
+    return item.replace("量比", ratio_label, 1)
+
+
 def _format_sample_time(value) -> str:
     """14位 YYYYMMDDHHMMSS 时间戳 → MM-DD HH:MM 可读形式（P2-13，避免条件句数字连排）。
     其他输入（None/空串/已格式化）原样返回。"""
@@ -612,8 +641,11 @@ def _format_sample_time(value) -> str:
     return text
 
 
-def _judgment_text(change_pct, vgear, drive, rsi6) -> str:
-    """判读行：涨跌方向 + 量能 + 主动差 + RSI6 → 组合复述（有则拼，无则略）。"""
+def _judgment_text(change_pct, vgear, drive, rsi6, ma5=None, current_price=None) -> str:
+    """判读行：涨跌方向 + 量能 + 主动差 + RSI6 → 组合复述（有则拼，无则略）。
+
+    P2-15 变体：主动差强度分档（偏重/温和）与距 MA5 距离，避免同分型全市场同构。
+    """
     bits = []
     try:
         chg = float(change_pct)
@@ -630,7 +662,17 @@ def _judgment_text(change_pct, vgear, drive, rsi6) -> str:
     if drive is not None and drive > 0:
         bits.append("主动买盘未失守")
     elif drive is not None and drive < 0:
-        bits.append("主动卖压占优")
+        if drive <= DRIVE_REAL_SELL_PCT:
+            bits.append("主动卖压偏重")
+        else:
+            bits.append("主动卖压温和")
+    try:
+        price_f = float(current_price)
+        ma5_f = float(ma5)
+        if price_f and ma5_f:
+            bits.append(f"距MA5{(price_f - ma5_f) / ma5_f * 100:+.1f}%")
+    except (TypeError, ValueError):
+        pass
     if rsi6 is not None:
         try:
             r6 = float(rsi6)
@@ -791,7 +833,7 @@ def build_volume_pattern(data: Dict) -> Dict:
         main_force_net=main_force_net3(inst),
     )
     result["evidence_sources"] = evidence_sources
-    result["judgment"] = _judgment_text(data.get("change_pct"), vgear, drive, rsi6)
+    result["judgment"] = _judgment_text(data.get("change_pct"), vgear, drive, rsi6, data.get("ma5"), close)
     if pattern is None:
         # 内外盘/量比缺失：不做分型，量能档与位置档照常展示（诚实降级）
         result["summary_short"] = "盘口数据不足"
@@ -802,6 +844,27 @@ def build_volume_pattern(data: Dict) -> Dict:
     if result["early_window"] and pattern not in _EARLY_OBSERVATION_PATTERNS:
         pattern = "早盘观察"
 
+    # P2-19：量比分档×换手分档交叉校验——量比档显著高于换手档（≥2档）说明
+    # 量能证据内部矛盾（接口量比 13.16 剧烈放量 vs 换手 3.87% 活跃即此类），
+    # 分型降级为量能口径待定；真实抛压（主动差/跌幅裁决）与派发嫌疑等
+    # 非量能驱动判定不得连坐，只附口径注记。
+    gear_gap = None
+    if vgear and tgear:
+        v_idx = _VOLUME_GEAR_INDEX.get(vgear)
+        t_idx = _TURNOVER_GEAR_INDEX.get(tgear)
+        if v_idx is not None and t_idx is not None:
+            gear_gap = v_idx - t_idx
+    if gear_gap is not None and gear_gap >= GEAR_DEV_UP_DOWNGRADE:
+        gear_note = (
+            f"量比分档({vgear})高于换手分档({tgear}){gear_gap}档→量能口径矛盾"
+        )
+        existing_note = result.get("volume_caliber_conflict_note") or ""
+        result["volume_caliber_conflict_note"] = (
+            f"{existing_note}；{gear_note}" if existing_note else gear_note
+        )
+        if pattern not in _EARLY_OBSERVATION_PATTERNS and pattern != "真实抛压型":
+            pattern = _CALIBER_PENDING_PATTERN
+
     defs = _PATTERN_DEFS[pattern]
     confirms = list(defs["confirms"])
     ratio_label = (
@@ -809,13 +872,16 @@ def build_volume_pattern(data: Dict) -> Dict:
         if result.get("early_window")
         else f"接口量比@{_format_sample_time(result.get('volume_sample_time')) or '时间未标注'} "
     )
-    confirms = [item.replace("量比", ratio_label, 1) for item in confirms]
+    # E-修复：已带口径前缀（同期量比/接口量比）的确认项不再重复注入，
+    # 避免“同期同期量比@...”重复词；只对裸“量比”补口径+采样时间。
+    confirms = [_inject_ratio_caliber(item, ratio_label) for item in confirms]
     result.update({
         "pattern": pattern,
+        "gear_gap": gear_gap,
         "short": defs["short"],
         # 星级只按实际有效证据源封顶；早盘量比缺失不能把位置/超买/背驰连坐。
         # P0-3：早盘观察态星级封顶为 1。
-        "star": 1 if pattern == "早盘观察"
+        "star": 1 if pattern in ("早盘观察", _CALIBER_PENDING_PATTERN)
         else min(3, max(1, len(evidence_sources))),
         "verdict": defs["verdict"],
         "bias": defs["bias"],

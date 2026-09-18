@@ -14,6 +14,7 @@ def setup_function():
 
 def test_empty_iwencai_response_does_not_trip_global_breaker(monkeypatch):
     monkeypatch.setattr(iwencai_api, "_call_api", lambda **kwargs: None)
+    monkeypatch.setattr(inst, "_fetch_detailed_fund_flow", lambda code: None)
 
     def fallback(code):
         return {
@@ -36,6 +37,7 @@ def test_empty_iwencai_response_does_not_trip_global_breaker(monkeypatch):
 def test_only_failed_stock_is_short_circuited(monkeypatch):
     inst._fund_flow_rank_last_error = ""
     monkeypatch.setattr(iwencai_api, "_call_api", lambda **kwargs: None)
+    monkeypatch.setattr(inst, "_fetch_detailed_fund_flow", lambda code: None)
 
     def fallback(code):
         return None if code == "000001" else {
@@ -253,3 +255,62 @@ def test_backoff_allows_one_probe_after_expiry(monkeypatch):
     assert result["vote"] == 1
     assert inst._main_force_fallback_failures == 0
     assert inst._main_force_fallback_block_until == 0.0
+
+def test_iwencai_empty_then_daily_detail_rescues(monkeypatch):
+    """问财主源无数据时，先走逐日明细兜底，避免金海通式资金维度全空。"""
+    monkeypatch.setattr(iwencai_api, "_call_api", lambda **kwargs: None)
+
+    fake_detail = {
+        "source": "stock_individual_fund_flow",
+        "rows": [
+            {"date": "2026-09-16", "main_net": 100.0},
+            {"date": "2026-09-17", "main_net": 200.0},
+            {"date": "2026-09-18", "main_net": 300.0},
+        ],
+        "main_flows_5d": [100.0, 200.0, 300.0],
+        "super_large_flows_5d": [50.0, 60.0, 70.0],
+        "large_flows_5d": [30.0, 40.0, 50.0],
+    }
+    fallback_called = []
+
+    def fake_fallback(code):
+        fallback_called.append(code)
+        return {
+            "vote": 0,
+            "detail": "batch snapshot should not be reached",
+            "raw": {},
+        }
+
+    monkeypatch.setattr(inst, "_fetch_detailed_fund_flow", lambda code: fake_detail)
+    monkeypatch.setattr(inst, "_fetch_main_force_flow_fallback", fake_fallback)
+
+    result = inst._fetch_main_force_flow("603061")
+
+    assert result["vote"] == 1
+    assert result["raw"]["source"] == "stock_individual_fund_flow(逐日明细兜底)"
+    assert result["raw"]["net_flows_5d"] == [100.0, 200.0, 300.0]
+    assert result["raw"]["as_of"] == "2026-09-18"
+    assert fallback_called == []
+    assert not inst._api_disabled["main_force"]
+    assert inst._api_fail_count["main_force"] == 0
+
+
+def test_iwencai_empty_and_detail_empty_falls_to_snapshot(monkeypatch):
+    """问财与逐日明细都无数据时，回退到批量快照，而不是直接标异常。"""
+    monkeypatch.setattr(iwencai_api, "_call_api", lambda **kwargs: None)
+    monkeypatch.setattr(inst, "_fetch_detailed_fund_flow", lambda code: None)
+    monkeypatch.setattr(
+        inst,
+        "_fetch_main_force_flow_fallback",
+        lambda code: {
+            "vote": -1,
+            "detail": "snapshot outflow",
+            "raw": {"net_flows": [-100.0]},
+        },
+    )
+
+    result = inst._fetch_main_force_flow("000001")
+
+    assert result["vote"] == -1
+    assert result["detail"] == "snapshot outflow"
+    assert not inst._api_disabled["main_force"]

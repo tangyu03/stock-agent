@@ -1,0 +1,36 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+     def _completion_price(self, event) -> float:
++        return self._completion_price_detail(event)[0]
++
++    def _completion_price_detail(self, event):
++        """完结价 + 口径（收盘/现价快照）+ 交易所收盘。旧事件无口径字段时按键名推断。"""
+         try:
+             log = self.store.get_event_logs(event.event_id)[-1]
+             raw_data = log.get("trigger_data") or {}
+             data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+         except Exception:
+-            return 0.0
++            return 0.0, "数据未取到", None
+         for key in ("price", "close"):
+             try:
+                 value = float(data.get(key))
+                 if value > 0:
+-                    return value
++                    source = str(data.get("price_source") or "").strip()
++                    if not source:
++                        source = "收盘" if key == "close" else "现价快照"
++                    exchange_close = None
++                    try:
++                        ec = float(data.get("exchange_close"))
++                        if ec > 0:
++                            exchange_close = ec
++                    except (TypeError, ValueError):
++                        pass
++                    return value, source, exchange_close
+             except (TypeError, ValueError):
+                 continue
+-        return 0.0
++        return 0.0, "数据未取到", None
+*** End Patch

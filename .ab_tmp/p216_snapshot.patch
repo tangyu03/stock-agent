@@ -1,0 +1,25 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/timing_engine.py
+@@
+         entry_snapshot = {
+             "volume_ratio": getattr(volume_snapshot, "volume_ratio", None),
+             "volume_vs_ma60": actual_volume,
+             "projected_volume_vs_ma60": projected_ratio,
+             "projection_mode": projection_mode,
+             "projection_threshold": projected_threshold,
+             "projection_triggered": projection_triggered,
+             "ma_alignment": ma_alignment,
+             "rsi": tech_signals.get("rsi"),
+             "sector_status": sector_status,
+         }
++        # P2-16：事件出生时落分型/位置，后验记分按策略/分型/位置三维累计。
++        # 缺字段时 build_volume_pattern 逐级降级，不得因记分维度缺失拦截注册。
++        try:
++            from .volume_pattern import build_volume_pattern
++            _vp = build_volume_pattern(tech_data)
++            entry_snapshot["pattern"] = _vp.get("pattern") or ""
++            entry_snapshot["position"] = _vp.get("position") or ""
++        except Exception:
++            pass
+         for sig in valid_signals:
+*** End Patch

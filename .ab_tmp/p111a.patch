@@ -1,0 +1,59 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/institutional_scorer.py
+@@
+ _api_disabled = {
+     "north_bound": False,
+     "lhb": False,
+     "main_force": False,
+     "shareholder": False,
+ }
++# P1-11：本 session 内曾短路后首次成功的源 → 数据标注“首日恢复,无连续性”。
++_api_recovered_today: Dict[str, bool] = {
++    "north_bound": False,
++    "lhb": False,
++    "main_force": False,
++    "shareholder": False,
++}
+ _api_fail_count = {
+*** Update File: src/analyzers/institutional_scorer.py
+@@
+ def _mark_api_success(api_name: str):
+-    """成功时重置失败计数"""
++    """成功时重置失败计数；若此前已短路，标记本 session 内该源首日恢复并放行。
++
++    P1-11：恢复首日数据必须标注“首日恢复,无连续性”，禁止新旧数据混标。
++    """
++    if _api_disabled.get(api_name):
++        _api_recovered_today[api_name] = True
++        _api_disabled[api_name] = False
+     _api_fail_count[api_name] = 0
+*** Update File: src/analyzers/institutional_scorer.py
+@@
+ def _reset_institutional_state():
+     """重置所有状态（仅供测试用）"""
+-    global _api_disabled, _api_fail_count
++    global _api_disabled, _api_fail_count, _api_recovered_today
+     global _block_trade_fetcher
+@@
+-    _api_disabled = {k: False for k in _api_disabled}
+-    _api_fail_count = {k: 0 for k in _api_fail_count}
++    _api_disabled = {k: False for k in _api_disabled}
++    _api_recovered_today = {k: False for k in _api_recovered_today}
++    _api_fail_count = {k: 0 for k in _api_fail_count}
+*** Update File: src/analyzers/institutional_scorer.py
+@@
+     cached = _institutional_session_cache.get(cache_key)
+     if cached and (now - cached["ts"] < _INSTITUTIONAL_CACHE_TTL):
+         cached_result = dict(cached["result"])
+         cached_result["stale"] = True
++        cached_result["cache_ts"] = time.strftime(
++            "%Y-%m-%d %H:%M:%S", time.localtime(cached["ts"])
++        )
++        cached_result["source_note"] = (
++            f"缓存@{cached_result['cache_ts'][5:16]}（复用早前实时值,非当日新取）"
++        )
+         return cached_result
+*** Update File: src/analyzers/institutional_scorer.py
+@@
+ def score_institutional_holding(
+*** End Patch

@@ -50,6 +50,16 @@ _STATUS_DISPLAY = {
     "time_exit": "时间离场",
 }
 
+# P2-15：完结原因两级枚举（一级=盈亏归属/作废/时间，二级=具体状态）。
+_COMPLETION_LEVEL1 = {
+    "sig_target": "止盈",
+    "sig_stop": "止损",
+    "chase_abandon": "作废",
+    "expired": "作废",
+    "invalidated": "作废",
+    "time_exit": "时间",
+}
+
 
 def normalize_status(status: str) -> str:
     """把旧库 triggered 归一为 filled，避免展示层各说各话。"""
@@ -86,6 +96,17 @@ def display_status(status: str) -> str:
     return _STATUS_DISPLAY.get(normalized, normalized)
 
 
+def completion_reason(status: str) -> str:
+    """完结原因两级枚举：一级(二级)，如 止盈(信号止盈)、作废(已过期)、时间(时间离场)。
+    非完结状态退化为一层（沿用 display_status），保证调用点不崩。
+    """
+    normalized = normalize_status(status)
+    level1 = _COMPLETION_LEVEL1.get(normalized)
+    if not level1:
+        return display_status(normalized)
+    return f"{level1}({display_status(normalized)})"
+
+
 def display_rule_version(rule_version: str) -> str:
     return _RULE_VERSION_DISPLAY.get(str(rule_version or ""), str(rule_version or ""))
 
@@ -93,9 +114,26 @@ def display_rule_version(rule_version: str) -> str:
 def _snapshot_flags(snapshot: dict, maintenance: bool = False) -> List[str]:
     flags: List[str] = []
     try:
-        volume_ratio = snapshot.get("volume_ratio")
+        # C-修复：维持面板量比必须有口径标注（沃尔德9-18 量比4.69 vs 同期量比1.57/
+        # 接口量比2.33 并存无口径）；早盘优先展示同期量比，其余用有效口径并落库口径名。
+        if maintenance:
+            early = bool(snapshot.get("is_early_window"))
+            sp_ratio = snapshot.get("same_period_volume_ratio")
+            eff_ratio = snapshot.get("volume_ratio_effective")
+            if early and sp_ratio is not None:
+                volume_ratio = sp_ratio
+                caliber = snapshot.get("same_period_caliber") or "同期量比"
+            else:
+                volume_ratio = eff_ratio if eff_ratio is not None else snapshot.get("volume_ratio")
+                caliber = snapshot.get("volume_ratio_caliber") or ""
+        else:
+            volume_ratio = snapshot.get("volume_ratio")
+            caliber = ""
         if volume_ratio is not None:
             text = f"量比{float(volume_ratio):.2f}"
+            # 仅当快照确实带口径时才标注，旧快照（无口径字段）保持原格式
+            if maintenance and caliber:
+                text += f"({caliber})"
             if maintenance and float(volume_ratio) < 1.2:
                 text += " △缩量"
             else:
@@ -830,6 +868,7 @@ class SignalLifecycle:
         day_high: Optional[float] = None,
         day_low: Optional[float] = None,
         close_price: Optional[float] = None,
+        exchange_close: Optional[float] = None,
         tech_score: Optional[float] = None,
         volume_ratio: Optional[float] = None,
         change_pct: Optional[float] = None,
@@ -852,9 +891,21 @@ class SignalLifecycle:
         notices: List[Dict] = []
         for event in self.get_active_events(stock_code):
             close = float(close_price) if close_price is not None else None
+            try:
+                exchange_close_f = float(exchange_close) if exchange_close is not None else None
+            except (TypeError, ValueError):
+                exchange_close_f = None
             low = float(day_low) if day_low is not None else None
             high = float(day_high) if day_high is not None else None
             effective_price = close if close is not None else current_price
+            # P2-14 完结价口径：close 与交易所收盘一致（或未知时存在 close）才算收盘，
+            # 否则为现价快照——完结价必须带口径，差异>0.1% 时渲染层双值显示。
+            price_source = "收盘"
+            if close is not None and exchange_close_f is not None:
+                if abs(close - exchange_close_f) > max(0.01, abs(exchange_close_f) * 0.001):
+                    price_source = "现价快照"
+            elif close is None:
+                price_source = "现价快照"
 
             def _notice(exit_type: str, reason: str, urgency: str) -> Dict:
                 return {
@@ -897,6 +948,8 @@ class SignalLifecycle:
                         "entry_price": event.entry_price,
                         "chase_gap": chase_gap,
                         "today": today.isoformat(),
+                        "price_source": price_source,
+                        "exchange_close": exchange_close_f,
                     },
                 )
                 notices.append(_notice("追高放弃", reason, "常规"))
@@ -951,6 +1004,8 @@ class SignalLifecycle:
                             "today": today.isoformat(),
                             "expire_date": event.expire_date,
                             "close": effective_price,
+                            "price_source": price_source,
+                            "exchange_close": exchange_close_f,
                         },
                     )
                     notices.append(_notice("信号过期", "冻结事件超过有效期，自动过期", "常规"))
@@ -994,6 +1049,8 @@ class SignalLifecycle:
                             "close": effective_price, "day_low": low,
                             "day_high": high, "stop_loss": stop,
                             "today": today.isoformat(),
+                            "price_source": price_source,
+                            "exchange_close": exchange_close_f,
                         },
                         )
                         notices.append(_notice("信号止损", reason, "重要"))
@@ -1006,6 +1063,8 @@ class SignalLifecycle:
                             "close": effective_price, "day_low": low,
                             "day_high": high, "target": target,
                             "today": today.isoformat(),
+                            "price_source": price_source,
+                            "exchange_close": exchange_close_f,
                         },
                         )
                         notices.append(_notice("信号止盈", reason, "常规"))
@@ -1017,6 +1076,8 @@ class SignalLifecycle:
                             "close": effective_price,
                             "expire_date": event.expire_date,
                             "today": today.isoformat(),
+                            "price_source": price_source,
+                            "exchange_close": exchange_close_f,
                         },
                         )
                         notices.append(_notice("时间离场", "有效期内未触目标或止损", "常规"))
@@ -1063,6 +1124,8 @@ class SignalLifecycle:
                     trigger_data={
                         "close": close, "stop_loss": event.stop_loss,
                         "today": today.isoformat(),
+                        "price_source": price_source,
+                        "exchange_close": exchange_close_f,
                     },
                 )
                 notices.append(_notice("信号作废", reason, "紧急"))
@@ -1088,6 +1151,8 @@ class SignalLifecycle:
                         "failure_anchor": failure_anchor,
                         "day_low": low,
                         "today": today.isoformat(),
+                        "price_source": price_source,
+                        "exchange_close": exchange_close_f,
                     },
                 )
                 notices.append(_notice("信号作废", reason, "重要"))
@@ -1136,6 +1201,8 @@ class SignalLifecycle:
                         "today": today.isoformat(),
                         "expire_date": event.expire_date,
                         "close": close or current_price,
+                        "price_source": price_source,
+                        "exchange_close": exchange_close_f,
                     },
                 )
                 notices.append({
@@ -1234,16 +1301,27 @@ class SignalLifecycle:
                 )
                 continue
             if e.status in TERMINAL_EVENT_STATUSES:
-                completion_price = self._completion_price(e)
-                completion_text = (
-                    f"{completion_price:.2f}" if completion_price > 0
-                    else "数据未取到"
+                completion_price, price_source, exchange_close = (
+                    self._completion_price_detail(e)
                 )
+                # P2-14：完结价带口径（收盘/现价快照），与交易所收盘差异>0.1% 时双值显示。
+                if completion_price > 0:
+                    completion_text = f"{completion_price:.2f}({price_source})"
+                    if (
+                        exchange_close is not None
+                        and exchange_close > 0
+                    ):
+                        _diff = abs(exchange_close - completion_price)
+                        # P2-14：与交易所收盘差异>0.1元 或 >0.1%（中际旭创 908.09 vs 907.80）双值显示
+                        if _diff > 0.1 or (_diff / exchange_close) > 0.001:
+                            completion_text += f" vs 交易所收盘{exchange_close:.2f}"
+                else:
+                    completion_text = "数据未取到"
                 distance = ""
                 if completion_price and e.entry_price:
                     distance = f" 距买点{(completion_price / e.entry_price - 1.0):+.1%}"
                 notes.append(
-                    f"[{e.entry_type}]已完结({display_status(e.status)})："
+                    f"[{e.entry_type}]已完结({completion_reason(e.status)})："
                     f"完结价{completion_text}"
                     f"{distance}；原因{e.invalid_reason or '规则迁移'}"
                 )
@@ -1287,20 +1365,34 @@ class SignalLifecycle:
         return "走弱" if any("△" in flag for flag in flags) else "正常"
 
     def _completion_price(self, event) -> float:
+        return self._completion_price_detail(event)[0]
+
+    def _completion_price_detail(self, event):
+        """完结价 + 口径（收盘/现价快照）+ 交易所收盘。旧事件无口径字段时按键名推断。"""
         try:
             log = self.store.get_event_logs(event.event_id)[-1]
             raw_data = log.get("trigger_data") or {}
             data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
         except Exception:
-            return 0.0
+            return 0.0, "数据未取到", None
         for key in ("price", "close"):
             try:
                 value = float(data.get(key))
                 if value > 0:
-                    return value
+                    source = str(data.get("price_source") or "").strip()
+                    if not source:
+                        source = "收盘" if key == "close" else "现价快照"
+                    exchange_close = None
+                    try:
+                        ec = float(data.get("exchange_close"))
+                        if ec > 0:
+                            exchange_close = ec
+                    except (TypeError, ValueError):
+                        pass
+                    return value, source, exchange_close
             except (TypeError, ValueError):
                 continue
-        return 0.0
+        return 0.0, "数据未取到", None
 
 
 # ============================================================

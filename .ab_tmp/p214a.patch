@@ -1,0 +1,29 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+         today: Optional[date] = None,
+         day_high: Optional[float] = None,
+         day_low: Optional[float] = None,
+         close_price: Optional[float] = None,
++        exchange_close: Optional[float] = None,
+         tech_score: Optional[float] = None,
+         volume_ratio: Optional[float] = None,
+         change_pct: Optional[float] = None,
+@@
+             close = float(close_price) if close_price is not None else None
++            try:
++                exchange_close_f = float(exchange_close) if exchange_close is not None else None
++            except (TypeError, ValueError):
++                exchange_close_f = None
+             low = float(day_low) if day_low is not None else None
+             high = float(day_high) if day_high is not None else None
+             effective_price = close if close is not None else current_price
++            # P2-14 完结价口径：close 与交易所收盘一致（或未知时存在 close）才算收盘，
++            # 否则为现价快照——完结价必须带口径，差异>0.1% 时渲染层双值显示。
++            price_source = "收盘"
++            if close is not None and exchange_close_f is not None:
++                if abs(close - exchange_close_f) > max(0.01, abs(exchange_close_f) * 0.001):
++                    price_source = "现价快照"
++            elif close is None:
++                price_source = "现价快照"
+*** End Patch

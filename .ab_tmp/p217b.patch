@@ -1,0 +1,24 @@
+﻿*** Begin Patch
+*** Update File: src/push/pushplus.py
+@@
+         from .templates import (
+             _esc,
+             pattern_summary_line,
++            render_action_summary,
+             render_environment_overview,
+             render_entry_signal,
+             render_exit_signal,
+             stock_identity,
+         )
+@@
+-        # 内容：环境总览 + 信号
+-        content = render_environment_overview(environment)
++        # 内容：环境总览 + 信号
++        content = render_environment_overview(environment)
++
++        # 【P2-17】页首今日行动摘要：一行一人（触发事件｜待验证条件｜需盯价格），
++        # 首屏即可回答"今天动不动"（27 票终点原为"防守"二字）。
++        action_summary = render_action_summary(entries, exits, observations)
++        if action_summary:
++            content = action_summary + content
+*** End Patch

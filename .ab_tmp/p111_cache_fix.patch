@@ -1,0 +1,41 @@
+﻿*** Begin Patch
+*** Update File: tests/test_p0_audit_0916.py
+@@
+ def test_p111_cache_hit_marks_timestamp():
+     """P1-11：缓存命中必须标注 缓存@时间戳，禁止无标识冒充当日实时值。"""
++    import importlib
+     import time
+ 
+     import src.analyzers.institutional_scorer as mod
+ 
+-    mod._reset_institutional_state()
+-    mod._institutional_session_cache.clear()
+-    mod._institutional_session_cache["600000:True"] = {
+-        "ts": time.time(),
+-        "result": {"vote_score": 1, "stale": False, "votes": {}},
+-    }
+-    result = mod.score_institutional_holding("600000", turnover_available=True)
+-    assert result.get("stale") is True
+-    assert result.get("cache_ts")
+-    assert "缓存@" in result.get("source_note", "")
+-    mod._institutional_session_cache.clear()
++    # test_timing_engine 在模块导入期全局替换了 score_institutional_holding，
++    # 这里 reload 取真实实现验证缓存标记，并在 finally 恢复替换以隔离其他套件。
++    patched = mod.score_institutional_holding
++    try:
++        reloaded = importlib.reload(mod)
++        reloaded._institutional_session_cache.clear()
++        reloaded._institutional_session_cache["600000:True"] = {
++            "ts": time.time(),
++            "result": {"vote_score": 1, "stale": False, "votes": {}},
++        }
++        result = reloaded.score_institutional_holding(
++            "600000", turnover_available=True,
++        )
++        assert result.get("stale") is True
++        assert result.get("cache_ts")
++        assert "缓存@" in result.get("source_note", "")
++    finally:
++        mod.score_institutional_holding = patched
++        mod._institutional_session_cache.clear()
+*** End Patch

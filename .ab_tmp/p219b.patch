@@ -1,0 +1,19 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/volume_pattern.py
+@@
+     "早盘观察": {
+         "short": "早盘观察", "bias": 0,
+         "verdict": "早盘量能/主动差只展示不计票，待10:30复核",
+         "strategy": "观察等10:30复核", "strategy_short": "观察",
+         "confirms": ["10:30后复核量能", "同期量比确认方向"],
+         "confirm_target": "10:30复核",
+     },
++    _CALIBER_PENDING_PATTERN: {
++        "short": "量能待定", "bias": 0,
++        "verdict": "量比分档与换手分档矛盾，量能证据待定",
++        "strategy": "观察等量能对账", "strategy_short": "观察",
++        "confirms": ["收盘实际量能回补", "换手与量比分档收敛", "外盘/主动差确认方向"],
++        "confirm_target": "量能对账复核",
++    },
+ }
+*** End Patch

@@ -111,42 +111,22 @@ class TradeLogger:
         reasons: List[str],
         detail: Dict,
     ) -> Optional[int]:
-        """【一】出厂拒绝留痕：假说不完整的信号不推送，但写入 signal_rejections 可审计。
+        """【一】出厂拒绝留痕：委托 signal_rejection 模块统一落库。
 
         reasons: 拒绝原因列表（缺 X/Y/Z/W、倒挂、缓冲不足…）
-        detail:  {benchmark_price, stop_loss, target_range, hypothesis}
+        detail:  {benchmark_price, stop_loss, target_range, hypothesis, fundamental, valuation}
         """
-        try:
-            with get_conn() as conn:
-                cursor = conn.cursor()
-                now = datetime.now()
-                missing = [
-                    label for label, key in (
-                        ("X", "x"), ("Y", "y"), ("Z", "z"), ("W", "w"),
-                    )
-                    if not (detail.get("hypothesis") or {}).get(key)
-                ]
-                cursor.execute(
-                    """INSERT INTO signal_rejections
-                    (date, time, stock_code, stock_name, entry_type,
-                     missing_fields, reason, detail)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        now.strftime("%Y-%m-%d"),
-                        now.strftime("%H:%M:%S"),
-                        stock_code,
-                        stock_name,
-                        entry_type,
-                        ",".join(missing),
-                        "; ".join(reasons),
-                        json.dumps(detail, ensure_ascii=False, default=str),
-                    ),
-                )
-                conn.commit()
-                return cursor.lastrowid
-        except Exception as e:
-            logger.error("记录拒绝留痕失败: %s", e)
-            return None
+        from ..analyzers.signal_rejection import persist_rejection
+
+        rejection = {
+            "stock_code": stock_code,
+            "stock_name": stock_name,
+            "entry_type": entry_type,
+            "reasons": list(reasons or []),
+        }
+        rejection.update(detail or {})
+        return persist_rejection(rejection)
+
 
     def update_action(self, log_id: int, user_action: str, actual_price: float = 0, actual_position: float = 0) -> bool:
         """更新用户操作（回执脚本调用）。

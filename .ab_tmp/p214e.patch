@@ -1,0 +1,16 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/timing_engine.py
+@@
+             close_price = _number_or_none(
+                 current_price or latest_bar.get("收盘", latest_bar.get("close"))
+             )
++            exchange_close = _number_or_none(
++                latest_bar.get("收盘", latest_bar.get("close"))
++            )
+@@
+                 day_high=day_high,
+                 day_low=day_low,
+                 close_price=close_price,
++                exchange_close=exchange_close,
+                 tech_score=tech_signals.get("vote_score"),
+*** End Patch

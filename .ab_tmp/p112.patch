@@ -1,0 +1,60 @@
+﻿*** Begin Patch
+*** Update File: src/push/templates.py
+@@
+-    if z:
+-        ref_text = f"，结构位{_val(z_ref)}" if z_ref else ""
+-        lines.append(f"Z·若{_esc(z_note)}{_ref_text_adj(ref_text)}出现({_val(z)})→认错离场")
++    # P1-12：结构位(突破失败判定基准)与跟踪止损(风险出口)分开标注，事件面板两行分列。
++    if z_ref:
++        lines.append(f"结构位: {_val(z_ref)}（突破失败判定基准，收盘跌回即撤单）")
++    if z:
++        z_suffix = f"，若{_esc(z_note)}出现" if z_note else ""
++        lines.append(f"Z·跟踪止损(风险出口){_val(z)}{z_suffix}→认错离场")
+*** Update File: src/push/templates.py
+@@
+-def _ref_text_adj(ref_text):
+-    return "(X的直接否定)" if not ref_text else f"(X的直接否定{ref_text})"
+-
+-
+ def _tech(data):
+*** Update File: src/analyzers/timing_engine.py
+@@
+-        prefix = (
+-            "事件止损Z: "
+-            + "/".join(f"{price:.2f}" for price in event_stops)
+-            + "(结构位) | 跟踪止损"
+-            if event_stops else "跟踪止损"
+-        )
++        # P1-12：结构位=突破失败判定基准(breakout_level)，事件止损Z=风险出口，
++        # 两个术语分列标注，禁止把跟踪止损标为“结构位”。
++        structure_levels = sorted({
++            float(event.breakout_level) for event in active_events
++            if event.breakout_level and float(event.breakout_level) > 0
++        })
++        bits = []
++        if structure_levels:
++            bits.append(
++                "结构位:" + "/".join(f"{p:.2f}" for p in structure_levels)
++                + "(突破失败判定基准)"
++            )
++        if event_stops:
++            bits.append(
++                "事件跟踪止损:" + "/".join(f"{p:.2f}" for p in event_stops)
++                + "(风险出口)"
++            )
++        prefix = " | ".join(bits) if bits else "跟踪止损"
+         if stop_loss_calc.stop_loss_price > 0:
+             return (
+-                f"{prefix}未触发(现价{current_price:.2f}>"
++                f"{prefix} | 技术跟踪止损未触发(现价{current_price:.2f}>"
+                 f"{stop_loss_calc.stop_loss_price:.2f})"
+             )
+         return f"{prefix} 数据未取到"
+*** Update File: tests/test_f1_audit_fixes.py
+@@
+-    assert "事件止损Z: 85.54(结构位)" in text
+-    assert "跟踪止损未触发(现价97.00>90.30)" in text
++    # P1-12：事件止损Z 是风险出口，不得再标为“结构位”
++    assert "事件跟踪止损:85.54(风险出口)" in text
++    assert "技术跟踪止损未触发(现价97.00>90.30)" in text
+*** End Patch

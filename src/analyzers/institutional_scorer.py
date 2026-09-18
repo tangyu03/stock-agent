@@ -67,6 +67,13 @@ _api_disabled = {
     "main_force": False,
     "shareholder": False,
 }
+# P1-11：本 session 内曾短路后首次成功的源 → 数据标注“首日恢复,无连续性”。
+_api_recovered_today: Dict[str, bool] = {
+    "north_bound": False,
+    "lhb": False,
+    "main_force": False,
+    "shareholder": False,
+}
 _api_fail_count = {
     "north_bound": 0,
     "lhb": 0,
@@ -152,7 +159,13 @@ def _safe_vote_source(code: str, source: str, fetcher, *args, **kwargs) -> Dict[
 
 
 def _mark_api_success(api_name: str):
-    """成功时重置失败计数"""
+    """成功时重置失败计数；若此前已短路，标记本 session 内该源首日恢复并放行。
+
+    P1-11：恢复首日数据必须标注“首日恢复,无连续性”，禁止新旧数据混标。
+    """
+    if _api_disabled.get(api_name):
+        _api_recovered_today[api_name] = True
+        _api_disabled[api_name] = False
     _api_fail_count[api_name] = 0
 
 
@@ -544,7 +557,10 @@ def _fetch_detailed_fund_flow(code: str) -> Optional[Dict[str, Any]]:
             item = {}
             for cn_key, en_key in column_map.items():
                 if cn_key in row:
-                    item[en_key] = _coerce_fund_flow_number(row[cn_key])
+                    if en_key == "date":
+                        item[en_key] = str(row[cn_key])[:10]
+                    else:
+                        item[en_key] = _coerce_fund_flow_number(row[cn_key])
             if item.get("main_net") is not None:
                 rows.append(item)
         if not rows:
@@ -633,13 +649,14 @@ def _fetch_main_force_flow_fallback(code: str) -> Optional[Dict[str, Any]]:
 
 def _reset_institutional_state():
     """重置所有状态（仅供测试用）"""
-    global _api_disabled, _api_fail_count
+    global _api_disabled, _api_fail_count, _api_recovered_today
     global _block_trade_fetcher
     global _fund_flow_rank_cache_at
     global _fund_flow_rank_cross_cache_at, _fund_flow_rank_cross_source
     global _main_force_fallback_failures, _main_force_fallback_block_until
     global _fund_flow_rank_source, _fund_flow_rank_last_error
     _api_disabled = {k: False for k in _api_disabled}
+    _api_recovered_today = {k: False for k in _api_recovered_today}
     _api_fail_count = {k: 0 for k in _api_fail_count}
     _block_trade_fetcher = None
     _main_force_failures.clear()
@@ -1107,6 +1124,22 @@ def _fetch_main_force_flow(code: str) -> Dict[str, Any]:
 
         fallback = None
         if not fund:
+            # 主源（问财）无数据时：先试逐日明细（单股，覆盖全市场），
+            # 避免金海通式“问财+3日快照都缺该股”导致资金维度全空。
+            detail = _fetch_detailed_fund_flow(clean_code)
+            if detail and detail.get("main_flows_5d"):
+                result = _evaluate_main_force_flows(detail["main_flows_5d"])
+                rows = detail.get("rows") or []
+                result["raw"].update({
+                    "net_flows_5d": detail["main_flows_5d"],
+                    "super_large_flows_5d": detail.get("super_large_flows_5d", []),
+                    "large_flows_5d": detail.get("large_flows_5d", []),
+                    "source": "stock_individual_fund_flow(逐日明细兜底)",
+                    "as_of": rows[-1].get("date") if rows else None,
+                })
+                _mark_api_success("main_force")
+                return result
+
             fallback = _fetch_main_force_flow_fallback(clean_code)
             if fallback is None:
                 fallback_reason = _fund_flow_rank_last_error
@@ -1447,6 +1480,39 @@ def _fetch_block_trade_info(code: str):
     return stats
 
 
+def annotate_source_status(
+    votes: Dict[str, Dict[str, Any]],
+    recovered: Optional[Dict[str, bool]] = None,
+    disabled: Optional[Dict[str, bool]] = None,
+) -> Dict[str, str]:
+    """P1-11 源可用性标注（纯函数）：实时 / 首日恢复 / 不可用 / 无数据。
+
+    有值票必须区分缓存与实时；故障源记不可用不参与投票。
+    返回 {src_name: source_status}，并就地追加 detail/raw 标注。
+    """
+    recovered = recovered or {}
+    disabled = disabled or {}
+    out: Dict[str, str] = {}
+    for src_name, v in votes.items():
+        if recovered.get(src_name):
+            status = "recovered_first_day"
+            if "首日恢复" not in str(v.get("detail") or ""):
+                v["detail"] = str(v.get("detail") or "") + "（首日恢复,无连续性）"
+            if not isinstance(v.get("raw"), dict):
+                v["raw"] = {}
+            v["raw"]["recovered_first_day"] = True
+        elif disabled.get(src_name):
+            status = "disabled"
+        elif v.get("raw"):
+            status = "realtime"
+        else:
+            status = "no_data"
+        if isinstance(v.get("raw"), dict):
+            v["raw"]["source_status"] = status
+        out[src_name] = status
+    return out
+
+
 def score_institutional_holding(
     code: str,
     turnover_available: Optional[bool] = None,
@@ -1486,6 +1552,12 @@ def score_institutional_holding(
     if cached and (now - cached["ts"] < _INSTITUTIONAL_CACHE_TTL):
         cached_result = dict(cached["result"])
         cached_result["stale"] = True
+        cached_result["cache_ts"] = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(cached["ts"])
+        )
+        cached_result["source_note"] = (
+            f"缓存@{cached_result['cache_ts'][5:16]}（复用早前实时值,非当日新取）"
+        )
         return cached_result
 
     # 调用 4 个数据源
@@ -1509,6 +1581,10 @@ def score_institutional_holding(
     covered_sources = sum(1 for v in votes.values() if bool(v.get("raw")))
     # 【P1-3】数据时效分层：每个子项都透出数据日；超过 5 日仅展示不投票。
     # age_days 为日历日保守近似（缺日历时只标注 @N/A，不静默降权）。
+    # P1-11 源可用性标注：实时/首日恢复/不可用/无数据；有值票必须能区分缓存与实时。
+    source_status = annotate_source_status(
+        votes, dict(_api_recovered_today), dict(_api_disabled),
+    )
     vote_freshness: Dict[str, Dict[str, Any]] = {}
     for src_name, v in votes.items():
         raw = v.get("raw") or {}
@@ -1527,6 +1603,7 @@ def score_institutional_holding(
             "age_days": age_value,
             "display_only": display_only,
             "effective_weight": effective_weight,
+            "source_status": source_status.get(src_name, "unknown"),
         }
     # 【C-噪音降权】加权总分：主力（拆单算法噪音）/股东（报告期滞后）票权 0.5，
     # 两融/龙虎榜（交易所披露）1.0。int() 截断向零：单噪音源不足以翻动总分。
@@ -1616,6 +1693,7 @@ def score_institutional_holding(
         "vote_label": vote_label,
         "votes": votes,
         "vote_freshness": vote_freshness,
+        "source_status": source_status,
         "valid_vote_sources": valid_vote_sources,
         "covered_sources": covered_sources,
         "voting_source_scope": (

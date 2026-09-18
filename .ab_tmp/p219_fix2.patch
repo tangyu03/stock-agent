@@ -1,0 +1,13 @@
+﻿*** Begin Patch
+*** Update File: tests/test_volume_pattern.py
+@@
+     def test_pending_pattern_render_keeps_observation_state(self):
+         """量能口径待定渲染为观察态，无实质判读句。"""
+         result = build_volume_pattern(self._data(13.16, 3.87))
+         lines = " ".join(render_volume_pattern(result))
+         assert "量能口径待定" in lines
+-        assert "量能待定" in lines
+-        assert "降级待定" in lines or "待定" in lines
++        assert "量能证据待定" in lines
++        assert result["summary_short"] == "量能待定·观察"
+*** End Patch

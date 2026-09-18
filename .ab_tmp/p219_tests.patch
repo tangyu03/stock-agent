@@ -1,0 +1,60 @@
+﻿*** Begin Patch
+*** Update File: tests/test_volume_pattern.py
+@@
+     def test_commission_note_reaches_render(self):
+         data = _feirongda_data()
+         data["tech_signals"]["order_flow"]["wb_ratio"] = 30.0
+         rendered = " ".join(render_volume_pattern(build_volume_pattern(data)))
+         assert "委托一致" in rendered
++
++
++class TestGearDeviationCrossCheck:
++    """P2-19 量比分档×换手分档交叉校验：量比档显著高于换手档(≥2档)时分型降级待定。"""
++
++    def _data(self, volume_ratio, turnover_rate, **overrides):
++        data = {
++            "change_pct": 1.0,
++            "volume_ratio": volume_ratio,
++            "turnover_rate": turnover_rate,
++            "current_price": 100.0,
++            "ma5": 101.0, "ma10": 102.0, "ma20": 103.0,
++            "prior_high": 104.0, "recent_high": 104.0,
++            "gain_20d": 0.05, "ma20_falling": False,
++            "tech_signals": {"order_flow": {
++                "available": True,
++                "outer_volume": 1200, "inner_volume": 800,
++                "imbalance_pct": 20.0,
++            }},
++        }
++        data.update(overrides)
++        return data
++
++    def test_zhenbao_13_16_vs_3_87_downgrades_to_pending(self):
++        """臻宝类 量比13.16(剧烈放量) vs 换手3.87%(活跃) 档差2 → 自动降级待定。"""
++        result = build_volume_pattern(self._data(13.16, 3.87))
++        assert result["pattern"] == "量能口径待定"
++        assert result["star"] == 1
++        assert result["gear_gap"] == 2
++        assert "量比分档(剧烈放量)高于换手分档(活跃)2档" in result["volume_caliber_conflict_note"]
++        assert result["summary_short"] == "量能待定·观察"
++
++    def test_deviation_below_threshold_keeps_pattern(self):
++        """档差不足2（明显放量3 vs 活跃2=1）不得降级。"""
++        result = build_volume_pattern(self._data(3.0, 5.0))
++        assert result["pattern"] != "量能口径待定"
++        assert result["gear_gap"] == 1
++
++    def test_low_volume_ratio_high_turnover_not_downgraded(self):
++        """缩量(0) vs 活跃(2) 档差为负（量比低于换手）属正常组合，不降级。"""
++        result = build_volume_pattern(self._data(0.89, 6.55))
++        assert result["pattern"] != "量能口径待定"
++        assert result["gear_gap"] == -2
++
++    def test_pending_pattern_render_keeps_observation_state(self):
++        """量能口径待定渲染为观察态，无实质判读句。"""
++        result = build_volume_pattern(self._data(13.16, 3.87))
++        lines = " ".join(render_volume_pattern(result))
++        assert "量能口径待定" in lines
++        assert "量能待定" in lines
++        assert "降级待定" in lines or "待定" in lines
+*** End Patch

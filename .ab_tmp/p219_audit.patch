@@ -1,0 +1,48 @@
+﻿*** Begin Patch
+*** Update File: tests/test_p0_audit_0916.py
+@@
+     assert result["early_window"] is False
+     assert result["pattern"] == "真实抛压型"
+     assert result["star"] == 3
+ 
+ 
++def test_p219_zhenbao_gear_deviation_downgrades_to_pending():
++    """P2-19：臻宝类 量比13.16(剧烈放量) vs 换手3.87%(活跃) 档差2 → 自动降级待定。
++
++    接口量比与换手三源无对账曾静默通过（13.16 剧烈放量 vs 3.87% 活跃 名实不符），
++    现量比分档×换手分档交叉校验：量比档高出换手档≥2档即降级为量能口径待定。
++    """
++    from src.analyzers.volume_pattern import build_volume_pattern, render_volume_pattern
++
++    result = build_volume_pattern({
++        "change_pct": 1.0,
++        "volume_ratio": 13.16,
++        "turnover_rate": 3.87,
++        "current_price": 100.0,
++        "ma5": 101.0, "ma10": 102.0, "ma20": 103.0,
++        "prior_high": 104.0, "recent_high": 104.0,
++        "gain_20d": 0.05, "ma20_falling": False,
++        "tech_signals": {"order_flow": {
++            "available": True,
++            "outer_volume": 1200, "inner_volume": 800,
++            "imbalance_pct": 20.0,
++        }},
++        "execution_plan": {"volume_snapshot": {
++            "volume_ratio": 13.16,
++            "volume_ratio_effective": 13.16,
++            "is_early_window": False,
++            "turnover_rate": 3.87,
++        }},
++    })
++    assert result["pattern"] == "量能口径待定"
++    assert result["star"] == 1
++    assert result["gear_gap"] == 2
++    assert "量比分档(剧烈放量)高于换手分档(活跃)2档" in result["volume_caliber_conflict_note"]
++    rendered = "\n".join(render_volume_pattern(result))
++    assert "量能口径待定" in rendered
++    assert "量能待定" in rendered
++
++
+ def test_p17_full_coverage_still_shows_expected_window():
+     """P1-7：覆盖3/3才允许显示3日窗口字样。"""
+*** End Patch

@@ -1,0 +1,31 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/volume_pattern.py
+@@
+-def _judgment_text(change_pct, vgear, drive, rsi6) -> str:
+-    """判读行：涨跌方向 + 量能 + 主动差 + RSI6 → 组合复述（有则拼，无则略）。"""
++def _judgment_text(change_pct, vgear, drive, rsi6, ma5=None, current_price=None) -> str:
++    """判读行：涨跌方向 + 量能 + 主动差 + RSI6 → 组合复述（有则拼，无则略）。
++
++    P2-15 变体：主动差强度分档（偏重/温和）与距 MA5 距离，避免同分型全市场同构。
++    """
+     bits = []
+@@
+-    if drive is not None and drive > 0:
+-        bits.append("主动买盘未失守")
+-    elif drive is not None and drive < 0:
+-        bits.append("主动卖压占优")
++    if drive is not None and drive > 0:
++        bits.append("主动买盘未失守")
++    elif drive is not None and drive < 0:
++        if drive <= DRIVE_REAL_SELL_PCT:
++            bits.append("主动卖压偏重")
++        else:
++            bits.append("主动卖压温和")
++    try:
++        price_f = float(current_price)
++        ma5_f = float(ma5)
++        if price_f and ma5_f:
++            bits.append(f"距MA5{(price_f - ma5_f) / ma5_f * 100:+.1f}%")
++    except (TypeError, ValueError):
++        pass
+*** End Patch

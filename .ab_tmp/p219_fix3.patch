@@ -1,0 +1,8 @@
+﻿*** Begin Patch
+*** Update File: tests/test_p0_audit_0916.py
+@@
+     rendered = "\n".join(render_volume_pattern(result))
+     assert "量能口径待定" in rendered
+-    assert "量能待定" in rendered
++    assert "量能证据待定" in rendered
+*** End Patch

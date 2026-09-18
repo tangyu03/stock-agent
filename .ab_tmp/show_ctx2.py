@@ -1,0 +1,8 @@
+﻿lines = open('src/analyzers/signal_lifecycle.py', encoding='utf-8').read().splitlines()
+print('\n'.join(f'{i+1}: {l}' for i, l in enumerate(lines[904:935], start=904)))
+print('===== 958-972 =====')
+print('\n'.join(f'{i+1}: {l}' for i, l in enumerate(lines[958:972], start=958)))
+print('===== 1000-1036 =====')
+print('\n'.join(f'{i+1}: {l}' for i, l in enumerate(lines[1000:1036], start=1000)))
+print('===== 1072-1156 =====')
+print('\n'.join(f'{i+1}: {l}' for i, l in enumerate(lines[1072:1156], start=1072)))

@@ -1,0 +1,72 @@
+﻿*** Begin Patch
+*** Update File: tests/test_p0_audit_0916.py
+@@
+ def test_p112_risk_stop_relabels_structure_and_tracking_stop():
+     """P1-12：风控双轨文本不得把事件止损标为结构位，两术语分列。"""
+     from src.analyzers.signal_lifecycle import SignalEvent
+     from src.analyzers.timing_engine import StopLossCalc, TimingEngine
+@@
+     assert "事件跟踪止损:821.99(风险出口)" in text
+     assert "(结构位)" not in text
+ 
+ 
++def test_p111_source_status_annotation_pure():
++    """P1-11：源可用性标注——恢复首日必须带(首日恢复,无连续性)与 raw 标记。"""
++    from src.analyzers.institutional_scorer import annotate_source_status
++
++    votes = {
++        "main_force": {"vote": 1, "detail": "主力3日净流入", "raw": {"total": 1e8}},
++        "north_bound": {"vote": 0, "detail": "融资余额接口已短路", "raw": {}},
++        "lhb": {"vote": 0, "detail": "无数据", "raw": {}},
++    }
++    status = annotate_source_status(votes, recovered={"north_bound": True})
++    assert status["main_force"] == "realtime"
++    assert status["north_bound"] == "recovered_first_day"
++    assert status["lhb"] == "no_data"
++    assert "首日恢复,无连续性" in votes["north_bound"]["detail"]
++    assert votes["north_bound"]["raw"]["recovered_first_day"] is True
++    assert votes["north_bound"]["raw"]["source_status"] == "recovered_first_day"
++    assert "首日恢复" not in votes["main_force"]["detail"]
++
++    # 禁用源明确标注不可用，不参与投票
++    status2 = annotate_source_status(
++        {"main_force": {"vote": 0, "detail": "已短路", "raw": {}}},
++        disabled={"main_force": True},
++    )
++    assert status2["main_force"] == "disabled"
++
++
++def test_p111_mark_api_success_recovers_source():
++    """P1-11：曾短路源成功一次即恢复放行，并标记首日恢复。"""
++    import src.analyzers.institutional_scorer as mod
++
++    mod._reset_institutional_state()
++    mod._api_disabled["main_force"] = True
++    mod._mark_api_success("main_force")
++    assert mod._api_recovered_today["main_force"] is True
++    assert mod._api_disabled["main_force"] is False
++    mod._reset_institutional_state()
++    assert mod._api_recovered_today["main_force"] is False
++
++
++def test_p111_cache_hit_marks_timestamp():
++    """P1-11：缓存命中必须标注 缓存@时间戳，禁止无标识冒充当日实时值。"""
++    import time
++
++    import src.analyzers.institutional_scorer as mod
++
++    mod._reset_institutional_state()
++    mod._institutional_session_cache.clear()
++    mod._institutional_session_cache["600000:True"] = {
++        "ts": time.time(),
++        "result": {"vote_score": 1, "stale": False, "votes": {}},
++    }
++    result = mod.score_institutional_holding("600000", turnover_available=True)
++    assert result.get("stale") is True
++    assert result.get("cache_ts")
++    assert "缓存@" in result.get("source_note", "")
++    mod._institutional_session_cache.clear()
++
++
+ def test_v29_early_missing_volume_does_not_blind_high_distribution_evidence():
+*** End Patch

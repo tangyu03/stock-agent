@@ -132,7 +132,7 @@ def test_terminal_status_line_clears_frozen_residue():
         today=date(2026, 9, 10),
     )
     note = lifecycle.event_status_note("002975", current_price=583.2)
-    assert "已完结(追高放弃)" in note
+    assert "已完结(作废(追高放弃))" in note
     assert "完结价583.20" in note
     assert "已冻结" not in note
     assert "待回踩" not in note

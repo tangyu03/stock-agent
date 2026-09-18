@@ -1,0 +1,15 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/volume_pattern.py
+@@
+ _PENDING_SELL_PATTERN = "抛压待确认型"
++
++# P2-19 量比分档×换手分档交叉校验：量比档高出换手档≥2档（量能过猛但换手跟不上）
++# 是接口量比失真的典型特征（臻宝 量比13.16 剧烈放量 vs 换手3.87% 活跃），
++# 分型降级为量能口径待定，禁止按剧烈放量直接参与共振判读。
++_VOLUME_GEAR_INDEX = {label: i for i, (_, label) in enumerate(_VOLUME_GEARS)}
++_VOLUME_GEAR_INDEX[VOLUME_EXTREME_GEAR] = len(_VOLUME_GEARS)
++_TURNOVER_GEAR_INDEX = {label: i for i, (_, label) in enumerate(_TURNOVER_GEARS)}
++_TURNOVER_GEAR_INDEX[TURNOVER_EXTREME_GEAR] = len(_TURNOVER_GEARS)
++GEAR_DEV_UP_DOWNGRADE = 2
++_CALIBER_PENDING_PATTERN = "量能口径待定"
+*** End Patch

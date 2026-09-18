@@ -1,0 +1,17 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+                 if completion_price > 0:
+                     completion_text = f"{completion_price:.2f}({price_source})"
+                     if (
+                         exchange_close is not None
+                         and exchange_close > 0
+-                        and abs(exchange_close - completion_price) / exchange_close > 0.001
+                     ):
+-                        completion_text += f" vs 交易所收盘{exchange_close:.2f}"
++                        _diff = abs(exchange_close - completion_price)
++                        # P2-14：与交易所收盘差异>0.1元 或 >0.1%（中际旭创 908.09 vs 907.80）双值显示
++                        if _diff > 0.1 or (_diff / exchange_close) > 0.001:
++                            completion_text += f" vs 交易所收盘{exchange_close:.2f}"
+                 else:
+*** End Patch

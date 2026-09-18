@@ -20,6 +20,7 @@ from ..push.templates import stock_identity
 from ..analyzers.signal_lifecycle import localize_display_enums
 # templates 渲染已移至 pushplus.send_intraday_report 内部调用
 from ..feedback.trade_logger import get_trade_logger
+from ..analyzers.signal_rejection import persist_rejection
 from ..feedback.daily_review import get_daily_review
 from ..feedback.weekly_report import get_weekly_report
 # P0 修复：引入结构化日志 + trace_id
@@ -581,24 +582,7 @@ class Orchestrator:
         # （不进调度不推送，但可审计——可证伪性是信号出厂前的完整性检查）
         for rejection in getattr(batch, "rejected", []) or []:
             try:
-                self._trade_logger.log_rejection(
-                    stock_code=rejection.get("stock_code", ""),
-                    stock_name=rejection.get("stock_name", ""),
-                    entry_type=rejection.get("entry_type", ""),
-                    reasons=rejection.get("reasons", []),
-                    detail={
-                        "benchmark_price": rejection.get("benchmark_price", 0),
-                        "stop_loss": rejection.get("stop_loss", 0),
-                        "target_range": rejection.get("target_range", []),
-                        "hypothesis": rejection.get("hypothesis", {}),
-                        # 【二】基本面业绩雷拒绝留痕（报告期口径一并存档）
-                        "fundamental": rejection.get("fundamental"),
-                        "fundamental_rejected": rejection.get("fundamental_rejected", False),
-                        # 【Phase3】估值透镜拒绝留痕（泡沫+低基数/模式性亏损追高）
-                        "valuation": rejection.get("valuation"),
-                        "valuation_rejected": rejection.get("valuation_rejected", False),
-                    },
-                )
+                persist_rejection(rejection)
             except Exception as e:
                 logger.warning("拒绝留痕失败: %s", e)
 

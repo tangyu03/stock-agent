@@ -28,6 +28,7 @@ from ..data_layer.akshare_adapter import get_akshare_adapter
 from ..data_layer.skill_wrapper import get_skill_wrapper
 from ..data_layer.stock_data import _volume_share_factor
 from ..analyzers.stock_filter import get_stock_filter, FilterResult
+from .signal_rejection import RejectionLedger
 
 logger = logging.getLogger(__name__)
 
@@ -512,7 +513,8 @@ class TimingEngine:
             store, valid_days=int(self._cfg("signal_lifecycle", "valid_days", default=5))
         )
         # 【一】出厂拒绝留痕（供 unified_engine 采集 → signal_rejections 表）
-        self._entry_rejections: Dict[str, Dict] = {}
+        self._rejection_ledger = RejectionLedger()
+
 
         # 回测模式上下文
         self._backtest_mode = backtest_mode
@@ -523,6 +525,11 @@ class TimingEngine:
     # ============================================================
     # 配置访问辅助方法
     # ============================================================
+
+    @property
+    def _entry_rejections(self) -> Dict[str, Dict]:
+        """向后兼容：读取被拒暂存字典（测试/采集方直接访问）。"""
+        return self._rejection_ledger.pending
 
     def _cfg(self, *path, default=None):
         """读取嵌套配置，如 self._cfg("panic_bottom", "index_drop_threshold")"""
@@ -570,7 +577,7 @@ class TimingEngine:
             self._tech_data_full.clear()
             self._exit_diagnostics.clear()
             self._market_cache = None
-            self._entry_rejections.clear()
+            self._rejection_ledger.clear()
 
     # ============================================================
     # 大盘数据预取
@@ -910,7 +917,7 @@ class TimingEngine:
                 stock_code, int(reentry_cfg.get("max_reentries", 2)), store=self._lifecycle.store,
             ):
                 self._tech_data_full[stock_code] = tech_data
-                self._entry_rejections[stock_code] = {
+                self._rejection_ledger.record(stock_code, {
                     "stock_code": stock_code,
                     "stock_name": stock_name,
                     "entry_type": "再入场上限",
@@ -924,7 +931,7 @@ class TimingEngine:
                     "fundamental_rejected": False,
                     "valuation": None,
                     "valuation_rejected": False,
-                }
+                })
                 logger.info("%s 再入场次数用尽，本标的转入长期观察", stock_code)
                 return []
         except Exception as e:
@@ -1024,7 +1031,7 @@ class TimingEngine:
                 # 【一】/【二】/【Phase3】出厂拒绝：假说不完整、业绩雷或
                 # 估值泡沫/模式性亏损追高 → 不进调度不推送，
                 # 留痕供审计（signal_rejections 表）
-                self._entry_rejections[stock_code] = {
+                self._rejection_ledger.record(stock_code, {
                     "stock_code": stock_code,
                     "stock_name": stock_name,
                     "entry_type": sig.entry_type,
@@ -1037,7 +1044,7 @@ class TimingEngine:
                     "fundamental_rejected": plan.fundamental_rejected,
                     "valuation": plan.valuation,
                     "valuation_rejected": plan.valuation_rejected,
-                }
+                })
                 logger.warning(
                     "信号出厂被拒 %s %s: %s",
                     stock_code, sig.entry_type, "; ".join(plan.rejection_reasons),
@@ -1091,6 +1098,15 @@ class TimingEngine:
             "rsi": tech_signals.get("rsi"),
             "sector_status": sector_status,
         }
+        # P2-16：事件出生时落分型/位置，后验记分按策略/分型/位置三维累计。
+        # 缺字段时 build_volume_pattern 逐级降级，不得因记分维度缺失拦截注册。
+        try:
+            from .volume_pattern import build_volume_pattern
+            _vp = build_volume_pattern(tech_data)
+            entry_snapshot["pattern"] = _vp.get("pattern") or ""
+            entry_snapshot["position"] = _vp.get("position") or ""
+        except Exception:
+            pass
         for sig in valid_signals:
             try:
                 event = self._lifecycle.register_event(
@@ -1943,6 +1959,10 @@ class TimingEngine:
             prev_ratio = None
         if prev_ratio is not None:
             text += f",较前日{prev_ratio:.2f}x"
+        # B-修复：早盘量能证据用于卖出时显式豁免说明（卖出风控从宽、买入确认从严），
+        # 与买入分型“早盘只展示不计票”门槛的差异必须写明（盛合晶微/长光华芯9-18实证）。
+        if early:
+            text += "；早盘量能仅作卖出风控从宽计入(买入确认从严)"
         return text + ")"
 
     def check_exit_signals(
@@ -2142,9 +2162,24 @@ class TimingEngine:
             vols_hist = [float(k.get("成交量", k.get("volume", 0))) for k in kline_raw[-vp_div_window:]]
             prices_hist = [float(k.get("收盘", k.get("close", 0))) for k in kline_raw[-vp_div_window:]]
             if len(vols_hist) >= vp_avg_window and len(prices_hist) >= vp_avg_window:
-                vol_trend = vols_hist[-1] < sum(vols_hist[:vp_avg_window]) / vp_avg_window * vol_shrink
+                vp_avg_vol = sum(vols_hist[:vp_avg_window]) / vp_avg_window
+                vol_trend = vp_avg_vol > 0 and vols_hist[-1] < vp_avg_vol * vol_shrink
                 if vol_trend and current_price >= max(prices_hist[:-1]):
-                    exhaustion.append(('strong', '量价背离(价新高量缩)'))
+                    vp_shrink = vols_hist[-1] / vp_avg_vol if vp_avg_vol > 0 else 0.0
+                    # A-修复：量价背离的“量缩”口径必须标注（较前N日均量），
+                    # 避免与量能组的同期量比/接口量比口径并排输出时自相矛盾（盛合晶微9-18实证）。
+                    vp_label = f'量价背离(价新高量缩:较{vp_avg_window}日均量{vp_shrink:.2f}x)'
+                    sp_ratio = (
+                        (tech_data.get("tech_signals", {}).get("volume_snapshot") or {})
+                        .get("same_period_volume_ratio")
+                    )
+                    try:
+                        sp_ratio = float(sp_ratio) if sp_ratio is not None else None
+                    except (TypeError, ValueError):
+                        sp_ratio = None
+                    if sp_ratio is not None and sp_ratio > 1.2:
+                        vp_label += f'；另同期量比{sp_ratio:.2f}x为放量口径(两口径并存,冲突时以量能组为准)'
+                    exhaustion.append(('strong', vp_label))
 
         # ── K线形态 ──
         us_window = self._cfg("exit", "exhaustion", "upper_shadow_window", default=3)
@@ -2644,11 +2679,26 @@ class TimingEngine:
             close_price = _number_or_none(
                 current_price or latest_bar.get("收盘", latest_bar.get("close"))
             )
+            exchange_close = _number_or_none(
+                latest_bar.get("收盘", latest_bar.get("close"))
+            )
             tech_signals = tech_data.get("tech_signals") or {}
             ma5, ma10, ma20 = tech_data.get("ma5"), tech_data.get("ma10"), tech_data.get("ma20")
+            vs_snap = tech_signals.get("volume_snapshot") or {}
             maintenance_check = {
                 "date": datetime.now().date().isoformat(),
+                # C-修复：维持面板量比必须有口径标注（沃尔德9-18 量比4.69 vs 同期量比1.57/
+                # 接口量比2.33 并存无口径）；早盘用同期口径、其余用有效口径，并落库口径名。
                 "volume_ratio": tech_data.get("volume_ratio"),
+                "volume_ratio_effective": vs_snap.get("volume_ratio_effective"),
+                "same_period_volume_ratio": vs_snap.get("same_period_volume_ratio"),
+                "is_early_window": bool(vs_snap.get("is_early_window")),
+                "volume_ratio_caliber": (
+                    vs_snap.get("volume_ratio_caliber")
+                    or tech_data.get("volume_ratio_source")
+                    or "口径未标注"
+                ),
+                "same_period_caliber": vs_snap.get("same_period_caliber") or "",
                 "ma_alignment": bool(ma5 and ma10 and ma20 and ma5 > ma10 > ma20),
                 "rsi": tech_signals.get("rsi"),
                 "sector_status": sector_status,
@@ -2664,6 +2714,7 @@ class TimingEngine:
                 day_high=day_high,
                 day_low=day_low,
                 close_price=close_price,
+                exchange_close=exchange_close,
                 tech_score=tech_signals.get("vote_score"),
                 volume_ratio=tech_data.get("volume_ratio"),
                 change_pct=tech_data.get("change_pct"),
@@ -2721,15 +2772,27 @@ class TimingEngine:
                     )
             except Exception as e:
                 logger.debug("跟踪止损日志写入失败 %s: %s", stock_code, e)
-        prefix = (
-            "事件止损Z: "
-            + "/".join(f"{price:.2f}" for price in event_stops)
-            + "(结构位) | 跟踪止损"
-            if event_stops else "跟踪止损"
-        )
+        # P1-12：结构位=突破失败判定基准(breakout_level)，事件止损Z=风险出口，
+        # 两个术语分列标注，禁止把跟踪止损标为“结构位”。
+        structure_levels = sorted({
+            float(event.breakout_level) for event in active_events
+            if event.breakout_level and float(event.breakout_level) > 0
+        })
+        bits = []
+        if structure_levels:
+            bits.append(
+                "结构位:" + "/".join(f"{p:.2f}" for p in structure_levels)
+                + "(突破失败判定基准)"
+            )
+        if event_stops:
+            bits.append(
+                "事件跟踪止损:" + "/".join(f"{p:.2f}" for p in event_stops)
+                + "(风险出口)"
+            )
+        prefix = " | ".join(bits) if bits else "跟踪止损"
         if stop_loss_calc.stop_loss_price > 0:
             return (
-                f"{prefix}未触发(现价{current_price:.2f}>"
+                f"{prefix} | 技术跟踪止损未触发(现价{current_price:.2f}>"
                 f"{stop_loss_calc.stop_loss_price:.2f})"
             )
         return f"{prefix} 数据未取到"

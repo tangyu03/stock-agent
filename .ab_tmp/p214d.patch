@@ -1,0 +1,27 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+             if e.status in TERMINAL_EVENT_STATUSES:
+-                completion_price = self._completion_price(e)
+-                completion_text = (
+-                    f"{completion_price:.2f}" if completion_price > 0
+-                    else "数据未取到"
+-                )
++                completion_price, price_source, exchange_close = (
++                    self._completion_price_detail(e)
++                )
++                # P2-14：完结价带口径（收盘/现价快照），与交易所收盘差异>0.1% 时双值显示。
++                if completion_price > 0:
++                    completion_text = f"{completion_price:.2f}({price_source})"
++                    if (
++                        exchange_close is not None
++                        and exchange_close > 0
++                        and abs(exchange_close - completion_price) / exchange_close > 0.001
++                    ):
++                        completion_text += f" vs 交易所收盘{exchange_close:.2f}"
++                else:
++                    completion_text = "数据未取到"
+                 distance = ""
+                 if completion_price and e.entry_price:
+                     distance = f" 距买点{(completion_price / e.entry_price - 1.0):+.1%}"
+*** End Patch

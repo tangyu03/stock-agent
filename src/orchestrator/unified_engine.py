@@ -467,7 +467,7 @@ def run_unified_analysis(
             market_score=market_score,
         )
         # 【一】采集出厂拒绝留痕（假说不完整：缺 X/Y/Z/W、止损倒挂、缓冲不足）
-        rejection = timing._entry_rejections.pop(code, None)
+        rejection = timing._rejection_ledger.pop(code)
         if rejection:
             batch.rejected.append(rejection)
         if signals:

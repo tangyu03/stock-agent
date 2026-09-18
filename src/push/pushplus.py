@@ -93,12 +93,49 @@ class PushPlus:
     def _chunk_content(content: str, max_len: int = None) -> List[str]:
         """按安全边界将超长内容分块，避免切断 HTML 标签触发服务端校验。
 
-        优先在 <br/> <hr/> </table> </div> 换行等边界断开；
-        单块内找不到安全边界时硬截断兜底（避免死循环）。
+        P2-18：分页以个股卡片为原子——先按 <hr/> 边界切分为卡片单元，
+        完整卡片装入同一块，单股卡片不跨块；仅当单卡超过上限时才在
+        卡内 <br/> 等安全边界兜底切分。
         """
         max_len = max_len or PushPlus.MAX_CONTENT_LEN
         if len(content) <= max_len:
             return [content]
+        units = PushPlus._split_card_units(content)
+        chunks: List[str] = []
+        current = ""
+        for unit in units:
+            if len(unit) > max_len:
+                # 单卡超长兜底：先落当前块，再对该卡内部分块
+                if current:
+                    chunks.append(current)
+                    current = ""
+                chunks.extend(PushPlus._fallback_chunk(unit, max_len))
+                continue
+            if current and len(current) + len(unit) > max_len:
+                chunks.append(current)
+                current = unit
+            else:
+                current += unit
+        if current:
+            chunks.append(current)
+        return chunks
+
+    @staticmethod
+    def _split_card_units(content: str) -> List[str]:
+        """按 <hr/> 将内容切分为卡片单元；单元含尾部 <hr/>（最后一张除外）。"""
+        parts = content.split("<hr/>")
+        units = []
+        for i, part in enumerate(parts):
+            if i < len(parts) - 1:
+                units.append(part + "<hr/>")
+            elif part:
+                units.append(part)
+        return units
+
+    @staticmethod
+    def _fallback_chunk(content: str, max_len: int) -> List[str]:
+        """单卡超长时的兜底分块：按 <br/> </table> </div> 换行等安全边界断开，
+        找不到边界时硬截断（避免死循环）。"""
         chunks: List[str] = []
         start = 0
         while start < len(content):
@@ -116,6 +153,42 @@ class PushPlus:
             chunks.append(content[start:start + cut])
             start += cut
         return chunks
+
+    @staticmethod
+    def _latest_sample_time(signals) -> str:
+        """全信号最大量比采样时间（14 位 YYYYMMDDHHMMSS），无则空串。"""
+        best = ""
+        for s in signals or []:
+            try:
+                vs = ((s.get("tech_signals") or {}).get("volume_snapshot") or {})
+            except AttributeError:
+                vs = {}
+            for key in ("volume_ratio_sample_time", "same_period_sample_time"):
+                t = str(vs.get(key) or s.get(key) or "")
+                if t.isdigit() and len(t) == 14 and t > best:
+                    best = t
+        return best
+
+    @staticmethod
+    def _trading_progress(sample_time: str) -> int:
+        """A股交易日进度：240 分钟（9:30-11:30 + 13:00-15:00）。"""
+        try:
+            hh = int(sample_time[8:10])
+            mm = int(sample_time[10:12])
+        except (ValueError, IndexError):
+            return 0
+        minutes = hh * 60 + mm
+        if minutes < 570:          # 9:30 前
+            elapsed = 0
+        elif minutes <= 690:       # 9:30-11:30
+            elapsed = minutes - 570
+        elif minutes <= 780:       # 午休
+            elapsed = 120
+        elif minutes <= 900:       # 13:00-15:00
+            elapsed = 120 + (minutes - 780)
+        else:
+            elapsed = 240
+        return round(elapsed / 240 * 100)
 
     def _send_one(self, title: str, content: str, template: str, level: str) -> bool:
         """单条 HTTP 发送（含频率限制、每日限额、html→txt 降级重试）。"""
@@ -251,6 +324,7 @@ class PushPlus:
         from .templates import (
             _esc,
             pattern_summary_line,
+            render_action_summary,
             render_environment_overview,
             render_entry_signal,
             render_exit_signal,
@@ -275,6 +349,25 @@ class PushPlus:
 
         # 内容：环境总览 + 信号
         content = render_environment_overview(environment)
+
+        # 【P2-17】页首今日行动摘要：一行一人（触发事件｜待验证条件｜需盯价格），
+        # 首屏即可回答"今天动不动"（27 票终点原为"防守"二字）。
+        action_summary = render_action_summary(entries, exits, observations)
+        if action_summary:
+            content = action_summary + content
+
+        # 【P2-18】报告头数据时点：全信号最大量比采样时间 + 交易日进度，
+        # 读者据此判断结论成熟度（早盘/尾盘快照证据质量不同，不能当盘后结论）。
+        sample_time = self._latest_sample_time([*entries, *exits, *observations])
+        if sample_time:
+            progress = self._trading_progress(sample_time)
+            stamp = (
+                f"{sample_time[4:6]}-{sample_time[6:8]} "
+                f"{sample_time[8:10]}:{sample_time[10:12]}"
+            )
+            content = (
+                f"<b>数据时点 {stamp}｜交易日进度 {progress}%</b><br/>"
+            ) + content
 
         # 【P1-4】广播表置顶：在飞事件用信号生命周期驱动；信号系统不读仓位。
         try:
@@ -360,7 +453,9 @@ class PushPlus:
                 _, card = render_exit_signal(s)
                 content += card
                 if i < len(exits) - 1:
-                    content += "<br/>"
+                    # P2-18：卖出卡之间也用 <hr/> 分隔，与买入/观察卡一致，
+                    # 分块以个股卡片为原子，避免卖出卡跨页被切断。
+                    content += "<br/><hr/>"
             content += "<br/>"
 
         if observations:

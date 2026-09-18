@@ -1,0 +1,41 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@ _STATUS_DISPLAY = {
+     "sig_stop": "信号止损",
+     "time_exit": "时间离场",
+ }
+ 
++# P2-15：完结原因两级枚举（一级=盈亏归属/作废/时间，二级=具体状态）。
++_COMPLETION_LEVEL1 = {
++    "sig_target": "止盈",
++    "sig_stop": "止损",
++    "chase_abandon": "作废",
++    "expired": "作废",
++    "invalidated": "作废",
++    "time_exit": "时间",
++}
++
+ 
+ def normalize_status(status: str) -> str:
+@@ def display_status(status: str) -> str:
+     normalized = normalize_status(status)
+     return _STATUS_DISPLAY.get(normalized, normalized)
+ 
+ 
++def completion_reason(status: str) -> str:
++    """完结原因两级枚举：一级(二级)，如 止盈(信号止盈)、作废(已过期)、时间(时间离场)。
++    非完结状态退化为一层（沿用 display_status），保证调用点不崩。
++    """
++    normalized = normalize_status(status)
++    level1 = _COMPLETION_LEVEL1.get(normalized)
++    if not level1:
++        return display_status(normalized)
++    return f"{level1}({display_status(normalized)})"
++
++
+ def display_rule_version(rule_version: str) -> str:
+@@                 notes.append(
+-                    f"[{e.entry_type}]已完结({display_status(e.status)})："
++                    f"[{e.entry_type}]已完结({completion_reason(e.status)})："
+                     f"完结价{completion_text}"
+*** End Patch

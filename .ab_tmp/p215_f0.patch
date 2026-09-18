@@ -1,0 +1,6 @@
+﻿*** Begin Patch
+*** Update File: tests/test_f0_audit_fixes.py
+@@
+-    assert "已完结(追高放弃)" in note
++    assert "已完结(作废(追高放弃))" in note
+*** End Patch
