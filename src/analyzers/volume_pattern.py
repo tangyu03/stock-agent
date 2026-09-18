@@ -236,6 +236,37 @@ def turnover_gear(turnover_pct) -> Optional[str]:
     return TURNOVER_EXTREME_GEAR
 
 
+def turnover_gear_relative(turnover_pct, p25, p50, p75, p90) -> Optional[str]:
+    """换手档（相对自身 N 日分位）：用自身历史分位定档，替代绝对百分比阈值。
+    小盘高换手票（如臻宝 前几天 23%+ 今日 16%，绝对档=决战）用绝对档会与
+    '量比相对自身5日'错位造成假矛盾；相对分位才能与量比对账基准对齐。
+    分位缺失/不单调/全0 时返回 None（退化为绝对档）。"""
+    try:
+        t = float(turnover_pct)
+    except (TypeError, ValueError):
+        return None
+    if t != t:
+        return None
+    try:
+        bounds = [float(x) for x in (p25, p50, p75, p90)]
+    except (TypeError, ValueError):
+        return None
+    if any(x != x for x in bounds):
+        return None
+    p25, p50, p75, p90 = bounds
+    if p90 <= 0 or not (p25 < p50 < p75 < p90):
+        return None
+    if t < p25:
+        return "清淡"
+    if t < p50:
+        return "正常"
+    if t < p75:
+        return "活跃"
+    if t < p90:
+        return "过热"
+    return TURNOVER_EXTREME_GEAR
+
+
 def active_drive(flow: Optional[Dict]) -> Optional[float]:
     """内外盘 → 主动差 D ∈ [-1, 1]。D>0 外盘占优。数据缺失返回 None。"""
     if not isinstance(flow, dict) or not flow.get("available"):
@@ -735,6 +766,16 @@ def build_volume_pattern(data: Dict) -> Dict:
     # 早盘只允许同期累计量比分档；接口量比只作对账/展示，不冒充分型证据。
     vgear = volume_gear(effective_vr)
     tgear = turnover_gear(turnover)
+    tgear_base = "绝对档"
+    if turnover is not None:
+        _rel_gear = turnover_gear_relative(
+            turnover,
+            vs.get("turnover_p25"), vs.get("turnover_p50"),
+            vs.get("turnover_p75"), vs.get("turnover_p90"),
+        )
+        if _rel_gear:
+            tgear = _rel_gear
+            tgear_base = "相对自身N日分位"
     close = data.get("current_price")
     high_52w = data.get("high_52w")
     near_high = _near_high_pct(
@@ -782,6 +823,7 @@ def build_volume_pattern(data: Dict) -> Dict:
         "vgear": vgear,
         "turnover": float(turnover) if turnover is not None else None,
         "tgear": tgear,
+        "tgear_base": tgear_base,
         "turnover_hot": turnover_hot,
         "drive": drive, "drive_label": drive_label(drive),
         "wb": wb,
@@ -968,7 +1010,7 @@ def render_volume_pattern(result: Dict) -> List[str]:
         data_bits.append("量能:N/A(早盘需同期量比)")
     if t is not None:
         hot = "⚠️>P90过热" if result.get("turnover_hot") else ""
-        data_bits.append(f"换手{t:.2f}%({result.get('tgear') or '?'}){hot}")
+        data_bits.append(f"换手{t:.2f}%({result.get('tgear') or '?'},基准:{result.get('tgear_base') or '绝对档'}){hot}")
     else:
         data_bits.append("换手:N/A")
     if d is not None:

@@ -16,8 +16,6 @@ stocks:
   name: 臻宝
 - code: '920045'
   name: 蘅东光
-- code: '688820'
-  name: 盛合晶微
 - code: '688028'
   name: 沃尔德
 - code: '300757'
@@ -30,8 +28,6 @@ stocks:
   name: 创世纪
 - code: '688392'
   name: 骄成超声
-- code: '301392'
-  name: 汇成真空
 - code: '300308'
   name: 中际旭创
 - code: '688048'
@@ -54,3 +50,7 @@ stocks:
   name: 腾景科技
 - code: '300602'
   name: 飞荣达 
+- code: '601138'
+  name: 工业富联
+- code: '688257'
+  name: 新锐股份

@@ -434,6 +434,29 @@ class InMemorySignalEventStore:
                 "rules_version": event.rules_version,
             })
 
+    def refresh_frozen_reason(
+        self, event_id: str, reason: str = "",
+        trigger_data: Optional[Dict] = None, rule_entry: str = "",
+    ) -> None:
+        """P0-2：冻结原因随快照滚动更新——不改变状态、不触碰 frozen_prev_status。
+        冻结持续期间每次评估刷新 invalid_reason 并留痕（from=frozen->to=frozen）。"""
+        event = self.events.get(event_id)
+        if not event or event.status != "frozen":
+            return
+        event.invalid_reason = reason
+        self.logs.append({
+            "event_id": event_id,
+            "stock_code": event.stock_code,
+            "from_status": "frozen",
+            "to_status": "frozen",
+            "reason": reason,
+            "source": "signal_lifecycle",
+            "trigger_data": trigger_data or {},
+            "rule_entry": rule_entry or "",
+            "rules_version": event.rules_version,
+        })
+
+
     def get_event_logs(self, event_id: str) -> List[Dict]:
         return [log for log in self.logs if log["event_id"] == event_id]
 
@@ -631,6 +654,43 @@ class DbSignalEventStore:
                 conn.commit()
         except Exception as e:
             logger.error("更新信号事件失败 %s: %s", event_id, e)
+
+    def refresh_frozen_reason(
+        self, event_id: str, reason: str = "",
+        trigger_data: Optional[Dict] = None, rule_entry: str = "",
+    ) -> None:
+        """P0-2：冻结原因随快照滚动更新——不改变状态、不触碰 frozen_prev_status。
+        冻结持续期间每次评估刷新 invalid_reason/updated_at 并留痕。"""
+        try:
+            with get_conn() as conn:
+                cursor = conn.cursor()
+                _ensure_tables(cursor)
+                cursor.execute(
+                    "SELECT stock_code, status, rules_version FROM signal_events WHERE event_id=?",
+                    (event_id,),
+                )
+                existing = cursor.fetchone()
+                if not existing or existing["status"] != "frozen":
+                    conn.commit()
+                    return
+                cursor.execute(
+                    "UPDATE signal_events SET invalid_reason=?, updated_at=? WHERE event_id=?",
+                    (reason, datetime.now().isoformat(timespec="seconds"), event_id),
+                )
+                cursor.execute("""
+                    INSERT INTO signal_event_logs
+                    (event_id, stock_code, from_status, to_status, reason, source,
+                     trigger_data, rule_entry, rules_version)
+                    VALUES (?, ?, 'frozen', 'frozen', ?, 'signal_lifecycle', ?, ?, ?)
+                """, (
+                    event_id, existing["stock_code"], reason,
+                    json.dumps(trigger_data or {}, ensure_ascii=False, sort_keys=True),
+                    rule_entry or "",
+                    (existing["rules_version"] or "") if "rules_version" in existing.keys() else "",
+                ))
+                conn.commit()
+        except Exception as e:
+            logger.error("刷新冻结原因失败 %s: %s", event_id, e)
 
     def get_event_logs(self, event_id: str) -> List[Dict]:
         try:
@@ -1016,6 +1076,7 @@ class SignalLifecycle:
                         event.event_id, target,
                         trigger_data={
                             "tech_score": tech_score,
+                            "price": effective_price,
                             "today": today.isoformat(),
                         },
                     )
@@ -1024,6 +1085,28 @@ class SignalLifecycle:
                         f"技术分{float(tech_score):+.1f}≥0，恢复原状态",
                         "常规",
                     ))
+                else:
+                    # P0-2：冻结原因随快照滚动更新——冻结持续期间 invalid_reason
+                    # 刷新为最新快照，禁止展示两个版本前的旧原因（沃尔德 9-18）。
+                    if tech_score is not None and volume_ratio is not None and change_pct is not None:
+                        _refresh_reason = (
+                            f"技术{float(tech_score):+.1f}"
+                            f"（放量阴线{float(change_pct):+.2f}%，"
+                            f"量比{float(volume_ratio):.2f}）；"
+                            "解冻条件技术分≥0，冻结期间不提示回踩买入；"
+                            "冻结仅停提示、挂单存续（解冻后恢复可成交）"
+                        )
+                        self.store.refresh_frozen_reason(
+                            event.event_id, _refresh_reason,
+                            trigger_data={
+                                "tech_score": tech_score,
+                                "volume_ratio": volume_ratio,
+                                "change_pct": change_pct,
+                                "price": effective_price,
+                                "today": today.isoformat(),
+                            },
+                            rule_entry="R3.11冻结快照滚动",
+                        )
                 continue
             if event.status != "valid":
                 # filled 后仍按信号口径跟踪 W/Z；不会读持仓或成本。
@@ -1100,7 +1183,8 @@ class SignalLifecycle:
                     f"技术{float(tech_score):+.1f}"
                     f"（放量阴线{float(change_pct):+.2f}%，"
                     f"量比{float(volume_ratio):.2f}）；"
-                    "解冻条件技术分≥0，冻结期间不提示回踩买入"
+                    "解冻条件技术分≥0，冻结期间不提示回踩买入；"
+                    "冻结仅停提示、挂单存续（解冻后恢复可成交）"
                 )
                 self.freeze(
                     event.event_id, reason,
@@ -1108,6 +1192,7 @@ class SignalLifecycle:
                         "tech_score": tech_score,
                         "volume_ratio": volume_ratio,
                         "change_pct": change_pct,
+                        "price": effective_price,
                         "today": today.isoformat(),
                     },
                 )

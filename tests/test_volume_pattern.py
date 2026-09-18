@@ -414,7 +414,7 @@ class TestStarsAndRender:
         lines = render_volume_pattern(build_volume_pattern(_feirongda_data()))
         assert lines[0] == "③量能 [抛压衰竭型] ★★★"
         assert lines[1] == (
-            "③·数据: 接口量比0.89@时间未标注(缩量;口径未标注) | 换手6.55%(活跃) "
+            "③·数据: 接口量比0.89@时间未标注(缩量;口径未标注) | 换手6.55%(活跃,基准:绝对档) "
             "| 主动差+2.5%(外盘占优) | 位置:破位(距前高-9.6%｜MA20偏离-9.3%｜20日涨幅-15.0%)"
         )
         assert "RSI6=21超卖" in lines[2] and "跌不动了" in lines[2]

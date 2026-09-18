@@ -600,6 +600,27 @@ def run_unified_analysis(
         if notices:
             batch.event_notices.extend(notices)
 
+    # -------- 2b. 事件状态刷新（P0-2 一致性校验）--------
+    # 正文诊断的“事件状态:”行在入场循环生成，早于出场循环的 freeze/unfreeze/
+    # mark_filled；直接渲染会与头部在飞栏（渲染时点读库最新状态）矛盾
+    # （沃尔德 9-18：正文显示“已冻结”而头部已“已成交”）。
+    # 此处对仍带事件状态行的诊断按库最新状态重渲染，保证同源同时点。
+    try:
+        for code, diag in batch.entry_diagnostics.items():
+            if not (isinstance(diag, str) and "\n事件状态: " in diag):
+                continue
+            marker = "\n事件状态: "
+            prefix = diag.split(marker, 1)[0]
+            price = float(
+                (timing._tech_data_full.get(code) or {}).get("current_price") or 0
+            )
+            note = timing.lifecycle_status_note(code, price)
+            if note:
+                batch.entry_diagnostics[code] = prefix + marker + note
+            else:
+                batch.entry_diagnostics[code] = prefix
+    except Exception as e:
+        logger.debug("事件状态刷新失败: %s", str(e)[:80])
     # -------- 3. 注入板块信息到信号 --------
     # 复用 sector_ranker 已有数据（stock_sector + ranker_result），不触发额外 API 调用
     def _get_sector_info(code: str) -> Dict:
