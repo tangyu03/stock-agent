@@ -296,3 +296,102 @@ class TestObservationFundamental:
         assert "预亏" in content
         assert "业绩雷" in content
         assert "报告期2026-06" in content
+
+# ============================================================
+# 5. 大宗交易：默认 akshare 路径崩溃降级 + 市场级缓存
+#    （回归：WinError 10038 打崩盘中扫描；24只自选重复拉全市场）
+# ============================================================
+
+class TestBlockTradeCrashResilience:
+    """P0-6 大宗源技术缺陷回归：网络源崩溃不得打崩盘中扫描。"""
+
+    @pytest.fixture(autouse=True)
+    def _reset_block_trade_state(self):
+        from src.data_layer import block_trade as _bt
+        _bt._MARKET_DF_CACHE.clear()
+        yield
+        _bt._MARKET_DF_CACHE.clear()
+        _inst._reset_institutional_state()
+
+    def _install_dzjy_akshare(self, monkeypatch, impl):
+        fake = types.ModuleType("akshare")
+        fake.stock_dzjy_mrmx = impl
+        monkeypatch.setitem(sys.modules, "akshare", fake)
+
+    @staticmethod
+    def _winerror10038(*args, **kwargs):
+        raise OSError("[WinError 10038] 在一个非套接字上尝试了一个操作。")
+
+    def test_default_path_oserror_returns_none(self, monkeypatch):
+        """实盘崩溃回归：默认路径 akshare 抛 WinError 10038 → 返回 None 不抛。"""
+        from src.data_layer import block_trade as _bt
+        self._install_dzjy_akshare(monkeypatch, self._winerror10038)
+        # call_ak_with_retry 透传异常，验证 fetch_block_trade_stats 内 try 兜底
+        monkeypatch.setattr(_bt, "call_ak_with_retry",
+                            lambda func, *a, **kw: func(*a, **kw))
+        assert _bt.fetch_block_trade_stats("688008") is None
+
+    def test_market_df_cached_single_fetch(self, monkeypatch):
+        """市场级明细按日期缓存：同运行多只自选只拉一次全市场。"""
+        import pandas as pd
+        from src.data_layer import block_trade as _bt
+        df = pd.DataFrame({
+            "交易日期": ["2026-10-14"],
+            "证券代码": ["688008"],
+            "成交价": [50.0],
+            "折溢率": [-4.0],
+            "成交量": [10000],
+            "成交额": [500000.0],
+            "卖方营业部": ["机构专用"],
+        })
+        calls = {"n": 0}
+
+        def _fake_call(func, *a, **kw):
+            calls["n"] += 1
+            return df
+        monkeypatch.setattr(_bt, "call_ak_with_retry", _fake_call)
+        self._install_dzjy_akshare(monkeypatch, lambda **kw: df)
+
+        s1 = _bt.fetch_block_trade_stats("688008", days=20)
+        s2 = _bt.fetch_block_trade_stats("688009", days=20)
+        assert calls["n"] == 1  # 两次调用只拉一次全市场
+        assert s1 is not None and s1["trades"] == 1
+        assert s2 is None  # 688009 不在市场级 DF 中，但已复用缓存未再拉取
+
+    def test_injected_fetcher_oserror_returns_none(self):
+        """注入 fetcher（测试/回放路径）抛 OSError → 返回 None 不抛。"""
+        from src.data_layer import block_trade as _bt
+        stats = _bt.fetch_block_trade_stats(
+            "688008", days=20, fetcher=self._winerror10038)
+        assert stats is None
+
+    def test_safe_block_trade_info_never_raises(self, monkeypatch):
+        """institutional_scorer 兜底：抓取器抛任意异常 → 返回 None。"""
+        from src.analyzers import institutional_scorer as _inst2
+
+        def _boom(code):
+            raise RuntimeError("大宗源崩溃")
+        monkeypatch.setattr(_inst2, "_block_trade_fetcher", _boom)
+        assert _inst2._safe_block_trade_info("688008") is None
+
+    def test_score_institutional_holding_contained(self, monkeypatch):
+        """端到端：score_institutional_holding 遇大宗源崩溃不被打崩。"""
+        from src.data_layer import block_trade as _bt
+        from src.analyzers import institutional_scorer as _inst2
+        self._install_dzjy_akshare(monkeypatch, self._winerror10038)
+        monkeypatch.setattr(_bt, "call_ak_with_retry",
+                            lambda func, *a, **kw: func(*a, **kw))
+        monkeypatch.setattr(_inst2, "_block_trade_fetcher",
+                            _bt.fetch_block_trade_stats)
+        for name in ("_fetch_margin_balance", "_fetch_lhb_institutional",
+                     "_fetch_main_force_flow", "_fetch_shareholder_count"):
+            monkeypatch.setattr(
+                _inst2, name,
+                lambda c: {"vote": 0, "detail": "中性", "raw": {}})
+        monkeypatch.setattr(_inst2, "_fetch_top10_institutional_ratio",
+                            lambda c: None)
+
+        result = _REAL_SCORE("688008")
+        assert result["block_trade"] is None
+        assert isinstance(result["vote_score"], int)
+        assert result["data_sufficient"] is True

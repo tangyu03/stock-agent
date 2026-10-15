@@ -222,5 +222,82 @@ class TestMarketModeAdaptive:
         assert mode == 'retreat', f"跌破5日线应retreat，实际{mode}"
 
 
+class TestPanicBottomCumulativeAndGate:
+    """A：多日单边阴跌计入恐慌；B：关口破位用上证指数而非沪深300。"""
+
+    @staticmethod
+    def _tech(**overrides):
+        tech = {
+            "current_price": 100.0,
+            "change_pct": -3.0,
+            "drop_5d": -0.20,
+            "index_daily_drop": -1.5,
+            "gem_sci_tech_drop": 1.0,
+            "advance_decline_ratio": 0.10,      # 必要：涨跌比<0.15
+            "index_cum_drop_5d": -7.2,           # A：5日累跌>6%
+            "index_down_days_5d": 4,             # A：连4阴≥3
+            "tech_signals": {"rsi": 18.0, "kdj": {"j": -5.0}},
+            "kline": [{"close": 100.0, "open": 100.0, "high": 101.0,
+                       "low": 99.0, "volume": 1000} for _ in range(30)],
+        }
+        tech.update(overrides)
+        return tech
+
+    @staticmethod
+    def _sig(te, tech):
+        from types import SimpleNamespace
+        return te._check_panic_bottom(
+            "688008", "测试", tech, SimpleNamespace(stop_loss_price=90.0),
+            "defend", "rotational",
+        )
+
+    def test_cumulative_grinddown_triggers(self, monkeypatch):
+        """多日单边阴跌 + 个股超卖 → 恐慌抄底左侧试探（置信度封顶中）。"""
+        import src.analyzers.timing_engine as te_mod
+        monkeypatch.setattr(te_mod, "get_market_environment",
+                            lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
+        te = get_backtest_timing_engine()
+        sig = self._sig(te, self._tech())
+        assert sig is not None
+        assert sig.entry_type == "恐慌抄底"
+        assert sig.confidence == "中"
+        assert "上证5日累跌" in sig.trigger_reason
+        assert "累计恐慌确认" in sig.trigger_reason
+
+    def test_cumulative_no_oversold_blocks(self, monkeypatch):
+        """累计恐慌但个股不超卖 → 不触发。"""
+        import src.analyzers.timing_engine as te_mod
+        monkeypatch.setattr(te_mod, "get_market_environment",
+                            lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
+        te = get_backtest_timing_engine()
+        tech = self._tech(tech_signals={"rsi": 60.0, "kdj": {"j": 50.0}},
+                          change_pct=1.0, drop_5d=-0.02)
+        assert self._sig(te, tech) is None
+
+    def test_gate_close_break_uses_sse_index(self, monkeypatch):
+        """B：上证收盘跌破3700关口 → 充分触发（旧逻辑用沪深300会标成4200）。"""
+        import src.analyzers.timing_engine as te_mod
+        monkeypatch.setattr(te_mod, "get_market_environment",
+                            lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
+        te = get_backtest_timing_engine()
+        idx = [{"close": 3720.0, "low": 3710.0}, {"close": 3699.0, "low": 3690.0}]
+        tech = self._tech(index_kline=idx, index_cum_drop_5d=0.0, index_down_days_5d=0)
+        sig = self._sig(te, tech)
+        assert sig is not None
+        assert "上证跌破3700关口" in sig.trigger_reason
+
+    def test_gate_intraday_break_no_recover_degraded(self, monkeypatch):
+        """B：盘中破3700且收盘未收回（前日已在关口下方）→ 降级充分。"""
+        import src.analyzers.timing_engine as te_mod
+        monkeypatch.setattr(te_mod, "get_market_environment",
+                            lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
+        te = get_backtest_timing_engine()
+        idx = [{"close": 3698.0, "low": 3690.0}, {"close": 3695.0, "low": 3670.0}]
+        tech = self._tech(index_kline=idx, index_cum_drop_5d=0.0, index_down_days_5d=0)
+        sig = self._sig(te, tech)
+        assert sig is not None
+        assert "盘中破3700关口未收回" in sig.trigger_reason
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

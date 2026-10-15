@@ -261,3 +261,19 @@ def test_bojie_filled_event_exits_by_time():
     assert lifecycle.get_active_events("002975") == []
     assert any(item["exit_type"] == "时间离场" for item in notices)
     assert lifecycle.store.logs[-1]["rule_entry"] == "R3.9时间离场"
+
+
+def test_evaluate_market_panic_cumulative():
+    """A：多日累计恐慌也计入恐慌口径。"""
+    from src.decision.mode_rules import evaluate_market_panic
+
+    hit = evaluate_market_panic(cum_drop_5d=-7.0, down_days_5d=3)
+    assert hit["triggered"] is True
+    assert any("连3日阴累计7.00%" in r for r in hit["reasons"])
+
+    # 累计跌幅不足
+    assert evaluate_market_panic(cum_drop_5d=-5.0, down_days_5d=3)["triggered"] is False
+    # 连阴天数不足
+    assert evaluate_market_panic(cum_drop_5d=-7.0, down_days_5d=2)["triggered"] is False
+    # 未传累计字段时不影响旧行为
+    assert evaluate_market_panic(index_drop=0.5, gem_star_drop=0.5, ad_ratio=1.2)["triggered"] is False

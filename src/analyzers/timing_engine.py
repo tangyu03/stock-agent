@@ -460,6 +460,34 @@ def entry_main_tier_price(
     return entry_buypoint(entry_type, trigger_price, tech_data, config)[0]
 
 
+def _index_cumulative_metrics(records: Optional[List[Dict]]) -> Optional[Dict]:
+    """从指数K线计算近5日累计跌幅%与连续收阴天数（键兼容中文/英文）。
+
+    Returns None when data insufficient（需 ≥6 根K线）。
+    """
+    if not records or len(records) < 6:
+        return None
+    closes = []
+    for record in records[-6:]:
+        value = record.get("close", record.get("收盘", None))
+        if value is None:
+            return None
+        try:
+            closes.append(float(value))
+        except (TypeError, ValueError):
+            return None
+    if any(close <= 0 for close in closes) or closes[-6] <= 0:
+        return None
+    cum_drop = (closes[-1] / closes[-6] - 1.0) * 100.0  # 近5个交易日累计
+    down_days = 0
+    for i in range(len(closes) - 1, 0, -1):
+        if closes[i] < closes[i - 1]:
+            down_days += 1
+        else:
+            break
+    return {"cum_drop_5d": round(cum_drop, 2), "down_days_5d": down_days}
+
+
 class TimingEngine:
     """择时引擎（参数化重构版）"""
 
@@ -608,6 +636,10 @@ class TimingEngine:
                 idx_closes = [float(r.get("收盘", r.get("close", 0))) for r in idx_records]
                 if len(idx_closes) >= 2 and idx_closes[-2] > 0:
                     data["index_daily_drop"] = round((idx_closes[-1] - idx_closes[-2]) / idx_closes[-2] * 100, 2)
+                index_metrics = _index_cumulative_metrics(idx_records)
+                if index_metrics:
+                    data["index_cum_drop_5d"] = index_metrics["cum_drop_5d"]
+                    data["index_down_days_5d"] = index_metrics["down_days_5d"]
         except Exception as e:
             logger.debug("非关键异常: %s", e)
         # 全市场成交额
@@ -669,6 +701,10 @@ class TimingEngine:
             vols = [float(r.get("volume", 0)) for r in idx]
             if len(closes) >= 2 and closes[-2] > 0:
                 data["index_daily_drop"] = round((closes[-1] - closes[-2]) / closes[-2] * 100, 2)
+            index_metrics = _index_cumulative_metrics(idx)
+            if index_metrics:
+                data["index_cum_drop_5d"] = index_metrics["cum_drop_5d"]
+                data["index_down_days_5d"] = index_metrics["down_days_5d"]
             market_vol_window = self._cfg("prefetch", "market_vol_avg_window", default=20)
             if len(vols) >= market_vol_window:
                 data["market_volume_yi"] = vols[-1] / 1e8 if vols[-1] > 1e6 else vols[-1]
@@ -1142,6 +1178,10 @@ class TimingEngine:
 
         D1 整改（2026-07-22）：固定跌幅 → 关键整数关口破位+尾盘确认
         ----------------------------------------------------------------
+        A 增补（2026-10-15）：多日单边阴跌计入恐慌（上证近5日累计跌幅 +
+            连续收阴天数），匹配"破位后持续下行"的真实体感。
+        B 修复（2026-10-15）：关键整数关口改用上证指数收盘/盘中（原误用
+            沪深300 csi300_close），并新增"盘中破位+尾盘未收回"降级充分条件。
         制度前提：恐慌抄底依赖"恐慌必有托底"的政策预期（A股特色）
         在无政策托底环境（如2021-2023纯熊市）降级为"考虑"级信号
 
@@ -1150,13 +1190,17 @@ class TimingEngine:
           - 上证跌幅 > 4%（保留，作必要不充分）
           - 双创跌幅 > 5%
           - 涨跌比 < 0.15
+          - 上证近5日累计跌幅 > 6% 且 连续收阴 ≥ 3 日（A）
         充分条件（必要条件满足后，再满足任一）：
-          - 关键整数关口破位：上证收盘跌破 3000/3100/3200/.../4000 等100整百点位
+          - 关键整数关口破位：上证收盘跌破 3000/3100/3200/.../4000 等100整百点位（B：上证收盘口径）
+          - 盘中破位+尾盘未收回：上证盘中跌破整数关口且收盘仍在关口下方（B：降级充分）
           - 放量宣泄：成交量250日分位 > 70%
           - 极端放量：均量比 > 2.0 且上证跌 > 2%
+          - 累计恐慌确认（A）：多日单边阴跌(必要已含) + 个股超卖 → 左侧试探放行
         """
         panic_market = []
         panic_sufficient = []  # D1: 充分条件
+        cumulative_panic = False
 
         # === 必要条件：固定跌幅（保留但降级为必要不充分）===
         index_drop = tech_data.get("index_daily_drop", 0)
@@ -1174,77 +1218,19 @@ class TimingEngine:
         if ad_ratio < ad_thresh:
             panic_market.append(f"涨跌比{ad_ratio:.2f}(市场极弱)")
 
-        # === D1 充分条件1: 关键整数关口破位 ===
-        # 上证收盘跌破 100整百点位（3000/3100/3200/.../4000）
-        # 从 tech_data 获取上证收盘价
-        index_close = 0
-        # 上证指数收盘价在 index_daily_drop 的计算源，这里用近似：
-        # 如果有 index_kline 在 tech_data 里，取最后一日收盘
-        # 否则用 current_price / (1 + index_drop/100) 反推
-        try:
-            mkt_env = get_market_environment()
-            index_close = mkt_env.get('csi300_close', 0) or 0
-        except Exception as e:
-            logger.debug("非关键异常: %s", e)
-        # 兜底：用个股现价反推上证（粗略）
-        if index_close <= 0:
-            # 上证收盘价无法直接获取，用 index_drop 反推前收
-            # 但这不够准确，跳过关键点位判定
-            pass
-        else:
-            # 检查是否跌破关键整数关口（3000~4500，每100一个）
-            for level in range(3000, 4600, 100):
-                # 前一日在关口上方，今日收盘在关口下方
-                prev_close_approx = index_close / (1 + index_drop / 100) if index_drop != 0 else index_close
-                if prev_close_approx > level >= index_close:
-                    panic_sufficient.append(f"上证跌破{level}关口(收{index_close:.0f})")
-                    break
-
-        # === D1 充分条件2: 放量宣泄（250日分位>70%）===
-        try:
-            mkt_env = get_market_environment()
-            vol_pct = mkt_env.get("volume_percentile", 50)
-            if vol_pct >= 70:
-                panic_sufficient.append(f"放量宣泄(分位{vol_pct:.0f}%)")
-            elif vol_pct < 30:
-                # 缩量阴跌不宜抄底 — 从 panic_market 中移除已有的放量信号
-                panic_market = [p for p in panic_market if "放量" not in p and "巨量" not in p]
-                panic_market.append(f"缩量阴跌(分位{vol_pct:.0f}%)不宜抄底")
-        except Exception as e:
-            logger.debug("非关键异常: %s", e)
-
-# D1: 极端放量已在上方 panic_market 中处理（删除重复块）
-
-        # 放量判断（原有：20日均量比 + 新增：250日分位）
-        market_vol = tech_data.get("market_volume_yi", 0)
-        avg_vol_20 = tech_data.get("market_volume_20d_avg", 0)
-        panic_vol_ratio = self._cfg("panic_bottom", "panic_volume_ratio", default=2.0)
-        panic_vol_idx_drop = self._cfg("panic_bottom", "panic_volume_index_drop", default=2.0)
-        sig_vol_ratio = self._cfg("panic_bottom", "significant_volume_ratio", default=1.5)
-        if market_vol > 0 and avg_vol_20 > 0:
-            vol_ratio = market_vol / avg_vol_20
-            if vol_ratio > panic_vol_ratio and abs(index_drop) > panic_vol_idx_drop:
-                panic_market.append(f"恐慌放量(均量{vol_ratio:.1f}倍)")
-            elif vol_ratio > panic_vol_ratio:
-                panic_market.append(f"巨量换手(均量{vol_ratio:.1f}倍)")
-            elif vol_ratio > sig_vol_ratio:
-                panic_market.append(f"显著放量(均量{vol_ratio:.1f}倍)")
+        # === A：累计恐慌（多日单边阴跌）===
+        cum_drop = tech_data.get("index_cum_drop_5d", 0) or 0
+        down_days = tech_data.get("index_down_days_5d", 0) or 0
+        cum_drop_thresh = self._cfg("panic_bottom", "cum_drop_5d_threshold", default=6.0)
+        cum_days_thresh = self._cfg("panic_bottom", "cum_consecutive_down_days", default=3)
+        if abs(cum_drop) > cum_drop_thresh and down_days >= cum_days_thresh:
+            cumulative_panic = True
+            panic_market.append(f"上证5日累跌{abs(cum_drop):.1f}%连{down_days}阴")
 
         if not panic_market:
             return None
 
-        # 过滤：缩量阴跌不宜抄底
-        if any("不宜抄底" in p for p in panic_market):
-            return None
-
-        # D1: 必要条件（panic_market）+ 充分条件（panic_sufficient）双重确认
-        # 原逻辑：必要条件≥1 即可触发（过松，2024段产生大量低质量信号）
-        # 新逻辑：必要条件≥1 + 充分条件≥1 才触发
-        # 如果没有充分条件，降级为"考虑"级信号（不触发买入，仅记录）
-        if not panic_sufficient:
-            # 无充分条件 — 降级，不触发
-            return None
-
+        # === 个股超卖（提前算：累计恐慌降级放行需用它）===
         stock_oversold = []
         current_price = tech_data.get("current_price", 0)
         change_pct = tech_data.get("change_pct", 0)
@@ -1281,10 +1267,87 @@ class TimingEngine:
             if j_val < 0:
                 stock_oversold.append(f"KDJ超卖(J={j_val:.0f})")
 
-        # 删除"跌破MA120" — 它是趋势指标不是超卖指标
-        # 跌破MA120只说明价格离均线远，可能是长期下跌的正常状态，不代表超卖反弹
-
         if not stock_oversold:
+            return None
+
+        # === D1 充分条件1: 关键整数关口破位（B：上证指数收盘口径，不再用沪深300）===
+        index_close = 0
+        index_low = 0
+        index_prev_close = 0
+        try:
+            idx_records = tech_data.get("index_kline") or ((self._market_cache or {}).get("index_kline") or [])
+            if idx_records:
+                last = idx_records[-1]
+                index_close = float(last.get("close", last.get("收盘", 0)) or 0)
+                index_low = float(last.get("low", last.get("最低", index_close)) or index_close)
+                if len(idx_records) >= 2:
+                    prev = idx_records[-2]
+                    index_prev_close = float(prev.get("close", prev.get("收盘", 0)) or 0)
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
+        if index_close > 0:
+            for level in range(3000, 4600, 100):
+                prev_close = index_prev_close or (
+                    index_close / (1 + index_drop / 100) if index_drop != 0 else index_close
+                )
+                if prev_close > level >= index_close:
+                    panic_sufficient.append(f"上证跌破{level}关口(收{index_close:.0f})")
+                    break
+            # B：降级充分 — 盘中跌破整数关口 且 尾盘未收回（收盘仍在关口下方）
+            if not panic_sufficient and index_low > 0:
+                for level in range(3000, 4600, 100):
+                    if index_low < level and index_close < level:
+                        panic_sufficient.append(
+                            f"盘中破{level}关口未收回(低{index_low:.0f}收{index_close:.0f})"
+                        )
+                        break
+
+        # === D1 充分条件2: 放量宣泄（250日分位>70%）===
+        try:
+            mkt_env = get_market_environment()
+            vol_pct = mkt_env.get("volume_percentile", 50)
+            if vol_pct >= 70:
+                panic_sufficient.append(f"放量宣泄(分位{vol_pct:.0f}%)")
+            elif vol_pct < 30:
+                # 缩量阴跌不宜抄底 — 从 panic_market 中移除已有的放量信号
+                panic_market = [p for p in panic_market if "放量" not in p and "巨量" not in p]
+                panic_market.append(f"缩量阴跌(分位{vol_pct:.0f}%)不宜抄底")
+        except Exception as e:
+            logger.debug("非关键异常: %s", e)
+
+        # D1: 极端放量已在上方 panic_market 中处理（删除重复块）
+
+        # 放量判断（原有：20日均量比 + 新增：250日分位）
+        market_vol = tech_data.get("market_volume_yi", 0)
+        avg_vol_20 = tech_data.get("market_volume_20d_avg", 0)
+        panic_vol_ratio = self._cfg("panic_bottom", "panic_volume_ratio", default=2.0)
+        panic_vol_idx_drop = self._cfg("panic_bottom", "panic_volume_index_drop", default=2.0)
+        sig_vol_ratio = self._cfg("panic_bottom", "significant_volume_ratio", default=1.5)
+        if market_vol > 0 and avg_vol_20 > 0:
+            vol_ratio = market_vol / avg_vol_20
+            if vol_ratio > panic_vol_ratio and abs(index_drop) > panic_vol_idx_drop:
+                panic_market.append(f"恐慌放量(均量{vol_ratio:.1f}倍)")
+            elif vol_ratio > panic_vol_ratio:
+                panic_market.append(f"巨量换手(均量{vol_ratio:.1f}倍)")
+            elif vol_ratio > sig_vol_ratio:
+                panic_market.append(f"显著放量(均量{vol_ratio:.1f}倍)")
+
+        # 缩量阴跌过滤：只拦"放量类"恐慌；多日阴跌路径（A）不因当日缩量被一刀切
+        if any("不宜抄底" in p for p in panic_market) and not cumulative_panic:
+            return None
+
+        # === A：累计恐慌降级放行 — 多日单边阴跌 + 个股超卖 → 左侧试探 ===
+        if not panic_sufficient and cumulative_panic:
+            panic_sufficient.append(
+                f"累计恐慌确认(5日累跌{abs(cum_drop):.1f}%连{down_days}阴)"
+            )
+
+        # D1: 必要条件（panic_market）+ 充分条件（panic_sufficient）双重确认
+        # 原逻辑：必要条件≥1 即可触发（过松，2024段产生大量低质量信号）
+        # 新逻辑：必要条件≥1 + 充分条件≥1 才触发
+        # 如果没有充分条件，降级为"考虑"级信号（不触发买入，仅记录）
+        if not panic_sufficient:
+            # 无充分条件 — 降级，不触发
             return None
 
         # D1: 市场恐慌(必要)+充分条件+个股超卖 三重确认
@@ -1294,12 +1357,19 @@ class TimingEngine:
         hc_stock = self._cfg("panic_bottom", "high_confidence_stock_conds", default=2)
         # D1: 高置信需要必要+充分+超卖都≥阈值
         confidence = "高" if (len(panic_market) >= hc_market and
-                              len(panic_sufficient) >= 1 and
-                              len(stock_oversold) >= hc_stock) else "中"
+                                  len(panic_sufficient) >= 1 and
+                                  len(stock_oversold) >= hc_stock) else "中"
+        # A：仅靠累计恐慌放行的左侧试探，置信度封顶"中"
+        if (
+            cumulative_panic
+            and len(panic_sufficient) == 1
+            and "累计恐慌确认" in panic_sufficient[0]
+        ):
+            confidence = "中"
 
         return EntrySignal(
             stock_code=code, stock_name=name, entry_type="恐慌抄底",
-            strategy_summary="恐慌抄底 — 大盘恐慌(暴跌/放量/涨跌比极低) + 个股超卖(暴跌/破MA120/锤子线)",
+            strategy_summary="恐慌抄底 — 大盘恐慌(暴跌/放量/涨跌比极低/多日阴跌) + 个股超卖(暴跌/破MA120/锤子线)",
             entry_trigger_price=current_price, stop_loss=stop_loss.stop_loss_price,
             target_type="中线持有",
             target_range=self._calculate_target_range(tech_data, "恐慌抄底"),
@@ -1307,8 +1377,6 @@ class TimingEngine:
             applicable_modes=["attack", "defend", "retreat"],
             sector_status=sector, trigger_reason=trigger_reason, confidence=confidence,
         )
-
-
     def _check_arbitrage_entry(self, code, name, tech_data, stop_loss, mode, sector) -> Optional[EntrySignal]:
         """
         套利低吸（第二种进场）
@@ -3428,6 +3496,8 @@ class TimingEngine:
         data["market_volume_20d_avg"] = (self._market_cache or {}).get("market_volume_20d_avg", 0)
         data["advance_decline_ratio"] = (self._market_cache or {}).get("advance_decline_ratio", 1.0)
         data["gem_sci_tech_drop"] = (self._market_cache or {}).get("gem_sci_tech_drop", 0)
+        data["index_cum_drop_5d"] = (self._market_cache or {}).get("index_cum_drop_5d", 0)
+        data["index_down_days_5d"] = (self._market_cache or {}).get("index_down_days_5d", 0)
 
         # 技术指标 + K 线形态
         tech_vote_min = self._cfg("tech_data", "min_klines_for_tech_vote", default=30)

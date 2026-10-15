@@ -227,6 +227,8 @@ def _panic_bottom_blocker(tech_data: Dict) -> str:
         index_drop=tech_data.get("index_daily_drop"),
         gem_star_drop=tech_data.get("gem_sci_tech_drop"),
         ad_ratio=tech_data.get("advance_decline_ratio"),
+        cum_drop_5d=tech_data.get("index_cum_drop_5d"),
+        down_days_5d=tech_data.get("index_down_days_5d"),
     )["triggered"]
     if not market_panic:
         return "正常行情，未触发"

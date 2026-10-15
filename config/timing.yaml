@@ -18,6 +18,8 @@ timing:
     index_drop_threshold: 4.0            # 上证跌幅 > 4% 判定大盘恐慌
     gem_star_drop_threshold: 5.0         # 双创跌幅 > 5% 判定大盘恐慌
     ad_ratio_extreme_weak: 0.15          # 涨跌比 < 0.15 判定市场极弱
+    cum_drop_5d_threshold: 6.0           # 上证近5日累计跌幅 > 6% 判定累计恐慌(A)
+    cum_consecutive_down_days: 3         # 且连续收阴 >= 3 日(A)
     panic_volume_ratio: 2.0              # 量比 > 2.0 判定恐慌放量
     panic_volume_index_drop: 2.0         # 恐慌放量需配合上证跌幅 > 2%
     significant_volume_ratio: 1.5        # 量比 > 1.5 判定显著放量

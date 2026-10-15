@@ -5,8 +5,11 @@
 → 强制挂派发确认候选。
 """
 import logging
+import threading
 from datetime import date, timedelta
 from typing import Any, Callable, Dict, List, Optional
+
+from .akshare_safe import call_ak_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,10 @@ FLOAT_CAP_RATIO = 0.01
 SELLER_CONSISTENCY_MIN = 2
 
 _DEFAULT_DAYS = 20
+
+# 市场级明细按 (start,end) 缓存：24 只自选不再每只重复拉全市场大宗数据。
+_MARKET_DF_CACHE: Dict[tuple, Any] = {}
+_MARKET_DF_LOCK = threading.Lock()
 
 
 def _code_col(df) -> Optional[str]:
@@ -92,21 +99,41 @@ def fetch_block_trade_stats(
 
     fetcher 可注入（测试/回放），默认用 akshare 市场级每日明细
     ak.stock_dzjy_mrmx(symbol='A股', start_date, end_date)。
+
+    默认路径走 call_ak_with_retry（超时+线程隔离，防止 SSL/socket
+    异常（WinError 10038）打崩整个盘中扫描），并对市场级明细做
+    按日期缓存：同一运行内 24 只自选只拉一次全市场数据。
     """
-    if fetcher is None:
+    use_default = fetcher is None
+    if use_default:
         def _default_fetcher(start_date: str, end_date: str):
             import akshare as ak
-            return ak.stock_dzjy_mrmx(
+            return call_ak_with_retry(
+                ak.stock_dzjy_mrmx,
                 symbol="A股", start_date=start_date, end_date=end_date,
+                retries=1, timeout=20.0,
             )
         fetcher = _default_fetcher
     end = date.today()
     start = end - timedelta(days=int(days) + 7)  # 缓冲周末/节假日
-    try:
-        df = fetcher(start.strftime("%Y%m%d"), end.strftime("%Y%m%d"))
-    except Exception as e:
-        logger.debug("大宗交易抓取失败 %s: %s", code, str(e)[:80])
-        return None
+    start_str = start.strftime("%Y%m%d")
+    end_str = end.strftime("%Y%m%d")
+    cache_key = (start_str, end_str)
+    if use_default:
+        with _MARKET_DF_LOCK:
+            if cache_key not in _MARKET_DF_CACHE:
+                try:
+                    _MARKET_DF_CACHE[cache_key] = fetcher(start_str, end_str)
+                except Exception as e:
+                    logger.debug("大宗交易抓取失败 %s: %s", code, str(e)[:80])
+                    _MARKET_DF_CACHE[cache_key] = None
+            df = _MARKET_DF_CACHE[cache_key]
+    else:
+        try:
+            df = fetcher(start_str, end_str)
+        except Exception as e:
+            logger.debug("大宗交易抓取失败 %s: %s", code, str(e)[:80])
+            return None
     return _parse_block_trade_frame(df, code, int(days))
 
 

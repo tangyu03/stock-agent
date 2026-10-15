@@ -24,11 +24,17 @@ def evaluate_market_panic(
     index_drop=None,
     gem_star_drop=None,
     ad_ratio=None,
+    cum_drop_5d=None,
+    down_days_5d=None,
+    cum_drop_threshold=6.0,
+    cum_down_days_threshold=3,
 ) -> Dict:
     """Evaluate the market-side panic precondition used by both layers."""
     index_value = _number(index_drop)
     gem_value = _number(gem_star_drop)
     ad_value = _number(ad_ratio)
+    cum_value = _number(cum_drop_5d)
+    down_days_value = _number(down_days_5d)
 
     reasons: List[str] = []
     if index_value is not None and abs(index_value) > 4.0:
@@ -37,6 +43,15 @@ def evaluate_market_panic(
         reasons.append(f"双创跌幅{abs(gem_value):.2f}%>5%")
     if ad_value is not None and ad_value < 0.15:
         reasons.append(f"涨跌比{ad_value:.2f}<0.15")
+    if (
+        cum_value is not None
+        and abs(cum_value) > cum_drop_threshold
+        and down_days_value is not None
+        and down_days_value >= cum_down_days_threshold
+    ):
+        reasons.append(
+            f"连{cum_down_days_threshold:.0f}日阴累计{abs(cum_value):.2f}%"
+        )
 
     missing = [
         name
@@ -54,6 +69,8 @@ def evaluate_market_panic(
             "index_drop": ">4.0%",
             "gem_star_drop": ">5.0%",
             "ad_ratio": "<0.15",
+            "cum_drop_5d": f">{cum_drop_threshold:.0f}%",
+            "cum_down_days_5d": f">={cum_down_days_threshold:.0f}",
         },
         "missing": missing,
     }

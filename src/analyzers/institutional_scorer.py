@@ -1480,6 +1480,15 @@ def _fetch_block_trade_info(code: str):
     return stats
 
 
+def _safe_block_trade_info(code: str):
+    """大宗交易源绝不外抛异常（网络源故障只降级为 None）。"""
+    try:
+        return _fetch_block_trade_info(code)
+    except Exception as e:
+        logger.debug("大宗交易源异常(兜底) %s: %s", code, str(e)[:80])
+        return None
+
+
 def annotate_source_status(
     votes: Dict[str, Dict[str, Any]],
     recovered: Optional[Dict[str, bool]] = None,
@@ -1704,7 +1713,7 @@ def score_institutional_holding(
         "neutral_count": neutral_count,
         "top10_institutional_ratio": top10_ratio,
         # 【P0-6】大宗交易第五资金源（近20日折价大宗统计+派发确认候选触发）
-        "block_trade": _fetch_block_trade_info(code),
+        "block_trade": _safe_block_trade_info(code),
         "data_sufficient": data_sufficient,
         "downweighted": not data_sufficient,
         "data_reason": "" if data_sufficient else "主力资金缺失/换手率缺失",
