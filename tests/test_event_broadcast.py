@@ -77,9 +77,45 @@ class TestInFlightBroadcast:
             ])
 
         assert rows[0]["active"] is True
-        assert rows[0]["status_label"] == "已冻结"
+        assert rows[0]["status_label"] == "技术转弱·买入提示暂停"
         assert rows[1]["active"] is False
         assert rows[1]["status_label"] == "追高放弃"
+
+    def test_one_current_state_per_stock_folds_history(self):
+        current = self._event("000009", "现价股", "valid")
+        cancelled = self._event(
+            "000009", "现价股", "invalidated",
+            event_id="evt-000009-old", born="2026-09-07",
+            invalid_reason="收盘跌破结构位",
+        )
+        rows = collect_in_flight_events(
+            as_of=date(2026, 9, 8), lookback_days=7,
+            events=[current, cancelled, dict(current)],
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["active"] is True
+        assert [(item["status_label"], item["invalid_reason"]) for item in rows[0]["history"]] == [
+            ("已撤单", "收盘跌破结构位")
+        ]
+
+        text = render_in_flight_events(rows)
+        assert "在飞事件 1（活跃1/完结0）" in text
+        assert text.count("现价股") == 1
+        assert "轨迹: #0009-old已撤单" in text
+
+    def test_semantically_identical_generated_rows_are_deduped(self):
+        first = self._event("000010", "重复股", "invalidated",
+                            event_id="evt-first", invalid_reason="回踩失败已撤单")
+        second = self._event("000010", "重复股", "invalidated",
+                             event_id="evt-second", invalid_reason="回踩失败已撤单")
+
+        rows = collect_in_flight_events(
+            as_of=date(2026, 9, 8), lookback_days=7, events=[first, second]
+        )
+
+        assert len(rows) == 1
+        assert "history" not in rows[0]
 
 
 class TestWatchLadderAndCounts:

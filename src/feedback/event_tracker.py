@@ -38,7 +38,7 @@ _STATUS_LABELS = {
     "filled": "已成交",
     "invalidated": "失效撤单",
     "expired": "过期作废",
-    "frozen": "已冻结",
+    "frozen": "技术转弱·买入提示暂停",
     "chase_abandon": "追高放弃",
     "sig_target": "信号止盈",
     "sig_stop": "信号止损",
@@ -50,7 +50,7 @@ _TRACKING_STATUS_LABELS = {
     "filled": "已成交",
     "invalidated": "失效撤单",
     "expired": "过期作废",
-    "frozen": "已冻结",
+    "frozen": "技术转弱·买入提示暂停",
     "chase_abandon": "追高放弃",
     "sig_target": "信号止盈",
     "sig_stop": "信号止损",
@@ -62,7 +62,7 @@ _EVENT_STATUS_LABELS = {
     "filled": "已成交",
     "invalidated": "已撤单",
     "expired": "已过期",
-    "frozen": "已冻结",
+    "frozen": "技术转弱·买入提示暂停",
     "chase_abandon": "追高放弃",
     "sig_target": "信号止盈",
     "sig_stop": "信号止损",
@@ -88,6 +88,20 @@ def _to_date(text: str) -> Optional[date]:
         return date.fromisoformat(str(text)[:10])
     except (ValueError, TypeError):
         return None
+
+
+def _event_fingerprint(row: Dict) -> tuple:
+    """Identical lifecycle rows generated twice must collapse to one audit event."""
+    return (
+        str(row.get("stock_code") or ""),
+        str(row.get("entry_type") or ""),
+        str(row.get("born_date") or "")[:10],
+        normalize_status(str(row.get("status") or "")),
+        str(row.get("invalid_reason") or ""),
+        str(row.get("entry_price") or ""),
+        str(row.get("stop_loss") or ""),
+        str(row.get("target_low") or ""),
+    )
 
 
 def build_event_tracking_table(
@@ -183,7 +197,20 @@ def build_event_tracking_table(
             })
 
     covered_keys = {(r["stock_code"], r.get("entry_type") or r["entry_type"]) for r in rows}
+    # 【重复条目/计数矛盾修复】同一 event_id 只显示一次（参数完全相同的一对
+    # 行必是同一事件，不去重会导致“真实撤单数”与“结构失败撤单N”对不上）。
+    seen_event_ids: set = set()
+    seen_event_fingerprints: set = set()
     for e in normalized:
+        eid = str(e.get("event_id") or "")
+        fingerprint = _event_fingerprint(e)
+        if eid:
+            if eid in seen_event_ids:
+                continue
+            seen_event_ids.add(eid)
+        if fingerprint in seen_event_fingerprints:
+            continue
+        seen_event_fingerprints.add(fingerprint)
         born_day = _to_date(e.get("born_date"))
         if born_day is None or not (window_start <= born_day <= as_of):
             continue
@@ -275,6 +302,8 @@ def collect_in_flight_events(
             events = []
 
     rows: List[Dict] = []
+    seen_event_ids: set = set()
+    seen_event_fingerprints: set = set()
     for e in events or []:
         if isinstance(e, dict):
             row = dict(e)
@@ -306,6 +335,15 @@ def collect_in_flight_events(
         row["born_date"] = born.isoformat()
         row["status_label"] = _EVENT_STATUS_LABELS.get(status, display_status(status))
         row["active"] = status in ("valid", "filled", "frozen")
+        event_id = str(row.get("event_id") or "")
+        if event_id:
+            if event_id in seen_event_ids:
+                continue
+            seen_event_ids.add(event_id)
+        fingerprint = _event_fingerprint(row)
+        if fingerprint in seen_event_fingerprints:
+            continue
+        seen_event_fingerprints.add(fingerprint)
         rows.append(row)
 
     priority = {
@@ -314,6 +352,39 @@ def collect_in_flight_events(
         "sig_target": 6, "sig_stop": 7, "time_exit": 8,
     }
     rows.sort(key=lambda r: (priority.get(r["status"], 9), r["born_date"], r["stock_code"]))
+
+    # 每只股票一个当前态；其它记录折叠成轨迹，避免“已触发/已撤单”并排冲突。
+    primary_by_code: Dict[str, Dict] = {}
+    for row in rows:
+        code = str(row.get("stock_code") or "")
+        current = primary_by_code.get(code)
+        if current is None:
+            primary_by_code[code] = row
+            continue
+        candidate_key = (
+            not bool(row.get("active")),
+            priority.get(row["status"], 9),
+            str(row.get("born_date") or ""),
+        )
+        current_key = (
+            not bool(current.get("active")),
+            priority.get(current["status"], 9),
+            str(current.get("born_date") or ""),
+        )
+        primary, discarded = (
+            (row, current) if candidate_key < current_key else (current, row)
+        )
+        primary_by_code[code] = primary
+        primary.setdefault("history", []).append({
+            "event_id": discarded.get("event_id", ""),
+            "status_label": discarded.get("status_label", ""),
+            "born_date": discarded.get("born_date", ""),
+            "invalid_reason": discarded.get("invalid_reason", ""),
+        })
+    rows = sorted(
+        primary_by_code.values(),
+        key=lambda r: (priority.get(r["status"], 9), r["born_date"], r["stock_code"]),
+    )
     return rows
 
 
@@ -330,6 +401,11 @@ def render_in_flight_events(rows: List[Dict]) -> str:
             stop = float(r.get("stop_loss") or 0)
             target = float(r.get("target_low") or 0)
         except (TypeError, ValueError):
+            parts.append(
+                f"&nbsp;&nbsp;{r.get('stock_name') or r.get('stock_code')} "
+                f"{r.get('entry_type') or '-'} {r.get('status_label')} "
+                "价格字段异常"
+            )
             continue
         current = None
         try:
@@ -366,6 +442,18 @@ def render_in_flight_events(rows: List[Dict]) -> str:
             reason = str(r["invalid_reason"])
             seg += f" ({reason[:42]})"
         parts.append(seg)
+        history = r.get("history") or []
+        if history:
+            trail = "；".join(
+                f"#{str(item.get('event_id'))[-8:]}{item.get('status_label', '')}"
+                f"({str(item.get('invalid_reason') or '无原因')[:24]})"
+                for item in history if item.get("status_label")
+            )
+            if trail:
+                parts.append(f"&nbsp;&nbsp;&nbsp;&nbsp;轨迹: {trail}")
+    rendered_rows = sum(1 for item in parts[1:] if not item.startswith("&nbsp;&nbsp;&nbsp;&nbsp;轨迹: "))
+    if rendered_rows != len(rows):
+        parts.append("<b>⚠事件渲染计数不一致，本段结果不可用于执行</b>")
     return "<br/>".join(parts) + "<br/>"
 
 

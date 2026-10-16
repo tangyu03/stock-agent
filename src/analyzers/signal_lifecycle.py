@@ -40,7 +40,7 @@ TERMINAL_EVENT_STATUSES = (
 _STATUS_DISPLAY = {
     "valid": "已触发",
     "filled": "已成交",
-    "frozen": "已冻结",
+    "frozen": "技术转弱·买入提示暂停",
     "pending_confirm": "待确认",
     "invalidated": "已失效",
     "expired": "已过期",
@@ -799,10 +799,12 @@ class SignalLifecycle:
     def invalidate(
         self, event_id: str, reason: str,
         trigger_data: Optional[Dict] = None,
+        rule_entry: Optional[str] = None,
     ) -> None:
         self.store.update_status(
             event_id, "invalidated", reason,
             trigger_data=trigger_data,
+            rule_entry=rule_entry,
         )
 
     def expire(self, event_id: str, trigger_data: Optional[Dict] = None) -> None:
@@ -932,6 +934,7 @@ class SignalLifecycle:
         tech_score: Optional[float] = None,
         volume_ratio: Optional[float] = None,
         change_pct: Optional[float] = None,
+        capitulation_evidence: bool = False,
     ) -> List[Dict]:
         """
         评估该股全部活跃事件，返回需要推送的状态迁移通知（dict 出场信号）。
@@ -1070,43 +1073,27 @@ class SignalLifecycle:
                     )
                     notices.append(_notice("信号过期", "冻结事件超过有效期，自动过期", "常规"))
                     continue
-                if tech_score is not None and float(tech_score) >= 0:
-                    target = event.frozen_prev_status or "valid"
-                    self.unfreeze(
-                        event.event_id, target,
-                        trigger_data={
-                            "tech_score": tech_score,
-                            "price": effective_price,
-                            "today": today.isoformat(),
-                        },
-                    )
-                    notices.append(_notice(
-                        "事件解冻",
-                        f"技术分{float(tech_score):+.1f}≥0，恢复原状态",
-                        "常规",
-                    ))
-                else:
-                    # P0-2：冻结原因随快照滚动更新——冻结持续期间 invalid_reason
-                    # 刷新为最新快照，禁止展示两个版本前的旧原因（沃尔德 9-18）。
-                    if tech_score is not None and volume_ratio is not None and change_pct is not None:
-                        _refresh_reason = (
-                            f"技术{float(tech_score):+.1f}"
-                            f"（放量阴线{float(change_pct):+.2f}%，"
-                            f"量比{float(volume_ratio):.2f}）；"
-                            "解冻条件技术分≥0，冻结期间不提示回踩买入；"
-                            "冻结仅停提示、挂单存续（解冻后恢复可成交）"
-                        )
-                        self.store.refresh_frozen_reason(
-                            event.event_id, _refresh_reason,
-                            trigger_data={
-                                "tech_score": tech_score,
-                                "volume_ratio": volume_ratio,
-                                "change_pct": change_pct,
-                                "price": effective_price,
-                                "today": today.isoformat(),
-                            },
-                            rule_entry="R3.11冻结快照滚动",
-                        )
+                # 冻结语义修订：提示流与订单流必须同生共死。
+                # 旧规则“停提示 + 挂单存续”会留下无声风险敞口，技术分转负后
+                # 反弹触价仍可能成交。因此存量 frozen 事件在下一次评估时立即撤单；
+                # 后续若技术分修复，由调度器按当时价格重新评估生成新事件。
+                reason = (
+                    "技术转弱，冻结即同步撤单；"
+                    "解冻后按当时价格重新评估再挂"
+                )
+                self.invalidate(
+                    event.event_id, reason,
+                    trigger_data={
+                        "tech_score": tech_score,
+                        "volume_ratio": volume_ratio,
+                        "change_pct": change_pct,
+                        "price": effective_price,
+                        "today": today.isoformat(),
+                        "rule": "R3.13冻结同步撤单",
+                    },
+                    rule_entry="R3.13冻结同步撤单",
+                )
+                notices.append(_notice("冻结撤单", reason, "重要"))
                 continue
             if event.status != "valid":
                 # filled 后仍按信号口径跟踪 W/Z；不会读持仓或成本。
@@ -1178,15 +1165,25 @@ class SignalLifecycle:
                 )
             except (TypeError, ValueError):
                 should_freeze = False
+            if should_freeze and capitulation_evidence:
+                # 恐慌出清结构（长下影/缩量企稳/锤子线）→ 不冻结，转低吸观察。
+                # 修复：原统一冻结不区分"恐慌出清(反弹前兆)"与"主力派发(继续下跌)"。
+                notices.append(_notice(
+                    "低吸观察",
+                    f"技术{float(tech_score):+.1f}放量阴线{float(change_pct):+.2f}%"
+                    "但现出清结构(长下影/缩量企稳/锤子线)，疑似恐慌出清，暂不冻结",
+                    "观察",
+                ))
+                continue
             if should_freeze:
                 reason = (
                     f"技术{float(tech_score):+.1f}"
                     f"（放量阴线{float(change_pct):+.2f}%，"
                     f"量比{float(volume_ratio):.2f}）；"
-                    "解冻条件技术分≥0，冻结期间不提示回踩买入；"
-                    "冻结仅停提示、挂单存续（解冻后恢复可成交）"
+                    "冻结即同步撤单；"
+                    "解冻后按当时价格重新评估再挂"
                 )
-                self.freeze(
+                self.invalidate(
                     event.event_id, reason,
                     trigger_data={
                         "tech_score": tech_score,
@@ -1195,8 +1192,9 @@ class SignalLifecycle:
                         "price": effective_price,
                         "today": today.isoformat(),
                     },
+                    rule_entry="R3.13冻结同步撤单",
                 )
-                notices.append(_notice("事件冻结", reason, "重要"))
+                notices.append(_notice("冻结撤单", reason, "重要"))
                 continue
             # 收盘规则优先级：止损是结构死亡 > 买点撤单 > 日内触及成交。
             if close is not None and event.stop_loss and close < event.stop_loss:
@@ -1309,7 +1307,11 @@ class SignalLifecycle:
         tech_scores: Dict[str, float],
         today: Optional[date] = None,
     ) -> List[Dict]:
-        """日终仲裁：只处理 FROZEN 解冻，报告层只读批处理后的状态。"""
+        """日终仲裁：清理存量 FROZEN 事件。
+
+        新语义下冻结即同步撤单，不再允许提示冻结而订单继续存续；
+        技术分回升也不能复活旧挂单，必须按当时价格重新评估调度。
+        """
         today = today or date.today()
         notices: List[Dict] = []
         for event in self.store.get_frozen_events():
@@ -1331,22 +1333,26 @@ class SignalLifecycle:
                 })
                 continue
             score = tech_scores.get(event.stock_code)
-            if score is None or float(score) < 0:
-                continue
-            target = event.frozen_prev_status or "valid"
-            self.unfreeze(
-                event.event_id, target,
-                trigger_data={"tech_score": float(score)},
+            score_text = "无评分" if score is None else f"{float(score):+.1f}"
+            reason = (
+                f"[{event.entry_type}] 技术分{score_text}，"
+                "冻结即同步撤单；解冻后按当时价格重新评估再挂"
+            )
+            self.invalidate(
+                event.event_id, reason,
+                trigger_data={
+                    "tech_score": None if score is None else float(score),
+                    "today": today.isoformat(),
+                    "rule": "R3.13冻结同步撤单",
+                },
+                rule_entry="R3.13冻结同步撤单",
             )
             notices.append({
                 "stock_code": event.stock_code,
                 "stock_name": event.stock_name,
-                "exit_type": "事件解冻",
-                "reason": (
-                    f"[{event.entry_type}] 技术分{float(score):+.1f}≥0，"
-                    "恢复原状态"
-                ),
-                "urgency": "常规",
+                "exit_type": "冻结撤单",
+                "reason": reason,
+                "urgency": "重要",
                 "event_id": event.event_id,
             })
         return notices
@@ -1375,7 +1381,9 @@ class SignalLifecycle:
                 pass
             if e.status == "frozen":
                 notes.append(
-                    f"[{e.entry_type}]已冻结：{e.invalid_reason or '评分仲裁触发'}"
+                    f"[{e.entry_type}]技术转弱·买入提示暂停："
+                    f"{e.invalid_reason or '评分仲裁触发'}；"
+                    "解冻条件技术分≥0"
                 )
                 continue
             if e.status == "filled":
@@ -1504,6 +1512,13 @@ def reentry_exhausted(stock_code: str, max_reentries: int = 2, store=None) -> bo
     return len([e for e in prior if e.status in TERMINAL_REENTRY_STATUSES]) >= max_reentries
 
 
+def reentry_usage(stock_code: str, max_reentries: int = 2, store=None) -> Dict:
+    """Return auditable reentry quota usage without deciding whether to block."""
+    prior = (store or InMemorySignalEventStore()).get_prior_events(stock_code)
+    used = len([e for e in prior if e.status in TERMINAL_REENTRY_STATUSES])
+    return {"used": used, "remaining": max(0, max_reentries - used)}
+
+
 def reentry_status(
     stock_code: str,
     current_price: float = 0,
@@ -1528,6 +1543,11 @@ def reentry_status(
     }
     """
     prior = (store or InMemorySignalEventStore()).get_prior_events(stock_code)
+    prior_attempts = len([e for e in prior if e.status in TERMINAL_REENTRY_STATUSES])
+    prior_remaining = max(0, max_reentries - prior_attempts)
+    usage_note = (
+        f"再入场额度已用{prior_attempts}/{max_reentries}，剩余{prior_remaining}次"
+    )
 
     # 写入口唯一：任何活跃事件都由事件库跟踪，队列不得覆盖或复制它。
     active = (store or InMemorySignalEventStore()).get_active_events(stock_code)
@@ -1538,12 +1558,12 @@ def reentry_status(
             "standby": False,
             "reason": f"{active_label}事件在跟踪",
             "event_id": last.event_id,
-            "attempts": 0,
-            "remaining": max_reentries,
+            "attempts": prior_attempts,
+            "remaining": prior_remaining,
             "note": (
                 f"{active_label}事件{last.event_id}仍在跟踪（{last.entry_type} "
                 f"{last.born_date}）；执行系统按事件ID对号入座，"
-                "不进入再入场队列"
+                f"不进入再入场队列；{usage_note}"
             ),
         }
 
@@ -1559,7 +1579,7 @@ def reentry_status(
             "remaining": remaining,
             "note": (
                 "历史事件均为未入场形态（过期/撤单），无尝试可再入；"
-                "正常信号流程覆盖该标的" if prior else ""
+                "正常信号流程覆盖该标的" if prior else usage_note
             ),
         }
     if remaining <= 0:
@@ -1569,7 +1589,10 @@ def reentry_status(
             "standby": False, "reason": "次数用尽", "attempts": attempts,
             "event_id": last.event_id if attempts else "",
             "remaining": 0,
-            "note": f"再入场{attempts}次已用尽（上限{max_reentries}），转入长期观察",
+            "note": (
+                f"{usage_note}；本标的转入长期观察，"
+                "需人工重置或更新口径后才会重新生成信号"
+            ),
         }
 
     terminal_events = [e for e in prior if e.status in TERMINAL_REENTRY_STATUSES]
@@ -1586,7 +1609,8 @@ def reentry_status(
                 f"{last.entry_type} {last.born_date}，{display_status(last.status)})；"
                 f"现价{current_price:.2f}创近段新高{high_anchor:.2f}——"
                 "新事件成立，待完整触发条件重新确认后入场"
-                "（不携带沉没成本逻辑）"
+                "（不携带沉没成本逻辑）；"
+                f"{usage_note}"
             ),
         }
     # 新事件判定二：收复 Z 线（价格重新站上上次认错位）
@@ -1600,7 +1624,8 @@ def reentry_status(
                 f"【再入场待命】第{attempts}次尝试已结束("
                 f"{last.entry_type} {last.born_date}，{display_status(last.status)})；"
                 f"现价{current_price:.2f}已收复上次认错位{last.stop_loss:.2f}"
-                f"(+{recovered:.1f}%)——结构修复，待完整触发条件重新确认"
+                f"(+{recovered:.1f}%)——结构修复，待完整触发条件重新确认；"
+                f"{usage_note}"
             ),
         }
     return {
@@ -1609,6 +1634,7 @@ def reentry_status(
         "remaining": remaining,
         "note": (
             f"上次尝试{last.born_date}已结束({display_status(last.status)})；"
-            "创新高/收复Z线均未成立，再入场条件未激活"
+            "创新高/收复Z线均未成立，再入场条件未激活；"
+            f"{usage_note}"
         ),
     }

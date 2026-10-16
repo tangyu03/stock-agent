@@ -81,6 +81,7 @@ timing:
     z_high_vol_ratio: 0.05              # 高/低波动分档线（ATR/结构位）
     z_pct_buffer: 0.005                 # 缓冲下限（结构位%，防毫厘止损）
     z_buffer_max_pct: 0.08              # 缓冲上限（结构位%，防拖到制度边界）
+    min_w_profit_pct: 0.05              # 目标W最低利润：W须高于买点Y 5%（修复负RRR参考系错位）
     bare_noise_min_pct: 0.008           # 裸结构位防噪下限（止损距离<0.8%拒绝）
     min_z_buffer_pct: 0.01              # ATR 缺失时 Y-Z 最小百分比宽度
 
@@ -323,6 +324,7 @@ timing:
     pullback_ma5_bias_tolerance: 0.03    # 设计问题5: MA5 乖离 ±3% → 视为回踩（原 ±1%）
     pullback_ma10_bias_tolerance: 0.03   # 设计问题5: MA10 乖离 ±3% → 视为回踩（原 ±1%）
     hammer_lower_shadow_ratio: 2         # 锤子线：下影线 > 实体 × 2
+    long_lower_shadow_ratio: 1.5         # 长下影：下影线 ≥ 实体 × 1.5 且 ≥1%价格（恐慌反转左侧信号）
     limit_down_ratio: 0.9                # 跌停价 = 昨收 × 0.9
     limit_down_touch_tolerance: 1.002    # 最低价触及跌停 × 1.002
     limit_down_open_threshold: 1.02      # 收盘 > 跌停 × 1.02 → 跌停被撬开

@@ -276,11 +276,20 @@ def schedule_live_signals(
         except (TypeError, ValueError):
             confidence_score = -1
         if not plan.get('ev_gate') and 0 <= confidence_score <= 1:
+            gate_reasons = list(plan.get('confidence_details') or [])
+            gate_reasons.extend(plan.get('rejection_reasons') or [])
+            gate_reason_text = '；'.join(str(item) for item in gate_reasons if str(item))
+            gate_reason = (
+                f"评分闸门: 综合评分{confidence_score}/{plan.get('applicable_score', '?')}≤1，"
+                "已触发未放行"
+            )
+            if gate_reason_text:
+                gate_reason += f" | {gate_reason_text}"
             skipped['buy_score_gate'].append({
                 'stock_code': code,
                 'stock_name': sig.get('stock_name', code),
                 'entry_type': entry_type,
-                'reason': f'评分闸门: 综合评分{confidence_score}≤1，已触发未放行',
+                'reason': gate_reason,
             })
             stats['buy_score_gate'] += 1
             continue

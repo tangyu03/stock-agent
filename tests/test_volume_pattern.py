@@ -265,6 +265,11 @@ class TestConflicts:
         text = detect_conflict("抛压衰竭型", inst)
         assert text and "资金投票-1票" in text
 
+    def test_rule1_skips_unreliable_vote(self):
+        # 残缺投票（覆盖<2，vote_reliable=False）置信不足，不得驱动量价资金背离降级
+        inst = {"vote_score": -1, "votes": {}, "vote_reliable": False}
+        assert detect_conflict("抛压衰竭型", inst) is None
+
     def test_rule1_triggers_on_flow_only(self):
         inst = {"vote_score": 0, "votes": {"main_force": {"raw": {
             "fund_flow_5d": [{"date": "d1", "value": -5_000_000}]}}}}

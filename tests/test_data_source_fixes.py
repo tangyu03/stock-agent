@@ -175,16 +175,47 @@ class TestShareholderStaleness:
         assert result["raw"].get("stale") is True
         assert result["raw"].get("age_days", 0) > 90
 
+    def _recent_standard_period(self, max_days=60) -> str:
+        """返回 90 天内最近的 A 股标准报告期（0331/0630/0930/1231）日期串 YYYY-MM-DD。"""
+        today = datetime.now()
+        for mmdd in ("0930", "0630", "0331", "1231"):
+            for year in (today.year, today.year - 1):
+                try:
+                    dt = datetime.strptime(f"{year}{mmdd}", "%Y%m%d")
+                except ValueError:
+                    continue
+                if 0 <= (today - dt).days <= max_days:
+                    return dt.strftime("%Y-%m-%d")
+        return (today - timedelta(days=30)).strftime("%Y-%m-%d")
+
     def test_fresh_report_period_votes_with_period_label(self, monkeypatch):
-        """新鲜报告期（30 天前）→ 正常投票，明细带「报告期」口径前缀。"""
-        as_of = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        """新鲜标准报告期（≤60 天，如三季报 0930）→ 正常投票，明细带「报告期」口径前缀。"""
+        as_of = self._recent_standard_period()
         _install_fake_akshare(monkeypatch, gdhs_frame=self._gdhs_frame(
             as_of, latest=39000, prev=41000,  # -4.9% → 筹码集中看多
         ))
         result = _inst._fetch_shareholder_count("688008")
         assert result["vote"] == 1
         assert result["detail"].startswith("报告期")
+        assert "非标准报告期" not in result["detail"]
         assert result["raw"].get("as_of")
+        assert result["raw"].get("report_period_standard") is True
+        assert "stale" not in result["raw"]
+
+    def test_non_standard_period_annotated(self, monkeypatch):
+        """统计截止日 20260820（非 A 股标准报告期）→ 标注「非标准报告期」，
+        不虚构报告期语义（60731/60820/60910 是披露/抓取日，不是一季/半年/三季/年报）。"""
+        as_of = "2026-08-20"
+        _install_fake_akshare(monkeypatch, gdhs_frame=self._gdhs_frame(
+            as_of, latest=39000, prev=41000,  # -4.9% → 筹码集中看多
+        ))
+        result = _inst._fetch_shareholder_count("688195")
+        assert result["vote"] == 1
+        assert result["detail"].startswith("统计截止日")
+        assert "非标准报告期" in result["detail"]
+        assert not result["detail"].startswith("报告期")
+        assert result["raw"].get("report_period_standard") is False
+        assert result["raw"].get("as_of") == "20260820"
         assert "stale" not in result["raw"]
 
 
@@ -235,9 +266,9 @@ class TestVoteWeights:
     def test_disclosed_sources_keep_full_weight(self, monkeypatch):
         """两融+1、龙虎榜+1（交易所披露口径）→ 加权 2.0 → 资金看多。"""
         monkeypatch.setattr(_inst, "_fetch_margin_balance",
-                            lambda c: {"vote": 1, "detail": "两融增加", "raw": {}})
+                            lambda c: {"vote": 1, "detail": "两融增加", "raw": {"as_of": "2026-10-14"}})
         monkeypatch.setattr(_inst, "_fetch_lhb_institutional",
-                            lambda c: {"vote": 1, "detail": "机构净买", "raw": {}})
+                            lambda c: {"vote": 1, "detail": "机构净买", "raw": {"as_of": "2026-10-14"}})
         monkeypatch.setattr(_inst, "_fetch_main_force_flow",
                             lambda c: {"vote": 0, "detail": "中性", "raw": {}})
         monkeypatch.setattr(_inst, "_fetch_shareholder_count",
@@ -395,3 +426,41 @@ class TestBlockTradeCrashResilience:
         assert result["block_trade"] is None
         assert isinstance(result["vote_score"], int)
         assert result["data_sufficient"] is True
+
+
+class TestTop10HolderEmptyPeriodResilience:
+    def test_latest_period_failure_falls_back_to_previous(self, monkeypatch):
+        latest_date, prev_date = _inst._latest_report_dates()
+        previous_frame = pd.DataFrame({
+            "股东名称": ["香港中央结算有限公司"],
+            "股东性质": ["香港中央结算"],
+            "占总流通股本持股比例": [3.5],
+        })
+        calls = []
+
+        fake_akshare = types.ModuleType("akshare")
+
+        def _free_top_10(*, symbol: str, date: str):
+            calls.append((symbol, date))
+            if date == latest_date:
+                raise ValueError("Length mismatch")
+            return previous_frame
+
+        fake_akshare.stock_gdfx_free_top_10_em = _free_top_10
+        monkeypatch.setitem(sys.modules, "akshare", fake_akshare)
+        def _fake_call(func, *args, retries: int = 0, timeout: float = 15.0, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(_inst, "call_ak_with_retry", _fake_call)
+
+        result = _inst._fetch_top10_institutional_ratio("603061")
+
+        assert calls == [
+            ("sh603061", latest_date), ("sh603061", prev_date),
+        ]
+        assert result is not None
+        assert result["latest"] is None
+        assert result["previous"]["date"] == prev_date
+        assert result["previous"]["ratio"] == 3.5
+        assert result["previous"]["rows"] == 1
+        assert result["change_points"] is None

@@ -83,7 +83,8 @@ class TestFundLayering:
                             lambda c: {"vote": 1, "detail": "户数减少", "raw": {}})
         monkeypatch.setattr(_inst, "_fetch_top10_institutional_ratio", lambda c: None)
         _inst._reset_institutional_state()
-        result = _REAL_SCORE_INSTITUTIONAL("002975")
+        _inst.set_fund_layering(True)
+        result = _inst_module._REAL_INSTITUTIONAL_SCORING("002975")
         assert result["vote_score"] == 0                    # 快源 1-1
         layering = result["fund_layering"]
         assert layering["enabled"] is True

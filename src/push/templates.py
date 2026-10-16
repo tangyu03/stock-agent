@@ -3,8 +3,9 @@
 每个信号展示完整决策链：环境->技术->形态->过滤->信号逻辑->风控
 """
 from typing import Dict
+from datetime import date
 
-from ..analyzers.volume_pattern import build_volume_pattern, pattern_summary_line, render_volume_pattern
+from ..analyzers.volume_pattern import build_volume_pattern, pattern_summary_line, render_volume_pattern, volume_gear
 from ..rules_version import get_rules_version
 
 def _pct(v: float, digits: int = 1) -> str:
@@ -64,6 +65,10 @@ def _action_summary_line(data, kind: str) -> str:
     kind_text = {"买入": "买入", "卖出": "卖出", "观察": "观察"}.get(kind, kind)
     event = str(data.get("entry_type") or data.get("exit_type") or "").strip()
     event_text = f"{kind_text} {event}" if event else kind_text
+    event_id = str(data.get("event_id") or "").strip()
+    if not event_id:
+        event_id = str(((data.get("execution_plan") or {}).get("event_id")) or "").strip()
+    event_id_text = f" #{event_id[-8:]}" if event_id else ""
 
     # 待验证条件：分型确认条件（confirms），无则用确认目标/缺数据不放假结论
     confirm_text = ""
@@ -87,7 +92,7 @@ def _action_summary_line(data, kind: str) -> str:
     if watch:
         price_text = f"{price_text} 盯:{watch}".strip()
 
-    parts = [f"{_esc(name)}({_esc(code)}) {_esc(event_text)}"]
+    parts = [f"{_esc(name)}({_esc(code)}){_esc(event_id_text)} {_esc(event_text)}"]
     if confirm_text:
         parts.append(f"待验:{_esc(confirm_text)}")
     if price_text:
@@ -298,11 +303,12 @@ def _fundamental_line(data) -> str:
     """
     fund = data.get("fundamental")
     lens = data.get("valuation_lens") if isinstance(data.get("valuation_lens"), dict) else None
+    calendar_text = _event_calendar_text(data)
     if not fund or not isinstance(fund, dict):
         # 允许信号侧直接携带 fundamental_note（拒绝/降级摘要）
         note = str(data.get("fundamental_note") or "").strip()
         lens_text = _lens_text(lens)
-        return " | ".join(x for x in (note, lens_text) if x)
+        return " | ".join(x for x in (note, lens_text, calendar_text) if x)
     parts = []
     profit = _num_or_none(fund.get("profit_yoy"))
     deducted = _num_or_none(fund.get("deducted_yoy"))
@@ -346,10 +352,39 @@ def _fundamental_line(data) -> str:
     lens_text = _lens_text(lens)
     if lens_text:
         parts.append(lens_text)
+    if calendar_text:
+        parts.append(calendar_text)
     reason_note = str(verdict.get("note") or "")
     if reason_note and not parts:
         parts.append(reason_note)
     return " | ".join(parts)
+
+
+def _event_calendar_text(data) -> str:
+    """未来事件行：财报/减持/解禁等验证事件与剩余天数。"""
+    events = data.get("event_calendar") or []
+    if not events:
+        return ""
+    bits = []
+    try:
+        today = date.today()
+    except Exception:
+        today = None
+    for event in events[:3]:
+        event_date = str(event.get("date") or "")[:10]
+        days_text = ""
+        if today and event_date:
+            try:
+                days = (date.fromisoformat(event_date) - today).days
+                if days >= 0:
+                    days_text = f",剩{days}天"
+            except ValueError:
+                pass
+        bits.append(
+            f"{event_date} {event.get('type')}"
+            f"({event.get('warning_level', '低')}{days_text})"
+        )
+    return "未来事件:" + " | ".join(bits)
 
 
 def _num_or_none(value):
@@ -567,21 +602,7 @@ def _entry_decision_lines(data) -> list[str]:
     trend_details = "/".join(trend.get("details") or []) or "无信号"
     lines.append(f"①方向:{trend_details}→{_vote_text(int(trend.get('vote', 0) or 0))}")
 
-    momentum = ((tech.get("category_votes") or {}).get("momentum") or {})
-    pattern = ((tech.get("category_votes") or {}).get("pattern") or {})
-    rsi = data.get("rsi")
-    rsi6 = data.get("rsi6") or tech.get("rsi6")
-    rsi_text = f"RSI14={float(rsi):.1f}" if rsi is not None else "RSI14:N/A"
-    if rsi6 is not None:
-        rsi_text += f" | RSI6={float(rsi6):.1f}"
-    bias6 = data.get("bias6")
-    if bias6 is None:
-        bias6 = tech.get("bias6")
-    if bias6 is not None:
-        rsi_text += f" | BIAS6={float(bias6):.1f}%"
-    rsi_text += "(不投票)"
-    pattern_details = "/".join(pattern.get("details") or []) or "无信号"
-    lines.append(f"②时机:{rsi_text}+{pattern_details}→{_vote_text(int(pattern.get('vote', 0) or 0))}")
+    lines.append(_timing_line(data))
 
     # 【分型引擎】③量能从陈列升级为分型：涨跌×主动差×量能档×位置档 →
     # 八型之一 + 冲突检测 + 确认条件（原始量比/换手/主动差在"数据"行可复核）
@@ -629,6 +650,59 @@ def _vote_text(vote: int) -> str:
     return {1: "+1", -1: "-1", 0: "中性"}.get(vote, "中性")
 
 
+def _rsi_note(value, threshold: float, threshold_label: str, gap_label: str) -> str:
+    if value is None:
+        return "N/A(条件不可评)"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return f"{value}(条件不可评)"
+    met = number <= threshold
+    if met:
+        return f"{number:.1f}({threshold_label},此条件已满足)"
+    gap = abs(number - threshold)
+    return f"{number:.1f}({threshold_label},{gap_label}{gap:.1f})"
+
+
+def _timing_line(data) -> str:
+    """时机行：指标展示与阈值差距，四个离散信号单独计数。"""
+    tech = data.get("tech_signals") or {}
+    rsi6 = data.get("rsi6")
+    if rsi6 is None:
+        rsi6 = tech.get("rsi6")
+    rsi14 = data.get("rsi")
+    if rsi14 is None:
+        rsi14 = tech.get("rsi")
+    bias6 = data.get("bias6")
+    if bias6 is None:
+        bias6 = tech.get("bias6")
+
+    parts = [f"RSI6={_rsi_note(rsi6, 25, '超卖线25', '还差')}"]
+    parts.append(f"RSI14={_rsi_note(rsi14, 40, '弱于40', '超出')}")
+    if bias6 is not None:
+        try:
+            parts.append(f"BIAS6={float(bias6):.1f}%(乖离佐证,不投票)")
+        except (TypeError, ValueError):
+            parts.append(f"BIAS6={bias6}(乖离佐证,不投票)")
+
+    volume_result = build_volume_pattern(data)
+    volume_pattern = volume_result.get("pattern") if volume_result else None
+    signals = {
+        "金叉": str(((tech.get("macd") or {}).get("state") or "")).startswith("金叉"),
+        "底背驰": str(((tech.get("chan_divergence") or {}).get("type") or "")) == "底背驰",
+        "缩量止跌": volume_pattern == "抛压衰竭型",
+        "放量下破": (
+            data.get("change_pct") is not None
+            and float(data.get("change_pct") or 0) < 0
+            and volume_gear(volume_result.get("volume_ratio")) in ("温和放量", "明显放量", "剧烈放量")
+        ),
+    }
+    hit_count = sum(1 for hit in signals.values() if hit)
+    signal_text = "|".join(signals)
+    parts.append(f"离散信号{hit_count}/4({signal_text})")
+    return "时机: " + " | ".join(parts)
+
+
 def _render_compact_observation_signal(data):
     name = data.get("stock_name", "")
     code = data.get("stock_code", "")
@@ -650,25 +724,11 @@ def _render_compact_observation_signal(data):
                 pass
         content += f" {price_line}"
     content += "<br/><br/>"
-
-    mode = data.get("market_mode", "")
-    env_parts = []
-    if mode:
-        market_text = "进攻" if mode == "attack" else "防守" if mode == "defend" else "撤退"
-        market_score = data.get("market_score")
-        env_parts.append(
-            f"市场:{market_text}"
-            + (f"({float(market_score):.1f})" if market_score is not None else "")
-        )
-    sector_name = data.get("sector_name", "")
-    if sector_name:
-        env_parts.append(f"板块:{sector_name}({_sector_label(data.get('sector_status', ''))})")
-    env_parts.append("闸门:" + {"attack": "全策略可用", "defend": "追强降仓可用(三重门),低吸可用", "retreat": "只减不加"}.get(mode, "常规"))
-    content += f"<b>环境</b><br/>&nbsp;&nbsp;{_esc(' | '.join(env_parts))}<br/><br/>"
+    upgrade_reason = str(data.get("breadth_upgrade_reason") or "")
+    if data.get("breadth_upgrade") and upgrade_reason:
+        content += f"<b>宽度升级</b> {_esc(upgrade_reason)}<br/><br/>"
 
     trend = categories.get("trend") or {}
-    momentum = categories.get("momentum") or {}
-    pattern = categories.get("pattern") or {}
     ma5 = data.get("ma5")
     ma10 = data.get("ma10")
     ma20 = data.get("ma20")
@@ -680,27 +740,12 @@ def _render_compact_observation_signal(data):
             ma_text = "MA空头排列 | "
         else:
             ma_text = "MA交叉震荡 | "
-    rsi = data.get("rsi") or tech.get("rsi")
-    rsi6 = data.get("rsi6") or tech.get("rsi6")
-    rsi_text = f"RSI14={float(rsi):.1f}" if rsi is not None else "RSI14:N/A"
-    if rsi6 is not None:
-        rsi_text += f" | RSI6={float(rsi6):.1f}"
-    bias6 = data.get("bias6")
-    if bias6 is None:
-        bias6 = tech.get("bias6")
-    if bias6 is not None:
-        rsi_text += f" | BIAS6={float(bias6):.1f}%"
-    rsi_text += "(不投票)"
     content += "<b>七问</b><br/>"
     content += (
         f"&nbsp;&nbsp;①方向:{_esc(ma_text + '/'.join(trend.get('details') or []) or '无信号')}"
         f"→{_vote_text(int(trend.get('vote', 0) or 0))}<br/>"
     )
-    content += (
-        f"&nbsp;&nbsp;②时机:{_esc(rsi_text)}+"
-        f"{_esc('/'.join(pattern.get('details') or []) or '无信号')}"
-        f"→{_vote_text(int(pattern.get('vote', 0) or 0))}<br/>"
-    )
+    content += f"&nbsp;&nbsp;{_esc(_timing_line(data))}<br/>"
     # 【分型引擎】③量能从陈列升级为分型（与买入卡同引擎同口径）
     for pattern_line in render_volume_pattern(build_volume_pattern(data)):
         content += f"&nbsp;&nbsp;{_esc(pattern_line)}<br/>"
@@ -709,11 +754,13 @@ def _render_compact_observation_signal(data):
     buy_text = buy_text.replace("\n", "<br/>&nbsp;&nbsp;&nbsp;&nbsp;")
     candidate_reason = str(data.get("candidate_reason") or "")
     if candidate_reason:
-        content += f"&nbsp;&nbsp;最近策略:{_esc(candidate_reason)}<br/>"
+        content += f"&nbsp;&nbsp;距触发:{_esc(candidate_reason)}<br/>"
     exit_text = _esc(exit_note or "无卖出检查明细")
     exit_text = exit_text.replace("\n", "<br/>&nbsp;&nbsp;&nbsp;&nbsp;")
-    content += f"&nbsp;&nbsp;⑤拦截:{buy_text}<br/>"
-    content += f"&nbsp;&nbsp;⑥风控:{exit_text}<br/>"
+    if buy_text and buy_text != "无买入拦截明细":
+        content += f"&nbsp;&nbsp;⑤拦截:{buy_text}<br/>"
+    if exit_text and exit_text != "无卖出检查明细":
+        content += f"&nbsp;&nbsp;⑥风控:{exit_text}<br/>"
     fundamental_text = _fundamental_line(data)
     if fundamental_text:
         content += f"&nbsp;&nbsp;⑦基本面:{_esc(fundamental_text)}<br/>"
@@ -1309,7 +1356,7 @@ def _mode_gate_expectation(mode: str) -> str:
     if mode == "attack":
         return ""
     if mode == "defend":
-        return "今日若收盘站回MA5，明日转进攻"
+        return "今日若收盘站回MA5且多头排列(MA5>MA10>MA20)且派发日≤5，明日转进攻"
     if mode == "retreat":
         return "今日若收盘收复MA5×0.99，明日转防守"
     return ""

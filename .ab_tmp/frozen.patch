@@ -1,0 +1,60 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+-        """日终仲裁：只处理 FROZEN 解冻，报告层只读批处理后的状态。"""
++        """日终仲裁：清理存量 FROZEN 事件。
++
++        新语义下冻结即同步撤单，不再允许提示冻结而订单继续存续；
++        技术分回升也不能复活旧挂单，必须按当时价格重新评估调度。
++        """
+@@
+-            score = tech_scores.get(event.stock_code)
+-            if score is None or float(score) < 0:
+-                continue
+-            target = event.frozen_prev_status or "valid"
+-            self.unfreeze(
+-                event.event_id, target,
+-                trigger_data={"tech_score": float(score)},
++            score = tech_scores.get(event.stock_code)
++            score_text = "无评分" if score is None else f"{float(score):+.1f}"
++            reason = (
++                f"[{event.entry_type}] 技术分{score_text}，"
++                "冻结即同步撤单；解冻后按当时价格重新评估再挂"
++            )
++            self.invalidate(
++                event.event_id, reason,
++                trigger_data={
++                    "tech_score": None if score is None else float(score),
++                    "today": today.isoformat(),
++                    "rule": "R3.13冻结同步撤单",
++                },
++                rule_entry="R3.13冻结同步撤单",
+             )
+             notices.append({
+                 "stock_code": event.stock_code,
+                 "stock_name": event.stock_name,
+-                "exit_type": "事件解冻",
+-                "reason": (
+-                    f"[{event.entry_type}] 技术分{float(score):+.1f}≥0，"
+-                    "恢复原状态"
+-                ),
+-                "urgency": "常规",
++                "exit_type": "冻结撤单",
++                "reason": reason,
++                "urgency": "重要",
+                 "event_id": event.event_id,
+             })
+*** Update File: tests/test_f0_audit_fixes.py
+@@
+-    assert keep == []
+-    assert lifecycle.store.events[event.event_id].status == "frozen"
++    assert len(keep) == 1
++    assert keep[0]["exit_type"] == "冻结撤单"
++    assert lifecycle.store.events[event.event_id].status == "invalid"
+@@
+-    assert lifecycle.store.events[event.event_id].status == "valid"
+-    assert any(item["exit_type"] == "事件解冻" for item in notices)
+-    assert lifecycle.store.logs[-1]["rule_entry"] == "R4.2事件解冻"
++    assert notices == []
++    assert lifecycle.store.events[event.event_id].status == "invalid"
+*** End Patch

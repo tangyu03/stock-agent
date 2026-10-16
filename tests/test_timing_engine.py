@@ -222,6 +222,28 @@ class TestMarketModeAdaptive:
         assert mode == 'retreat', f"跌破5日线应retreat，实际{mode}"
 
 
+def test_volume_pattern_not_distribution():
+        """量价判读不判出逃（放量下跌分歧型）→ 冻结豁免依据为真。"""
+        import src.analyzers.timing_engine as te_mod
+        from src.analyzers.volume_pattern import _DIVERGENCE_PATTERN
+        assert _DIVERGENCE_PATTERN == "放量下跌分歧型"
+        tech = {
+            "current_price": 100.0, "change_pct": -5.0,
+            "volume_ratio": 2.5, "turnover_rate": 5.0,
+            "tech_signals": {
+                "order_flow": {"imbalance_pct": 20.0, "available": True},
+                "volume_snapshot": {"volume_ratio": 2.5, "turnover_rate": 5.0},
+            },
+            "ma5": 105.0, "ma10": 108.0, "ma20": 110.0,
+            "recent_high": 120.0, "prior_high": 120.0, "gain_20d": 0.1, "ma20_falling": True,
+        }
+        assert te_mod._volume_pattern_not_distribution(tech) is True
+        # 真实抛压（主动差≤-8%）→ 不豁免（该冻结）
+        tech["tech_signals"]["order_flow"] = {
+            "imbalance_pct": -20.0, "available": True}
+        assert te_mod._volume_pattern_not_distribution(tech) is False
+
+
 class TestPanicBottomCumulativeAndGate:
     """A：多日单边阴跌计入恐慌；B：关口破位用上证指数而非沪深300。"""
 
@@ -263,6 +285,31 @@ class TestPanicBottomCumulativeAndGate:
         assert sig.confidence == "中"
         assert "上证5日累跌" in sig.trigger_reason
         assert "累计恐慌确认" in sig.trigger_reason
+
+    def test_reversal_structure_fires_without_lagging_confirm(self, monkeypatch):
+        """左侧反转结构(长下影+板块未退潮)替代滞后确认：传统超卖缺位也放行。"""
+        import src.analyzers.timing_engine as te_mod
+        monkeypatch.setattr(te_mod, "get_market_environment",
+                            lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
+        te = get_backtest_timing_engine()
+        tech = self._tech(tech_signals={"rsi": 60.0, "kdj": {"j": 50.0}},
+                          change_pct=-1.0, drop_5d=-0.02,
+                          long_lower_shadow=True)
+        sig = self._sig(te, tech)
+        assert sig is not None
+        assert sig.entry_type == "恐慌抄底"
+        assert "长下影(尾盘拉回)" in sig.trigger_reason
+        assert "板块未退潮" in sig.trigger_reason
+
+    def test_reversal_no_structure_still_blocks(self, monkeypatch):
+        """既无传统超卖也无反转结构 → 仍不触发（不加宽到任何票）。"""
+        import src.analyzers.timing_engine as te_mod
+        monkeypatch.setattr(te_mod, "get_market_environment",
+                            lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
+        te = get_backtest_timing_engine()
+        tech = self._tech(tech_signals={"rsi": 60.0, "kdj": {"j": 50.0}},
+                          change_pct=-1.0, drop_5d=-0.02)
+        assert self._sig(te, tech) is None
 
     def test_cumulative_no_oversold_blocks(self, monkeypatch):
         """累计恐慌但个股不超卖 → 不触发。"""

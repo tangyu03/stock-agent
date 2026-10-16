@@ -375,6 +375,24 @@ def test_scheduler_schedules_low_confidence_for_display_only():
     assert scheduled["stats"]["buy_hypothesis_rejected"] == 1
 
 
+def test_score_gate_reason_discloses_score_components():
+    sig = {
+        "stock_code": "GATE01", "stock_name": "天孚通信",
+        "entry_type": "恐慌抄底", "trigger_price": 194.61,
+        "execution_plan": {
+            "confidence_score": 1, "applicable_score": 6,
+            "confidence_details": ["RRR0.20<1.5降档"],
+        },
+    }
+
+    scheduled = schedule_live_signals([sig], [])
+
+    assert scheduled["stats"]["buy_score_gate"] == 1
+    reason = scheduled["skipped"]["buy_score_gate"][0]["reason"]
+    assert "综合评分1/6≤1" in reason
+    assert "RRR0.20<1.5降档" in reason
+
+
 def test_scheduler_uses_main_tier_and_defend_caps_industry_boost():
     plan = build_execution_plan(
         entry_type="价量突破",
@@ -582,9 +600,9 @@ def test_observation_render_uses_compact_reasoning_format():
 
     _, rendered = render_exit_signal(data)
 
-    assert "市场:防守(5.0)" in rendered
+    assert "市场:防守(5.0)" not in rendered
     assert "①方向:MACD死叉延续" in rendered
-    assert "②时机:RSI14=30.3(不投票)" in rendered
+    assert "时机: RSI6=N/A(条件不可评) | RSI14=30.3(弱于40,此条件已满足) | 离散信号0/4(金叉|底背驰|缩量止跌|放量下破)" in rendered
     # 【分型引擎】③从陈列升级为分型；无内外盘时降级为"盘口数据不足"+数据行
     assert "③量能 [盘口数据不足]" in rendered
     assert "接口量比0.86@时间未标注(缩量;口径未标注)" in rendered
@@ -592,6 +610,32 @@ def test_observation_render_uses_compact_reasoning_format():
     assert "⑤拦截:技术投票偏空" in rendered
     assert "⑥风控:止损未触发" in rendered
     assert "技术面" not in rendered
+
+
+def test_timing_line_shows_threshold_gaps_and_discrete_hits():
+    data = {
+        "stock_name": "测试股",
+        "stock_code": "600001",
+        "change_pct": -2.0,
+        "volume_ratio": 2.8,
+        "rsi": 36.7,
+        "rsi6": 29.5,
+        "bias6": -5.1,
+        "note": "买入: 时机口径测试 | 卖出: 未触发",
+        "tech_signals": {
+            "macd": {"state": "金叉延续"},
+            "chan_divergence": {"type": "底背驰"},
+        },
+    }
+
+    _, rendered = render_exit_signal(data)
+
+    assert (
+        "时机: RSI6=29.5(超卖线25,还差4.5) "
+        "| RSI14=36.7(弱于40,此条件已满足) "
+        "| BIAS6=-5.1%(乖离佐证,不投票) "
+        "| 离散信号3/4(金叉|底背驰|缩量止跌|放量下破)"
+    ) in rendered
 
 
 def test_watch_ladder_reason_is_rendered_in_observation_card():
@@ -605,7 +649,7 @@ def test_watch_ladder_reason_is_rendered_in_observation_card():
 
     _, rendered = render_exit_signal(data)
 
-    assert "最近策略:确认追强(当前模式可评估)：缺 ADX" in rendered
+    assert "距触发:确认追强(当前模式可评估)：缺 ADX" in rendered
 
 
 def test_report_does_not_render_standalone_watch_ladder(monkeypatch):
@@ -639,7 +683,7 @@ def test_report_does_not_render_standalone_watch_ladder(monkeypatch):
 
     assert "未触发候选" not in captured["content"]
     assert "未触发说明" not in captured["content"]
-    assert "最近策略:确认追强(当前模式可评估)：缺 ADX" in captured["content"]
+    assert "距触发:确认追强(当前模式可评估)：缺 ADX" in captured["content"]
 
 
 def test_template_renders_machine_tags():
@@ -654,3 +698,34 @@ def test_template_renders_machine_tags():
     )
 
     assert "机器标签:大资金分歧/疑似派发" in rendered
+
+
+def test_execution_plan_refreshes_stale_benchmark_for_rrr():
+    """策略锚距现价超10%时，EV 必须用现价重算，禁止旧事件价格盲杀。"""
+    plan = build_execution_plan(
+        entry_type="恐慌抄底",
+        benchmark_price=100.0,
+        stop_loss=70.0,
+        target_range=[110.0],
+        tech_data={"current_price": 85.0},
+    )
+
+    assert plan.benchmark_source == "current_price_refresh"
+    assert plan.strategy_benchmark_price == 100.0
+    assert plan.benchmark_price == 85.0
+    assert plan.rrr_low == pytest.approx((110.0 - 85.0) / (85.0 - 70.0))
+
+
+def test_fundamental_line_discloses_upcoming_event_calendar():
+    from src.push.templates import _fundamental_line
+
+    rendered = _fundamental_line({
+        "stock_code": "688630",
+        "event_calendar": [{
+            "date": "2026-10-28",
+            "type": "财报",
+            "warning_level": "中",
+        }],
+    })
+
+    assert "未来事件:2026-10-28 财报(中" in rendered

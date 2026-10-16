@@ -108,6 +108,9 @@ class ExecutionPlan:
     benchmark_price: float
     stop_loss: float
     target_range: List[float]
+    strategy_benchmark_price: float = 0.0
+    benchmark_source: str = "strategy"
+    benchmark_gap_pct: Optional[float] = None
     risk_pct: Optional[float] = None
     reward_low_pct: Optional[float] = None
     reward_high_pct: Optional[float] = None
@@ -1049,6 +1052,24 @@ def build_execution_plan(
     """
     benchmark = _number(benchmark_price) or 0.0
     stop = _number(stop_loss) or 0.0
+    strategy_benchmark = benchmark
+    benchmark_source = "strategy"
+    benchmark_gap_pct = None
+    current_price = _number(tech_data.get("current_price"))
+    stale_threshold = float(_config_get(
+        gate_config, "execution_plan", "benchmark_refresh_gap_pct", default=0.10
+    ))
+    if (
+        current_price is not None
+        and current_price > 0
+        and benchmark > 0
+        and 0.5 <= current_price / benchmark <= 2.0
+        and stale_threshold >= 0
+        and abs(current_price / benchmark - 1.0) > stale_threshold
+    ):
+        benchmark_gap_pct = current_price / benchmark - 1.0
+        benchmark = current_price
+        benchmark_source = "current_price_refresh"
     targets = [_number(value) for value in (target_range or []) if _number(value) is not None]
     risk_abs = benchmark - stop if benchmark > 0 and stop > 0 and benchmark > stop else None
     risk_pct = risk_abs / benchmark if risk_abs is not None else None
@@ -1077,6 +1098,12 @@ def build_execution_plan(
         exit_w=[t for t in targets if t],
         exit_w_note="到达目标位兑现",
     )
+    if benchmark_source == "current_price_refresh":
+        hyp_obj.entry_y = benchmark
+        hyp_obj.entry_y_note = (
+            f"现价重估（策略锚{strategy_benchmark:.2f}偏离"
+            f"{benchmark_gap_pct:.1%}）"
+        )
     # 若调用方已构建完整配对假说，直接复用其校验结果
     if hypothesis:
         hyp_obj = TradeHypothesis(
@@ -1091,6 +1118,12 @@ def build_execution_plan(
             z_reference=_number(hypothesis.get("z_reference")) or 0.0,
             z_reference_name=hypothesis.get("z_reference_name", ""),
         )
+        if benchmark_source == "current_price_refresh":
+            hyp_obj.entry_y = benchmark
+            hyp_obj.entry_y_note = (
+                f"现价重估（策略锚{strategy_benchmark:.2f}偏离"
+                f"{benchmark_gap_pct:.1%}）"
+            )
     hyp_obj = validate_hypothesis(hyp_obj, atr=atr, config=gate_config)
     hypothesis_rejected = not hyp_obj.falsifiable
 
@@ -1319,6 +1352,9 @@ def build_execution_plan(
         plan = ExecutionPlan(
             entry_type=entry_type,
             benchmark_price=benchmark,
+            strategy_benchmark_price=strategy_benchmark,
+            benchmark_source=benchmark_source,
+            benchmark_gap_pct=benchmark_gap_pct,
             stop_loss=stop,
             target_range=targets,
             risk_pct=risk_pct,
@@ -1359,6 +1395,9 @@ def build_execution_plan(
     plan = ExecutionPlan(
         entry_type=entry_type,
         benchmark_price=benchmark,
+        strategy_benchmark_price=strategy_benchmark,
+        benchmark_source=benchmark_source,
+        benchmark_gap_pct=benchmark_gap_pct,
         stop_loss=stop,
         target_range=targets,
         risk_pct=risk_pct,

@@ -1,0 +1,46 @@
+﻿*** Begin Patch
+*** Update File: tests/test_f0_audit_fixes.py
+@@
+     lifecycle.evaluate_events(
+         "002975", current_price=583.2,
+         today=date(2026, 9, 10),
+     )
+     note = lifecycle.event_status_note("002975", current_price=583.2)
+-    assert "已完结(作废(追高放弃))" in note
+-    assert "完结价583.20" in note
++    assert "已完结(作废(已失效))" in note
++    assert "完结价100.00" in note
+@@
+ def test_daily_unfreeze_batch_positive_and_negative_scores():
+     lifecycle, event = _make_lifecycle()
+-    lifecycle.evaluate_events(
+-        "002975", current_price=100.0,
+-        tech_score=-2.0, volume_ratio=1.3, change_pct=-5.2,
+-        today=date(2026, 9, 9),
+-    )
++    lifecycle.freeze(event.event_id, "存量冻结")
+     keep = lifecycle.run_daily_unfreeze(
+         {"002975": -1.0}, today=date(2026, 9, 9),
+     )
+-    assert len(keep) == 1
+-    assert keep[0]["exit_type"] == "冻结撤单"
+-    assert lifecycle.store.events[event.event_id].status == "invalid"
++    assert keep[0]["exit_type"] == "冻结撤单"
++    assert lifecycle.store.events[event.event_id].status == "invalidated"
+ 
+-    notices = lifecycle.run_daily_unfreeze(
++    next_event = lifecycle.register_event(
++        "002975", "博杰股份", "价量突破",
++        breakout_level=99.39, entry_price=102.77,
++        stop_loss=85.54, target_low=112.89, target_high=118.0,
++    )
++    lifecycle.freeze(next_event.event_id, "存量冻结")
++    notices = lifecycle.run_daily_unfreeze(
+         {"002975": 1.0}, today=date(2026, 9, 9),
+     )
+-    assert notices == []
+-    assert lifecycle.store.events[event.event_id].status == "invalid"
++    assert lifecycle.store.events[next_event.event_id].status == "invalidated"
++    assert any(item["exit_type"] == "冻结撤单" for item in notices)
++    assert lifecycle.store.logs[-1]["rule_entry"] == "R3.13冻结同步撤单"
+*** End Patch

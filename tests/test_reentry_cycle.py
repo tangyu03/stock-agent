@@ -72,6 +72,7 @@ class TestReentryStatus:
         assert status["standby"] is True
         assert status["reason"] == "创新高"
         assert "再入场待命·头部" in status["note"]
+        assert "已用1/2，剩余1次" in status["note"]
         assert "2026-09-04" in status["note"]          # 9/4 止损记录与 9/7 再评估形成链路
 
     def test_z_line_recovery_puts_stock_in_standby(self):
@@ -114,6 +115,7 @@ class TestReentryStatus:
         )
         assert status["standby"] is False
         assert status["reason"] == "次数用尽"
+        assert "已用2/2，剩余0次" in status["note"]
         assert "转入长期观察" in status["note"]
         assert reentry_exhausted("920045", 2, store=store) is True
 
@@ -206,18 +208,17 @@ class TestReentryGateInEngine:
             "institutional_holding": {"vote_score": 0, "votes": {}},
         }
 
-    def test_exhausted_code_yields_no_new_signal(self, monkeypatch):
+    def test_exhausted_code_is_scheduled_with_warning(self, monkeypatch):
         store = _store_with_prior_events([
             ("evt-0903", "2026-09-03", "invalidated", 87.5, "价量突破"),
             ("evt-0905", "2026-09-05", "invalidated", 87.5, "价量突破"),
         ])
         te = self._engine_with_store(monkeypatch, store, self._breakout_tech())
         signals = te.check_entry_signals("920045", "蘅东光", "defend", "main_trend")
-        assert signals == []
-        rejection = te._entry_rejections.get("920045")
-        assert rejection is not None
-        assert rejection["entry_type"] == "再入场上限"
-        assert any("再入场次数用尽" in r for r in rejection["reasons"])
+        assert len(signals) == 1
+        assert "再入场额度已用尽（已用2/2，剩余0次）" in signals[0].trigger_reason
+        assert "本信号按新事件放行" in signals[0].trigger_reason
+        assert te._entry_rejections.get("920045") is None
 
     def test_one_prior_attempt_still_allows_new_signal(self, monkeypatch):
         """一次尝试后新事件（突破条件重新满足）→ 信号照常诞生（再入场放行）"""

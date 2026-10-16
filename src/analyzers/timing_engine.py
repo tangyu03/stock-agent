@@ -167,7 +167,7 @@ DEFAULT_TIMING_CONFIG = {
     # 【Phase4 P1-2】再入场循环：止损是尝试的结束，不是死刑判决
     "reentry": {
         "enabled": True,
-        "max_reentries": 2,               # 同标的再入场次数上限（超过 = 真死刑）
+        "max_reentries": 2,               # 同标的再入场额度；超限仅显式提示，不自动拦截
         "new_high_ratio": 0.99,           # 创新高再入场：现价 ≥ 近20日高×此值
     },
     # 【Phase4 P3-1】趋势延续：突破后 1~10 日延续段回踩入场（沃尔德 9/7 类）
@@ -486,6 +486,19 @@ def _index_cumulative_metrics(records: Optional[List[Dict]]) -> Optional[Dict]:
         else:
             break
     return {"cum_drop_5d": round(cum_drop, 2), "down_days_5d": down_days}
+
+
+def _volume_pattern_not_distribution(tech_data) -> bool:
+    '''量价分型是否不判出逃：放量下跌分歧型（外盘占优，承接/对倒不确定）
+    与资金接货型/抛压衰竭型属恐慌出清或分歧，不得按放量阴线-派发一刀切冻结。
+    修复模块间打架：量价判读免责与事件状态冻结互相矛盾。'''
+    try:
+        from .volume_pattern import build_volume_pattern
+        vp = build_volume_pattern(tech_data or {})
+        pattern = vp.get("pattern") or ""
+        return pattern in ("放量下跌分歧型", "资金接货型", "抛压衰竭型")
+    except Exception:
+        return False
 
 
 class TimingEngine:
@@ -942,34 +955,21 @@ class TimingEngine:
             )
             return []
 
-        # 【P1-2】再入场次数上限：止损是尝试的结束不是死刑判决，
-        # 但同一标的再入场次数用尽（默认 2 次）后也不再重播。
-        # 注意：再入场只由新事件驱动（创新高/收复Z线后策略条件重新满足），
-        # 本检查只做“次数上限”，不携带任何沉没成本逻辑。
+        # 【P1-2】再入场额度提示：失败终态只降透明度，不直接剥夺新事件入场。
+        # 用尽后仍允许调度，但必须显式披露已用/剩余，避免读者误判为新机会。
         try:
-            from .signal_lifecycle import reentry_exhausted
+            from .signal_lifecycle import reentry_usage
             reentry_cfg = self._cfg("reentry") or {}
-            if reentry_cfg.get("enabled", True) and reentry_exhausted(
-                stock_code, int(reentry_cfg.get("max_reentries", 2)), store=self._lifecycle.store,
-            ):
-                self._tech_data_full[stock_code] = tech_data
-                self._rejection_ledger.record(stock_code, {
-                    "stock_code": stock_code,
-                    "stock_name": stock_name,
-                    "entry_type": "再入场上限",
-                    "benchmark_price": 0,
-                    "stop_loss": 0,
-                    "target_range": [],
-                    "reasons": [f"再入场次数用尽（上限{int(reentry_cfg.get('max_reentries', 2))}次）："
-                                "新事件不再重播，本标的转入长期观察"],
-                    "hypothesis": {},
-                    "fundamental": None,
-                    "fundamental_rejected": False,
-                    "valuation": None,
-                    "valuation_rejected": False,
-                })
-                logger.info("%s 再入场次数用尽，本标的转入长期观察", stock_code)
-                return []
+            if reentry_cfg.get("enabled", True):
+                max_reentries = int(reentry_cfg.get("max_reentries", 2))
+                usage = reentry_usage(stock_code, max_reentries, store=self._lifecycle.store)
+                if usage["remaining"] <= 0:
+                    notice = (
+                        f"⚠ 再入场额度已用尽（已用{usage['used']}/{max_reentries}，剩余0次）；"
+                        "本信号按新事件放行，需人工确认是否接受重复失败风险"
+                    )
+                    tech_data["reentry_notice"] = notice
+                    logger.warning("%s %s", stock_code, notice)
         except Exception as e:
             logger.debug("再入场检查失败 %s: %s", stock_code, str(e)[:60])
 
@@ -991,6 +991,12 @@ class TimingEngine:
 
         # 合并为一条综合信号
         merged = self._merge_entry_signals(raw_signals, tech_data, market_mode, sector_status)
+        reentry_notice = str(tech_data.get("reentry_notice") or "")
+        if reentry_notice:
+            for sig in merged:
+                sig.trigger_reason = (
+                    str(sig.trigger_reason).rstrip() + f"\n  {reentry_notice}"
+                )
 
         # 【一】可证伪假说构建 + 出厂检查（配对 Z/W 锚定，X/Y/Z/W 缺一即拒绝）
         from .hypothesis import build_entry_hypothesis, calc_atr_from_kline
@@ -1267,7 +1273,20 @@ class TimingEngine:
             if j_val < 0:
                 stock_oversold.append(f"KDJ超卖(J={j_val:.0f})")
 
-        if not stock_oversold:
+        # === 反转结构（左侧信号：替代滞后确认，判定"跌完了"而非"跌很多"）===
+        reversal_structure = []
+        if tech_data.get("long_lower_shadow"):
+            reversal_structure.append("长下影(尾盘拉回)")
+        if tech_data.get("shrinking_stabilize"):
+            reversal_structure.append("缩量企稳")
+        if tech_data.get("has_hammer"):
+            reversal_structure.append("锤子线")
+        if (tech_data.get("long_lower_shadow") or tech_data.get("shrinking_stabilize")
+                or tech_data.get("has_hammer")):
+            if sector and str(sector).lower() not in ("retreating", "退潮"):
+                reversal_structure.append("板块未退潮")
+
+        if not stock_oversold and not reversal_structure:
             return None
 
         # === D1 充分条件1: 关键整数关口破位（B：上证指数收盘口径，不再用沪深300）===
@@ -1351,14 +1370,14 @@ class TimingEngine:
             return None
 
         # D1: 市场恐慌(必要)+充分条件+个股超卖 三重确认
-        all_conds = panic_market + panic_sufficient + stock_oversold
+        all_conds = panic_market + panic_sufficient + stock_oversold + reversal_structure
         trigger_reason = ";".join(all_conds)
         hc_market = self._cfg("panic_bottom", "high_confidence_market_conds", default=1)
         hc_stock = self._cfg("panic_bottom", "high_confidence_stock_conds", default=2)
         # D1: 高置信需要必要+充分+超卖都≥阈值
         confidence = "高" if (len(panic_market) >= hc_market and
                                   len(panic_sufficient) >= 1 and
-                                  len(stock_oversold) >= hc_stock) else "中"
+                                  (len(stock_oversold) + len(reversal_structure)) >= hc_stock) else "中"
         # A：仅靠累计恐慌放行的左侧试探，置信度封顶"中"
         if (
             cumulative_panic
@@ -1369,7 +1388,7 @@ class TimingEngine:
 
         return EntrySignal(
             stock_code=code, stock_name=name, entry_type="恐慌抄底",
-            strategy_summary="恐慌抄底 — 大盘恐慌(暴跌/放量/涨跌比极低/多日阴跌) + 个股超卖(暴跌/破MA120/锤子线)",
+            strategy_summary="恐慌抄底 — 大盘恐慌(暴跌/放量/涨跌比极低/多日阴跌) + 个股超卖/反转结构(暴跌/锤子线/长下影/缩量企稳)",
             entry_trigger_price=current_price, stop_loss=stop_loss.stop_loss_price,
             target_type="中线持有",
             target_range=self._calculate_target_range(tech_data, "恐慌抄底"),
@@ -2610,11 +2629,13 @@ class TimingEngine:
                 weak_trigger = strong >= 1 or medium >= 3  # 旧 AND 计票行为
             if weak_trigger and oversold_resonance:
                 labels = [f'[{lvl}]{lbl}' for lvl, lbl in weakness]
-                reason = '[超卖观察·非执行级] ' + '；'.join(labels)
+                reason = '[超卖观察·非执行级]'
+                reason += '\n触发条件: ' + '；'.join(labels)
                 if oversold_tags:
-                    reason += '；' + '；'.join(oversold_tags)
-                reason += f'；{self._volume_context(tech_data)}'
-                reason += '；确认:放量站上MA5；失效:跌破布林下轨且MACD绿柱扩大'
+                    reason += '\n背景证据: ' + '；'.join(oversold_tags)
+                reason += f'\n{self._volume_context(tech_data)}'
+                reason += '\n反弹确认:放量站上MA5'
+                reason += '\n反弹失效:跌破布林下轨且MACD绿柱扩大'
                 signals.append(ExitSignal(
                     stock_code=stock_code, stock_name=stock_name,
                     exit_type='技术走弱', trigger_price=current_price,
@@ -2786,6 +2807,12 @@ class TimingEngine:
                 tech_score=tech_signals.get("vote_score"),
                 volume_ratio=tech_data.get("volume_ratio"),
                 change_pct=tech_data.get("change_pct"),
+                capitulation_evidence=bool(
+                    tech_data.get("long_lower_shadow")
+                    or tech_data.get("shrinking_stabilize")
+                    or tech_data.get("has_hammer")
+                    or _volume_pattern_not_distribution(tech_data)
+                ),
             )
         except Exception as e:
             logger.debug("事件评估失败 %s: %s", stock_code, e)
@@ -3460,6 +3487,22 @@ class TimingEngine:
                         lower_shadow = min(closes[-1], opens[-1]) - lows[-1]
                         if body > 0 and lower_shadow > body * hammer_ratio:
                             data["has_hammer"] = True
+
+                    # 长下影/尾盘拉回（左侧反转结构：暴跌日收盘远离最低 → 承接资金）
+                    lshadow_ratio = self._cfg("tech_data", "long_lower_shadow_ratio", default=1.5)
+                    if len(closes) >= 1 and len(opens) >= 1 and len(lows) >= 1:
+                        body = abs(closes[-1] - opens[-1])
+                        lower_shadow = min(closes[-1], opens[-1]) - lows[-1]
+                        if (body > 0 and lower_shadow >= body * lshadow_ratio
+                                and closes[-1] > 0 and lower_shadow / closes[-1] >= 0.01):
+                            data["long_lower_shadow"] = True
+
+                    # 缩量企稳（左侧反转结构：跌幅收窄+量能萎缩 → 抛压衰竭）
+                    if len(closes) >= 2 and len(volumes) >= 6:
+                        chg_1d = (closes[-1] - closes[-2]) / closes[-2] if closes[-2] > 0 else 0
+                        vol_5d = sum(volumes[-6:-1]) / 5 if len(volumes) >= 6 else 0
+                        if vol_5d > 0 and volumes[-1] / vol_5d < 1.0 and -0.025 <= chg_1d < 0:
+                            data["shrinking_stabilize"] = True
 
                     # 跌停板被撬开（D4 整改 2026-07-25：补巨量封单+翘板资金前置）
                     ld_ratio = self._cfg("tech_data", "limit_down_ratio", default=0.9)

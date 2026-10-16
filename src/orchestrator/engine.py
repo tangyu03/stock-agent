@@ -12,7 +12,7 @@ from datetime import datetime
 
 from ..config_models import load_config
 from ..analyzers.market_scorer import get_market_scorer
-from ..analyzers.volume_pattern import kline_position_inputs
+from ..analyzers.volume_pattern import _BULLISH_PATTERNS, build_volume_pattern, kline_position_inputs
 from ..decision.aggregator import get_aggregator
 from ..push.pushplus import get_pushplus
 # templates 渲染已移至 pushplus.send_intraday_report 内部调用
@@ -39,6 +39,81 @@ def _stock_push_line(item: Dict) -> str:
     if not note:
         return lead
     return lead + " " + note if not note.startswith(lead) else note
+
+
+def _observation_upgrade_score(item: Dict) -> float:
+    """防守极端普涨日里，挑出最值得“明日优先复核”的观察标的。"""
+    if item.get("market_mode") != "defend":
+        return float("-inf")
+
+    score = 0.0
+    sector_status = str(item.get("sector_status") or "")
+    if sector_status == "main_trend":
+        score += 1.5
+    elif sector_status == "rotational":
+        score += 0.5
+    elif sector_status == "retreating":
+        score -= 0.5
+
+    tech = item.get("tech_signals") or {}
+    try:
+        rsi6 = float(item.get("rsi6") or tech.get("rsi6") or 999)
+        if rsi6 < 25:
+            score += 0.5
+        rsi14 = float(item.get("rsi") or tech.get("rsi") or 999)
+        if rsi14 < 30:
+            score += 0.25
+    except (TypeError, ValueError):
+        pass
+
+    volume = build_volume_pattern(item)
+    pattern = str(volume.get("pattern") or "")
+    if pattern in _BULLISH_PATTERNS:
+        score += 1.5
+    elif pattern:
+        score -= 1.0
+
+    try:
+        change = float(item.get("change_pct") or 0)
+        score += max(-1.0, min(1.0, change / 3.0))
+    except (TypeError, ValueError):
+        pass
+
+    return score
+
+
+def _apply_defend_breadth_upgrade(env: Dict, observations: List[Dict]) -> None:
+    """宽度>4:1 的防守日，标记最多2只观察升级，不改变市场模式或调度。"""
+    if not env.get("breadth_upgrade") or not observations:
+        return
+    ranked = sorted(
+        enumerate(observations),
+        key=lambda pair: _observation_upgrade_score(pair[1]),
+        reverse=True,
+    )
+    for _, item in ranked[:2]:
+        if _observation_upgrade_score(item) == float("-inf"):
+            continue
+        item["breadth_upgrade"] = True
+        item["breadth_upgrade_reason"] = (
+            f"宽度{float((env.get('advance_decline') or {}).get('ratio') or 0):.2f}:1，"
+            "若尾盘宽度维持，明日优先复核"
+        )
+
+
+def _attach_event_calendar(items: List[Dict], events: List[Dict]) -> None:
+    """把未来市场事件挂回对应标的，避免只看已披露同比而遗漏验证事件。"""
+    if not items:
+        return
+    for item in items:
+        code = str(item.get("stock_code") or "")
+        if not code:
+            continue
+        stock_events = [
+            event for event in (events or [])
+            if not event.get("code") or str(event.get("code")) == code
+        ]
+        item["event_calendar"] = stock_events
 
 
 # ================================================================
@@ -431,6 +506,16 @@ class Orchestrator:
                 ),
             )
         env["data_missing"] = data_missing_batch
+        _apply_defend_breadth_upgrade(env, observation_batch)
+        try:
+            from ..analyzers.event_calendar import get_upcoming_events
+            upcoming_events = get_upcoming_events("", days=30)
+            _attach_event_calendar(entry_batch, upcoming_events)
+            _attach_event_calendar(exit_batch, upcoming_events)
+            _attach_event_calendar(observation_batch, upcoming_events)
+            env["event_calendar"] = upcoming_events
+        except Exception as e:
+            logger.warning("事件日历加载失败: %s", e)
         logger.info("信号汇总: 买入%d 卖出%d 观察%d 数据缺失%d (自选%d, 有信号%d)",
                     len(entry_batch), len(exit_batch), len(observation_batch),
                     len(data_missing_batch), len(all_holdings), len(signaled_codes))
@@ -496,7 +581,7 @@ class Orchestrator:
             for item in scheduled['skipped'].get(bucket, []):
                 score_gate_items.append(
                     f"{item.get('stock_name', item.get('stock_code'))}"
-                    f"({item.get('stock_code')})"
+                    f"({item.get('stock_code')}) | {item.get('reason', '')}"
                 )
         if score_gate_items:
             env['score_gate'] = {
@@ -611,10 +696,17 @@ class Orchestrator:
         # 【P1-2】观察卡排序：再入场待命队列置顶（蘅东光 9/7 创新高应在
         # 待命队列头部而非观察区中部）
         standby_codes = {item.get("stock_code") for item in getattr(batch, "standby_queue", []) or []}
-        if standby_codes:
-            observation_batch.sort(
-                key=lambda obs: 0 if obs.get("stock_code") in standby_codes else 1
+        ladder_rank = {
+            row.get("stock_code"): rank
+            for rank, row in enumerate(env.get("watch_ladder") or [])
+        }
+        observation_batch.sort(
+            key=lambda obs: (
+                0 if obs.get("breadth_upgrade") else 1,
+                0 if obs.get("stock_code") in standby_codes else 1,
+                ladder_rank.get(obs.get("stock_code"), 9999),
             )
+        )
         self._pushplus.send_intraday_report(env, scheduled_entry_batch, scheduled_exit_batch, observation_batch)
 
         # 【P1-1】踏空成本台账推送：防守模式未放行的创新高+放量标的
@@ -645,7 +737,7 @@ class Orchestrator:
                 for item in standby_queue[:10]:
                     standby_lines.append(f"  {_stock_push_line(item)}")
                 standby_lines.append(
-                    "  （待完整触发条件重新确认后入场；同一标的再入场上限 2 次）"
+                    "  （待完整触发条件重新确认后入场；同一标的再入场额度 2 次，超限放行但显式提示）"
                 )
                 self._pushplus.send(
                     "再入场待命队列",

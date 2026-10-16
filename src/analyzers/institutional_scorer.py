@@ -729,6 +729,17 @@ def set_fund_layering(enabled: bool) -> None:
 # 【C-股东户数】报告期级数据时效阈值：统计截止日距今超过该天数 → 不参与投票
 _SHAREHOLDER_STALE_DAYS = 90
 
+# 【C-股东户数】A股标准报告期：一季报 0331 / 半年报 0630 / 三季报 0930 / 年报 1231。
+# 东方财富"股东户数统计截止日"常为非标准日期（如 0715/0820/0910），那是披露截止日，
+# 不是财务报告期——标注区分，避免把披露/抓取日误写成报告期（口径杂音）。
+_STANDARD_REPORT_MMDD = frozenset({"0331", "0630", "0930", "1231"})
+
+
+def _is_standard_report_date(as_of_str: str) -> bool:
+    """YYYYMMDD 是否为 A 股标准财务报告期（0331/0630/0930/1231）。"""
+    return len(as_of_str) == 8 and as_of_str[4:] in _STANDARD_REPORT_MMDD
+
+
 
 def _effective_vote_weight(src_name: str, age_days: Optional[int]) -> float:
     """P1-3: 当日/T-1全权，3日后半权，超过5日仅展示不投票。缺数据日不静默清零。"""
@@ -1163,6 +1174,11 @@ def _fetch_main_force_flow(code: str) -> Dict[str, Any]:
             or fund.get("net_flows_3d")
             or ([fund["main_net"]] if fund.get("main_net") is not None else [])
         )
+        if len(net_flows) < 2:
+            fallback = _fetch_main_force_flow_fallback(clean_code)
+            if fallback is not None:
+                _mark_api_success("main_force")
+                return fallback
         super_large_flows = fund.get("super_large_flows_5d") or []
         large_flows = fund.get("large_flows_5d") or []
         if not super_large_flows or not large_flows:
@@ -1265,6 +1281,14 @@ def _fetch_shareholder_count(code: str) -> Dict[str, Any]:
                 as_of_str = raw_date
         except Exception:
             as_of = None
+        # 【C-股东户数】口径标注：仅标准财务报告期（0331/0630/0930/1231）称"报告期"，
+        # 其余统计截止日（披露/抓取日）标注"非标准报告期"，不虚构报告期语义。
+        period_standard = _is_standard_report_date(as_of_str) if as_of_str else False
+        period_label = (
+            f"报告期{as_of_str}"
+            if period_standard
+            else f"统计截止日{as_of_str or 'N/A'}（非标准报告期）"
+        )
         age_days = (datetime.now() - as_of).days if as_of else None
 
         latest_count = float(df.iloc[0][latest_count_col])
@@ -1286,12 +1310,13 @@ def _fetch_shareholder_count(code: str) -> Dict[str, Any]:
         _raw_common = {
             "latest": latest_count, "prev": prev_count, "change_pct": change_pct,
             "as_of": as_of_str, "age_days": age_days,
+            "report_period_standard": period_standard,
         }
         if age_days is not None and age_days > _SHAREHOLDER_STALE_DAYS:
             return {
                 "vote": 0,
                 "detail": (
-                    f"股东户数{as_of_str}（报告期级，滞后{age_days}天>"
+                    f"股东户数{period_label}（报告期级滞后{age_days}天>"
                     f"{_SHAREHOLDER_STALE_DAYS}天）不参与投票"
                 ),
                 "raw": {**_raw_common, "stale": True},
@@ -1317,19 +1342,19 @@ def _fetch_shareholder_count(code: str) -> Dict[str, Any]:
         if change_pct < -0.02:  # 户数减少 >2%（筹码集中）
             return {
                 "vote": 1,
-                "detail": f"报告期{as_of_str or 'N/A'}: 股东户数减少 {change_pct*100:.1f}%（{prev_count:.0f}→{latest_count:.0f}，筹码集中）",
+                "detail": f"{period_label}: 股东户数减少 {change_pct*100:.1f}%（{prev_count:.0f}→{latest_count:.0f}，筹码集中）",
                 "raw": dict(_raw_common),
             }
         elif change_pct > 0.02:  # 户数增加 >2%（筹码分散）
             return {
                 "vote": -1,
-                "detail": f"报告期{as_of_str or 'N/A'}: 股东户数增加 {change_pct*100:.1f}%（{prev_count:.0f}→{latest_count:.0f}，筹码分散）",
+                "detail": f"{period_label}: 股东户数增加 {change_pct*100:.1f}%（{prev_count:.0f}→{latest_count:.0f}，筹码分散）",
                 "raw": dict(_raw_common),
             }
         else:
             return {
                 "vote": 0,
-                "detail": f"报告期{as_of_str or 'N/A'}: 股东户数持平（变化 {change_pct*100:.1f}%）",
+                "detail": f"{period_label}: 股东户数持平（变化 {change_pct*100:.1f}%）",
                 "raw": dict(_raw_common),
             }
     except Exception as e:
@@ -1396,34 +1421,46 @@ def _fetch_top10_institutional_ratio(code: str) -> Optional[Dict[str, Any]]:
         )
 
         def summarize(date: str):
-            frame = call_ak_with_retry(
-                ak.stock_gdfx_free_top_10_em,
-                symbol=symbol,
-                date=date,
-                retries=0,
-                timeout=10,
-            )
-            if frame is None or frame.empty:
+            try:
+                frame = call_ak_with_retry(
+                    ak.stock_gdfx_free_top_10_em,
+                    symbol=symbol,
+                    date=date,
+                    retries=0,
+                    timeout=10,
+                )
+                if frame is None or frame.empty:
+                    logger.info("前十大流通股东上游为空 %s %s", clean_code, date)
+                    return None
+                ratio_col = "占总流通股本持股比例"
+                nature_col = "股东性质"
+                if ratio_col not in frame.columns:
+                    logger.warning(
+                        "前十大流通股东字段变动 %s %s: %s",
+                        clean_code, date, list(frame.columns)[:12],
+                    )
+                    return None
+                total = 0.0
+                count = 0
+                fund_count = 0
+                for _, row in frame.iterrows():
+                    nature = str(row.get(nature_col, ""))
+                    if nature and not any(keyword in nature for keyword in inst_keywords):
+                        continue
+                    value = _coerce_fund_flow_number(row.get(ratio_col))
+                    if value is None:
+                        continue
+                    total += value
+                    count += 1
+                    if "证券投资基金" in nature or "基金" in nature:
+                        fund_count += 1
+                return {"date": date, "ratio": round(total, 2), "rows": count, "fund_rows": fund_count}
+            except Exception as exc:
+                logger.warning(
+                    "前十大流通股东单期查询失败 %s %s: %s",
+                    clean_code, date, str(exc)[:120],
+                )
                 return None
-            ratio_col = "占总流通股本持股比例"
-            nature_col = "股东性质"
-            if ratio_col not in frame.columns:
-                return None
-            total = 0.0
-            count = 0
-            fund_count = 0
-            for _, row in frame.iterrows():
-                nature = str(row.get(nature_col, ""))
-                if nature and not any(keyword in nature for keyword in inst_keywords):
-                    continue
-                value = _coerce_fund_flow_number(row.get(ratio_col))
-                if value is None:
-                    continue
-                total += value
-                count += 1
-                if "证券投资基金" in nature or "基金" in nature:
-                    fund_count += 1
-            return {"date": date, "ratio": round(total, 2), "rows": count, "fund_rows": fund_count}
 
         latest = summarize(latest_date)
         prev = summarize(prev_date)
@@ -1682,6 +1719,10 @@ def score_institutional_holding(
         vote_label = "资金中性"
     if not data_sufficient:
         vote_label = "资金数据不足(降权)"
+    elif covered_sources < 2:
+        # 残缺投票（覆盖<2）：两融T-1滞后/东财主力不可用等导致有效源常为1/4，
+        # 不得以方向性或中性结论当作可靠依据——降级为"数据不足(覆盖N/4)"。
+        vote_label = f"资金数据不足(覆盖{covered_sources}/4)"
 
     if layering_on:
         voting_sources = fast_sources
@@ -1705,6 +1746,9 @@ def score_institutional_holding(
         "source_status": source_status,
         "valid_vote_sources": valid_vote_sources,
         "covered_sources": covered_sources,
+        "vote_coverage": covered_sources,
+        "vote_reliable": covered_sources >= 2,
+        "coverage_note": f"覆盖{covered_sources}/4",
         "voting_source_scope": (
             "快源" if layering_on else "全源"
         ),

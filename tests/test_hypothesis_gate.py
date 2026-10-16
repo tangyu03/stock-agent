@@ -152,6 +152,34 @@ class TestHypothesisValidation:
         assert plan_atr.hypothesis_rejected is True
         assert any("止损缓冲不足" in r for r in plan_atr_reasons(plan_atr))
 
+    def test_negative_rrr_target_reanchored_above_buy_point(self):
+        """负盈亏比硬伤：目标W低于买点Y（参考系错位）→ 出厂前上抬到Y上方，RRR>0。"""
+        hyp = build_entry_hypothesis(
+            entry_type="恐慌抄底",
+            tech_data=_tech_data(current_price=170.0),
+            benchmark_price=205.92,           # 买点=高位回踩位（远高于现价）
+            target_range=[200.88, 206.0],     # 目标=现价测算位（参考系错位 → 原会负RRR）
+            trigger_reason="上证暴跌+个股超卖",
+        )
+        assert hyp.entry_y == 205.92
+        assert max(hyp.exit_w) > hyp.entry_y * 1.005
+        assert hyp.exit_z < hyp.entry_y
+        rrr = (max(hyp.exit_w) - hyp.entry_y) / (hyp.entry_y - hyp.exit_z)
+        assert rrr > 0
+        assert hyp.falsifiable is True
+
+    def test_positive_rrr_untouched_by_reanchor(self):
+        """正常正RRR（目标已在买点上方）→ 重锚不生效，保持原目标。"""
+        hyp = build_entry_hypothesis(
+            entry_type="恐慌抄底",
+            tech_data=_tech_data(current_price=101.01),
+            benchmark_price=101.01,
+            target_range=[109.0, 119.0],
+            trigger_reason="上证暴跌+个股超卖",
+        )
+        assert hyp.exit_w == [109.0, 119.0]
+        assert max(hyp.exit_w) > hyp.entry_y
+
     def test_valid_hypothesis_passes_gate(self):
         plan = build_execution_plan(
             entry_type="价量突破",

@@ -353,8 +353,8 @@ class TestLabelSemantics:
         import src.analyzers.institutional_scorer as inst
         importlib.reload(inst)
         monkeypatches = {
-            "_fetch_margin_balance": lambda c: {"vote": 1, "detail": "两融增加", "raw": {}},
-            "_fetch_lhb_institutional": lambda c: {"vote": 1, "detail": "机构净买", "raw": {}},
+            "_fetch_margin_balance": lambda c: {"vote": 1, "detail": "两融增加", "raw": {"as_of": "2026-10-14"}},
+            "_fetch_lhb_institutional": lambda c: {"vote": 1, "detail": "机构净买", "raw": {"as_of": "2026-10-14"}},
             "_fetch_main_force_flow": lambda c: {"vote": 0, "detail": "中性", "raw": {}},
             "_fetch_shareholder_count": lambda c: {"vote": 0, "detail": "中性", "raw": {}},
             "_fetch_top10_institutional_ratio": lambda c: None,

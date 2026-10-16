@@ -336,13 +336,18 @@ class MarketModeAdaptive:
             vs_ma50, op50 = "MA50附近", "≈"
         else:
             vs_ma50, op50 = "跌破", "<"
-        idx_cond = f"{vs_ma20}MA20({current:.0f}{op20}{ma20:.0f}) | {vs_ma50}MA50({current:.0f}{op50}{ma50:.0f})"
+        idx_cond = (
+            f"{vs_ma20}MA20(收盘{current:.2f}{op20}{ma20:.2f}) | "
+            f"{vs_ma50}MA50(收盘{current:.2f}{op50}{ma50:.2f})"
+        )
         idx_status = "bullish" if current > ma20 and current > ma50 else ("bearish" if current < ma20 and current < ma50 else "neutral")
         dimensions.append({"key": "index_trend", "name": "指数趋势", "condition": idx_cond, "status": idx_status})
 
         # --- 维度 2: 均线排列 ---
         if ma5 > ma10 > ma20:
-            ma_cond = f"多头排列(MA5 {ma5:.0f}>MA10 {ma10:.0f}>MA20 {ma20:.0f})"
+            ma_cond = (
+                f"多头排列(MA5 {ma5:.2f}>MA10 {ma10:.2f}>MA20 {ma20:.2f})"
+            )
             ma_status = "bullish"
         elif ma5 > ma10 or ma10 > ma20:
             ma_cond = "交叉震荡"
@@ -434,20 +439,22 @@ class MarketModeAdaptive:
         if below_ma5_buffer:
             # 收盘跌破 MA5 1% → 收缩（带缓冲，避免毛刺）
             mode_before = "retreat"
-            reasons.append(f"跌破5日线1%缓冲(价{current:.0f}<MA5×0.99:{ma5*0.99:.0f})")
+            reasons.append(
+                f"跌破5日线1%缓冲(收盘{current:.2f}<MA5×0.99:{ma5*0.99:.2f})"
+            )
             if dist_count >= 7:
                 reasons.append(f"派发日{dist_count}/{dist['window']}≥7 严重派发(辅助)")
         elif above_ma5 and ma_bullish and dist_count <= 5:
             # 激情档：站上5日线 + 多头排列 + 派发日不严重
             mode_before = "attack"
-            reasons.append(f"站上5日线(价{current:.0f}>MA5:{ma5:.0f})")
+            reasons.append(f"站上5日线(收盘{current:.2f}>MA5:{ma5:.2f})")
             reasons.append("多头排列(MA5>MA10>MA20)")
             if dist_count <= 4:
                 reasons.append(f"派发日{dist_count}/{dist['window']}≤4(辅助)")
         else:
             # 谨慎档：站上5日线但不满足激情条件（含5日线附近震荡）
             mode_before = "defend"
-            reasons.append(f"5日线附近(价{current:.0f}≈MA5:{ma5:.0f})")
+            reasons.append(f"5日线附近(收盘{current:.2f}≈MA5:{ma5:.2f})")
             if not ma_bullish:
                 reasons.append("均线未多头排列")
             if dist_count >= 5:
@@ -457,17 +464,32 @@ class MarketModeAdaptive:
         # 钉在旧读数上——第五轮“仍是 4/25 未刷新”）。过期 → 一律 defend，
         # 并显式披露数据截至日。
         if dist.get("stale"):
-            mode_before = "defend"
-            reasons.append(
-                f"派发日数据过期(截至{dist.get('last_date', '?')}，"
-                f"滞后{dist.get('stale_days', 0)}天)，模式降级防守"
-            )
+            if mode_before == "retreat":
+                # 跌破MA5×0.99 是硬结构信号，独立于派发日新鲜度；
+                # 不得把撤退降级成更不保守的防守（越破越激进的反向保护）。
+                reasons.append(
+                    f"派发日数据过期(截至{dist.get('last_date', '?')}，"
+                    f"滞后{dist.get('stale_days', 0)}天)；已跌破MA5撤退为结构信号，不降级"
+                )
+            else:
+                mode_before = "defend"
+                reasons.append(
+                    f"派发日数据过期(截至{dist.get('last_date', '?')}，"
+                    f"滞后{dist.get('stale_days', 0)}天)，模式降级防守"
+                )
 
         # 外围扰动降级（仅实时）
         from datetime import datetime as dt
         today_str = dt.now().strftime("%Y-%m-%d")
         mode = mode_before
         shock_downgraded = False
+        breadth_upgrade = False
+        if mode == "defend" and ad.get("available") and float(ad.get("ratio") or 0) >= 4:
+            breadth_upgrade = True
+            reasons.append(
+                f"宽度{float(ad['ratio']):.2f}:1极端普涨，防守档不升；"
+                "观察池升级1~2只明日优先复核"
+            )
         if date == today_str:
             mode_after = self._apply_external_shock(mode_before)
             if mode_after != mode_before:
@@ -501,6 +523,7 @@ class MarketModeAdaptive:
             "mode": mode,
             "shock_downgraded": shock_downgraded,
             "s3_downgraded": s3_downgraded,
+            "breadth_upgrade": breadth_upgrade,
             "mode_reason": " | ".join(reasons),
         }
 

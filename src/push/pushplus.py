@@ -347,27 +347,24 @@ class PushPlus:
             title_parts.append(f"数据缺失{len(data_missing)}")
         title = " | ".join(title_parts)
 
-        # 内容：环境总览 + 信号
-        content = render_environment_overview(environment)
+        # 四层阅读顺序：结论/行动 → 现役事件 → DIFF → 附录全文。
+        overview = render_environment_overview(environment)
 
         # 【P2-17】页首今日行动摘要：一行一人（触发事件｜待验证条件｜需盯价格），
         # 首屏即可回答"今天动不动"（27 票终点原为"防守"二字）。
         action_summary = render_action_summary(entries, exits, observations)
-        if action_summary:
-            content = action_summary + content
 
         # 【P2-18】报告头数据时点：全信号最大量比采样时间 + 交易日进度，
         # 读者据此判断结论成熟度（早盘/尾盘快照证据质量不同，不能当盘后结论）。
         sample_time = self._latest_sample_time([*entries, *exits, *observations])
+        stamp_content = ""
         if sample_time:
             progress = self._trading_progress(sample_time)
             stamp = (
                 f"{sample_time[4:6]}-{sample_time[6:8]} "
                 f"{sample_time[8:10]}:{sample_time[10:12]}"
             )
-            content = (
-                f"<b>数据时点 {stamp}｜交易日进度 {progress}%</b><br/>"
-            ) + content
+            stamp_content = f"<b>数据时点 {stamp}｜交易日进度 {progress}%</b><br/>"
 
         # 【P1-4】广播表置顶：在飞事件用信号生命周期驱动；信号系统不读仓位。
         try:
@@ -388,9 +385,16 @@ class PushPlus:
             for row in event_rows:
                 if row.get("stock_code") in current_prices:
                     row["current_price"] = current_prices[row["stock_code"]]
-            content = render_in_flight_events(event_rows) + content
+            active_events = render_in_flight_events(event_rows)
         except Exception:
-            pass
+            active_events = "<b>在飞事件 0</b><br/>&nbsp;&nbsp;今日无合格事件；空仓是合法输出<br/>"
+
+        content = (
+            f"{stamp_content}<b>① 结论与今日行动</b><br/>"
+            f"{action_summary or '&nbsp;&nbsp;今日无新执行动作；空仓/等待确认'}"
+            f"<br/><b>② 现役事件</b><br/>{active_events}"
+            "<br/><b>③ 相对上一推送 DIFF</b><br/>"
+        )
 
         # 【P1-3】评分闸门摘要：已触发但被输出端闸门拦截，不能静默消失。
         score_gate = environment.get("score_gate") or {}
@@ -430,6 +434,8 @@ class PushPlus:
                     f" | {_esc(reason)}<br/>"
                 )
             content += "<br/>"
+
+        content += f"<br/><b>④ 附录：环境与信号全文</b><br/>{overview}"
 
         if entries:
             content += f"<b>📥 买入信号 ({len(entries)}条)</b><br/><br/>"

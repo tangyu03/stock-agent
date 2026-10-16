@@ -99,6 +99,27 @@ def test_sector_changes_snapshot_and_render(sqlite_db):
     assert "中际旭创(300308): 主线→轮动" in text
 
 
+def test_sector_changes_ignores_equivalent_chinese_status_self_change():
+    from src.feedback.sector_changes import build_sector_changes
+
+    previous_stocks = {
+        "688195": {
+            "stock_name": "腾景科技",
+            "sector_name": "光模块",
+            "classification": "退潮",
+        }
+    }
+    result = build_sector_changes(
+        {},
+        {"688195": "光模块"},
+        {"688195": "retreating"},
+        {},
+        previous_stocks,
+    )
+
+    assert result["mapping_changes"] == []
+
+
 def test_tracking_stop_is_persisted_once_per_day(sqlite_db):
     from src.feedback.signal_ledger import (
         get_tracking_stop_logs,

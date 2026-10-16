@@ -63,6 +63,7 @@ def test_short_iwencai_series_uses_fallback_series(monkeypatch):
         "_call_api",
         lambda **kwargs: {"datas": [{"main_force_flow[20260829]": 100}]},
     )
+    monkeypatch.setattr(inst, "_fetch_detailed_fund_flow", lambda code: None)
     monkeypatch.setattr(
         inst,
         "_fetch_main_force_flow_fallback",
@@ -238,6 +239,27 @@ def test_bse_missing_data_neutralizes_bullish_votes(monkeypatch):
     assert result["data_sufficient"] is False
     assert result["downweighted"] is True
     assert result["votes"]["main_force"]["raw"]["uncovered_market"] is True
+
+
+def test_low_coverage_directional_vote_relabeled(monkeypatch):
+    """残缺投票：仅1源覆盖(两融-1) → 不得标"资金偏空"，降级"覆盖1/4"。"""
+    import importlib
+    import src.analyzers.institutional_scorer as inst
+    importlib.reload(inst)
+    monkeypatch.setattr(inst, "_fetch_margin_balance",
+                        lambda c: {"vote": -1, "detail": "两融减少", "raw": {"as_of": "2026-10-14"}})
+    monkeypatch.setattr(inst, "_fetch_lhb_institutional",
+                        lambda c: {"vote": 0, "detail": "无数据", "raw": {}})
+    monkeypatch.setattr(inst, "_fetch_main_force_flow",
+                        lambda c: {"vote": 0, "detail": "无数据", "raw": {}})
+    monkeypatch.setattr(inst, "_fetch_shareholder_count",
+                        lambda c: {"vote": 0, "detail": "无数据", "raw": {}})
+    monkeypatch.setattr(inst, "_fetch_top10_institutional_ratio", lambda c: None)
+    inst._institutional_session_cache.clear()
+    result = inst.score_institutional_holding("603986")
+    assert result["vote_coverage"] == 1
+    assert result["vote_reliable"] is False
+    assert "覆盖1/4" in result["vote_label"]
 
 
 def test_backoff_allows_one_probe_after_expiry(monkeypatch):

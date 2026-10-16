@@ -4,9 +4,9 @@
 
 本轮用户审计（沃尔德 9-18）落地的三项程序修改：
 
-P0-1 事件冻结语义披露（signal_lifecycle）：
-  冻结 = "停提示 + 挂单存续（解冻后恢复可成交）"，而非默认撤单；
-  冻结/解冻 trigger_data 携带 price，状态机每次转换写日志（时间+价格+触发条件）。
+P0-1 事件冻结语义修订（signal_lifecycle）：
+  冻结 = 提示与订单同生共死，即同步撤单；
+  后续技术修复时由调度器按当时价格重新评估生成新事件，不能恢复旧挂单。
 
 P0-2 报告内状态一致性（signal_lifecycle + unified_engine）：
   正文诊断"事件状态:"行在入场循环生成，早于出场循环的 freeze/unfreeze/
@@ -51,7 +51,7 @@ def _make_event(entry_price=498.0, stop_loss=480.0):
 # P0-1 冻结语义披露 + 价格入日志
 # ============================================================
 
-def test_freeze_reason_discloses_pending_order_survives():
+def test_freeze_reason_cancels_pending_order():
     lifecycle, event = _make_event()
     lifecycle.evaluate_events(
         "920045", current_price=499.0,
@@ -59,11 +59,11 @@ def test_freeze_reason_discloses_pending_order_survives():
         today=date(2026, 9, 9),
     )
     saved = lifecycle.store.events[event.event_id]
-    assert saved.status == "frozen"
-    assert "冻结仅停提示、挂单存续" in saved.invalid_reason
+    assert saved.status == "invalidated"
+    assert "冻结即同步撤单" in saved.invalid_reason
 
 
-def test_freeze_log_trigger_data_carries_price():
+def test_cancel_log_trigger_data_carries_price():
     lifecycle, event = _make_event()
     lifecycle.evaluate_events(
         "920045", current_price=499.0,
@@ -71,13 +71,13 @@ def test_freeze_log_trigger_data_carries_price():
         today=date(2026, 9, 9),
     )
     logs = lifecycle.store.get_event_logs(event.event_id)
-    freeze_logs = [log for log in logs if log["rule_entry"] == "R4.1事件冻结"]
-    assert freeze_logs
-    assert freeze_logs[-1]["trigger_data"].get("price") == 499.0
+    cancel_logs = [log for log in logs if log["rule_entry"] == "R3.13冻结同步撤单"]
+    assert cancel_logs
+    assert cancel_logs[-1]["trigger_data"].get("price") == 499.0
 
 
-def test_frozen_event_does_not_fill_even_when_low_touches_entry():
-    """冻结=停提示+挂单存续：冻结期间即使日内最低价触及买点也不成交。"""
+def test_cancelled_frozen_event_cannot_fill_when_price_recovers():
+    """冻结=同步撤单：后续价格反弹不复活旧挂单，必须重新评估。"""
     lifecycle, event = _make_event()
     lifecycle.evaluate_events(
         "920045", current_price=499.0,
@@ -90,15 +90,15 @@ def test_frozen_event_does_not_fill_even_when_low_touches_entry():
         today=date(2026, 9, 10),
     )
     saved = lifecycle.store.events[event.event_id]
-    assert saved.status == "frozen"
-    assert "已冻结" in lifecycle.event_status_note("920045", current_price=499.0)
+    assert saved.status == "invalidated"
+    assert "冻结即同步撤单" in lifecycle.event_status_note("920045", current_price=499.0)
 
 
 # ============================================================
 # P0-2 冻结原因滚动 + 状态一致性刷新
 # ============================================================
 
-def test_frozen_reason_rolls_forward_with_latest_snapshot():
+def test_frozen_event_cannot_keep_silent_order_between_snapshots():
     lifecycle, event = _make_event()
     lifecycle.evaluate_events(
         "920045", current_price=499.0,
@@ -111,21 +111,17 @@ def test_frozen_reason_rolls_forward_with_latest_snapshot():
         today=date(2026, 9, 10),
     )
     saved = lifecycle.store.events[event.event_id]
-    assert saved.status == "frozen"
-    assert "量比1.40" in saved.invalid_reason
-    assert "量比1.30" not in saved.invalid_reason
-    roll_logs = [
+    assert saved.status == "invalidated"
+    cancel_logs = [
         log for log in lifecycle.store.get_event_logs(event.event_id)
-        if log["rule_entry"] == "R3.11冻结快照滚动"
+        if log["rule_entry"] == "R3.13冻结同步撤单"
     ]
-    assert roll_logs, "缺少冻结快照滚动留痕"
-    assert roll_logs[-1]["trigger_data"]["price"] == 497.0
-    assert roll_logs[-1]["from_status"] == "frozen"
-    assert roll_logs[-1]["to_status"] == "frozen"
+    assert cancel_logs
+    assert cancel_logs[-1]["trigger_data"]["price"] == 499.0
 
 
-def test_unfreeze_status_note_shows_current_not_stale_frozen():
-    """沃尔德 9-18 核心缺陷：正文显示"已冻结"而头部已解冻/成交。"""
+def test_cancelled_status_note_shows_current_not_stale_frozen():
+    """状态一致性：旧挂单撤掉后，正文不能继续显示冻结挂单语义。"""
     lifecycle, event = _make_event()
     lifecycle.evaluate_events(
         "920045", current_price=499.0,
@@ -133,13 +129,7 @@ def test_unfreeze_status_note_shows_current_not_stale_frozen():
         today=date(2026, 9, 9),
     )
     stale_note = lifecycle.event_status_note("920045", current_price=499.0)
-    assert "已冻结" in stale_note
-    # 出场循环解冻
-    lifecycle.evaluate_events(
-        "920045", current_price=500.0,
-        tech_score=0.5, volume_ratio=1.0, change_pct=1.0,
-        today=date(2026, 9, 10),
-    )
+    assert "冻结即同步撤单" in stale_note
     # 统一引擎 2b 刷新：正文诊断的事件状态行重渲染为当前状态
     diagnostics = "策略未触发(动量条件未满足)\n事件状态: " + stale_note
     marker = "\n事件状态: "
@@ -147,7 +137,7 @@ def test_unfreeze_status_note_shows_current_not_stale_frozen():
     fresh_note = lifecycle.event_status_note("920045", current_price=505.0)
     refreshed = prefix + marker + fresh_note
     assert "已冻结" not in refreshed
-    assert "买点上方待回踩" in refreshed
+    assert "挂单存续" not in refreshed
 
 
 # ============================================================

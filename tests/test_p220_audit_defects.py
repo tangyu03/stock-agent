@@ -134,13 +134,13 @@ class TestDefectD_GateExpectation:
     """D: 环境栏加一行闸门预期（今日若收盘站回MA5，明日转进攻）。"""
 
     def test_防守模式有闸门预期(self):
-        assert _mode_gate_expectation("defend") == "今日若收盘站回MA5，明日转进攻"
+        assert _mode_gate_expectation("defend") == "今日若收盘站回MA5且多头排列(MA5>MA10>MA20)且派发日≤5，明日转进攻"
         assert _mode_gate_expectation("retreat") == "今日若收盘收复MA5×0.99，明日转防守"
         assert _mode_gate_expectation("attack") == ""
 
     def test_环境总览渲染闸门预期(self):
         html = render_environment_overview({"market_mode": "defend", "market_score": 5.0})
-        assert "闸门预期:今日若收盘站回MA5，明日转进攻" in html
+        assert "闸门预期:今日若收盘站回MA5且多头排列(MA5>MA10>MA20)且派发日≤5，明日转进攻" in html
         html_attack = render_environment_overview({"market_mode": "attack", "market_score": 8.0})
         assert "闸门预期" not in html_attack
 

@@ -12,9 +12,22 @@ STATUS_LABELS = {
     "unknown": "未知",
 }
 
+_STATUS_ALIASES = {
+    "主线": "main_trend",
+    "支线": "rotational",
+    "轮动": "rotational",
+    "退潮": "retreating",
+    "未知": "unknown",
+}
+
 
 def _label(status: Optional[str]) -> str:
     return STATUS_LABELS.get(str(status or ""), str(status or "数据未取到"))
+
+
+def _normalize_status(status: Optional[str]) -> str:
+    value = str(status or "").strip()
+    return _STATUS_ALIASES.get(value, value)
 
 
 def _normalize_date(value: str) -> str:
@@ -94,6 +107,22 @@ def build_sector_changes(
 ) -> Dict:
     """Compare the current sector projection with the previous report date."""
     name_by_code = name_by_code or {}
+    sector_states = {
+        name: _normalize_status(status)
+        for name, status in (sector_states or {}).items()
+    }
+    stock_sector_status = {
+        code: _normalize_status(status)
+        for code, status in (stock_sector_status or {}).items()
+    }
+    previous_sectors = {
+        name: _normalize_status(status)
+        for name, status in (previous_sectors or {}).items()
+    }
+    previous_stocks = {
+        code: {**info, "classification": _normalize_status(info.get("classification"))}
+        for code, info in (previous_stocks or {}).items()
+    }
     status_changes = []
     for sector in sorted(set(sector_states) | set(previous_sectors)):
         before = previous_sectors.get(sector)

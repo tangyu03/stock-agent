@@ -157,6 +157,38 @@ class TestEventLifecycleRows:
         assert rows[0]["stock_code"] == "002975"
         assert rows[0]["status"] == "待回踩"
 
+    def test_duplicate_cancel_flow_rows_are_removed_by_event_id(self):
+        event = {
+            "event_id": "evt-dup-308", "stock_code": "300308",
+            "stock_name": "中际旭创", "entry_type": "价量突破",
+            "born_date": "2026-09-05", "status": "invalidated",
+            "invalid_reason": "收盘跌破结构位",
+        }
+
+        rows = build_event_tracking_table(
+            as_of=date(2026, 9, 6), events=[event, dict(event)],
+            closed_trades=[],
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["status"] == "失效撤单"
+
+    def test_semantically_identical_rows_with_different_ids_are_removed(self):
+        first = {
+            "event_id": "evt-17", "stock_code": "301666",
+            "stock_name": "大普微", "entry_type": "恐慌抄底",
+            "born_date": "2026-10-15", "status": "invalidated",
+            "invalid_reason": "回踩失败已撤单",
+        }
+        second = {**first, "event_id": "evt-18"}
+
+        rows = build_event_tracking_table(
+            as_of=date(2026, 10, 16), events=[first, second],
+            closed_trades=[],
+        )
+
+        assert len(rows) == 1
+
 
 class TestDailyReviewTop:
     """收盘版顶部出现表格（generate 集成，离线安全）"""

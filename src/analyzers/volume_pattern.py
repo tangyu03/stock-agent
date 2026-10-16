@@ -531,6 +531,9 @@ def detect_conflict(pattern: str, inst: Optional[Dict]) -> Optional[str]:
     """冲突检测（3.3）。返回 ⚠ 行文案或 None。"""
     if not isinstance(inst, dict):
         return None
+    if inst.get("vote_reliable") is False:
+        # 残缺投票（覆盖<2）置信不足，不得驱动"量价资金背离"降级。
+        return None
     score = vote_score(inst)
     net3 = main_force_net3(inst)
     if pattern in _BULLISH_PATTERNS:

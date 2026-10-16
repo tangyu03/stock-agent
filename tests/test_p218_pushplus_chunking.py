@@ -75,3 +75,39 @@ def test_send_intraday_report_prepends_data_time(monkeypatch):
     assert "数据时点 09-17 14:07｜交易日进度 78%" in captured["content"]
     # 行动摘要仍在页首
     assert "今日行动摘要" in captured["content"]
+
+
+def test_send_intraday_report_uses_four_layer_order(monkeypatch):
+    from src.push.pushplus import PushPlus
+    import src.feedback.event_tracker as event_tracker
+
+    captured = {}
+
+    def _send(self, title, content, level="常规"):
+        captured.update({"title": title, "content": content})
+        return True
+
+    monkeypatch.setattr(PushPlus, "send", _send)
+    monkeypatch.setattr(event_tracker, "collect_in_flight_events", lambda **kwargs: [])
+    PushPlus.__new__(PushPlus).send_intraday_report(
+        {
+            "market_mode": "defend", "market_score": 5.0,
+            "score_gate": {
+                "count": 1,
+                "detail": "天孚通信(300394) | 评分闸门: 综合评分1/6≤1",
+            },
+        },
+        entries=[{
+            "stock_name": "天孚通信", "stock_code": "300394",
+            "entry_type": "恐慌抄底", "current_price": 100.0,
+            "event_id": "evt-300394",
+        }],
+    )
+
+    content = captured["content"]
+    positions = [content.index(label) for label in (
+        "① 结论与今日行动", "② 现役事件", "③ 相对上一推送 DIFF", "④ 附录：环境与信号全文",
+    )]
+    assert positions == sorted(positions)
+    assert content.index("#t-300394") < content.index("③ 相对上一推送 DIFF")
+    assert "综合评分1/6≤1" in content

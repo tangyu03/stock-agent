@@ -102,6 +102,8 @@ class TestOversoldExitAudit:
         assert len(weakness) == 1
         assert weakness[0].urgency == "观察"
         assert "非执行级" in weakness[0].reason
+        assert "触发条件: " in weakness[0].reason
+        assert "背景证据: " in weakness[0].reason
         assert "RSI6超卖(24.3)" in weakness[0].reason
         assert "KDJ-J超卖(1.4)" in weakness[0].reason
         assert "布林下轨" in weakness[0].reason
