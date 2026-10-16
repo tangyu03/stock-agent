@@ -1,0 +1,76 @@
+﻿*** Begin Patch
+*** Update File: src/push/templates.py
+@@
+ def stock_identity(data) -> str:
+     """独立推送的稳定首行标识：标的名称(代码)。"""
+     name = str((data or {}).get("stock_name") or "").strip() or "未知标的"
+     code = str((data or {}).get("stock_code") or "").strip() or "未知代码"
+     return f"{name}({code})"
++
++
++def _stock_id_text(data) -> str:
++    """跨层级串联ID：卡片段只展示末8位，降低长ID的阅读噪音。"""
++    event_id = str((data or {}).get("event_id") or "").strip()
++    if not event_id:
++        plan = (data or {}).get("execution_plan") or {}
++        event_id = str(plan.get("event_id") or "").strip()
++    return f" #{event_id[-8:]}" if event_id else ""
+@@
+ def _render_compact_entry_signal(data):
+@@
+-    title = f"买入 {entry_type} {name}({code})"
+-    content = f"<b>买入 {entry_type} {name}({code})</b>"
++    stock_tag = f"{name}({code}){_stock_id_text(data)}"
++    title = f"买入 {entry_type} {stock_tag}"
++    content = f"<b>买入 {entry_type} {_esc(stock_tag)}</b>"
+@@
+ def render_entry_signal(data):
+@@
+-    title = f"买入{tl} {name}({code})"
+-    content = f"<b>买入 {et} {name}({code})</b><br/><br/>"
++    stock_tag = f"{name}({code}){_stock_id_text(data)}"
++    title = f"买入{tl} {stock_tag}"
++    content = f"<b>买入 {et} {_esc(stock_tag)}</b><br/><br/>"
+@@
+ def render_exit_signal(data):
+@@
+-    title = f"{'紧急' if is_urgent else '卖出'}{et} {name}({code})"
+-    content = f"<b>{'紧急' if is_urgent else '卖出'} {et} {name}({code})</b><br/><br/>"
++    stock_tag = f"{name}({code}){_stock_id_text(data)}"
++    title = f"{'紧急' if is_urgent else '卖出'}{et} {stock_tag}"
++    content = (
++        f"<b>{'紧急' if is_urgent else '卖出'} {et} {_esc(stock_tag)}</b><br/><br/>"
++    )
+@@
+     title = f"观察 {name}({code})"
+-    content = f"<b>观察 {name}({code})</b>"
++    stock_tag = f"{name}({code}){_stock_id_text(data)}"
++    content = f"<b>观察 {_esc(stock_tag)}</b>"
+*** Update File: tests/test_p218_pushplus_chunking.py
+@@
+ def test_send_intraday_report_prepends_data_time(monkeypatch):
+@@
+     assert "数据时点 09-17 14:07｜交易日进度 78%" in captured["content"]
+     # 行动摘要仍在页首
+     assert "今日行动摘要" in captured["content"]
++
++
++def test_signal_cards_carry_the_same_stock_event_id():
++    from src.push.templates import render_entry_signal, render_exit_signal
++
++    data = {
++        "stock_name": "芯原股份",
++        "stock_code": "688008",
++        "event_id": "evt-202610160930-688008-entry",
++    }
++    _, entry_card = render_entry_signal(data)
++    _, observation_card = render_exit_signal({
++        **data,
++        "note": "买入: 策略检查 | 卖出: 止损未触发",
++    })
++
++    assert "#-entry" in entry_card
++    assert "芯原股份(688008) #-entry" in entry_card
++    assert "#-entry" in observation_card
++    assert "观察 芯原股份(688008) #-entry" in observation_card
+*** End Patch

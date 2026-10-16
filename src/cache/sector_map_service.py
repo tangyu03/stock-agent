@@ -292,6 +292,26 @@ class SectorMapService:
             finally:
                 self._clear_building(today)
 
+    def audit_status(self) -> Dict:
+        """板块快照可用性审计：报告层必须显式提示 stale/不可用。"""
+        snap, lag = self.get_snapshot()
+        if snap is None:
+            return {
+                "available": False,
+                "snapshot_date": "",
+                "lag_days": 0,
+                "line": "板块快照不可用，板块状态降权",
+            }
+        return {
+            "available": True,
+            "snapshot_date": snap.snapshot_date,
+            "lag_days": int(lag),
+            "line": (
+                f"板块快照{snap.snapshot_date}滞后{int(lag)}天，"
+                "板块状态降权"
+            ) if lag > 0 else "",
+        }
+
     # ---------------- 跨进程构建标记 ----------------
 
     def _is_building(self, d: str) -> bool:

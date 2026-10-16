@@ -1,0 +1,98 @@
+﻿*** Begin Patch
+*** Update File: src/orchestrator/engine.py
+@@
+ def _get_git_head() -> str:
+@@
+     return _GIT_HEAD
++
++
++def _canonicalize_position_limit(env: Dict) -> Dict:
++    canonical = {"attack": 0.8, "defend": 0.5, "retreat": 0.1}.get(
++        str(env.get("market_mode") or "defend"), 0.5,
++    )
++    try:
++        current = float(env.get("position_limit", canonical))
++    except (TypeError, ValueError):
++        current = canonical
++    if abs(current - canonical) > 1e-9:
++        env["position_limit_override"] = current
++        env["position_limit_override_reason"] = (
++            f"环境传入{current:.2f}与模式映射{canonical:.2f}冲突，"
++            "已按最终模式修正"
++        )
++        env["position_limit"] = canonical
++    return env
+@@
+-            env = adaptive.assess_daily(force_refresh=True, ref_date=ref_date)
++            env = _canonicalize_position_limit(
++                adaptive.assess_daily(force_refresh=True, ref_date=ref_date)
++            )
+@@
+             env.update({
+                 "market_mode": ms.get("mode", "defend"),
+                 "market_score": ms.get("score", 5.0),
+                 "position_limit": ms.get("position_limit", 0.5),
+             })
++            env = _canonicalize_position_limit(env)
+*** Update File: src/analyzers/institutional_scorer.py
+@@
+-                if frame is None or frame.empty:
++                if frame is None or frame.empty:
+                     logger.info("前十大流通股东上游为空 %s %s", clean_code, date)
+-                    return None
++                    return None, "empty"
+@@
+-                    return None
++                    return None, "schema_changed"
+@@
+-                return {"date": date, "ratio": round(total, 2), "rows": count, "fund_rows": fund_count}
++                return (
++                    {"date": date, "ratio": round(total, 2), "rows": count, "fund_rows": fund_count},
++                    "ok",
++                )
+@@
+-                return None
++                return None, "query_failed"
+ 
+-        latest = summarize(latest_date)
+-        prev = summarize(prev_date)
++        latest, latest_status = summarize(latest_date)
++        prev, prev_status = summarize(prev_date)
+         if latest is None and prev is None:
+-            return None
++            if latest_status == "query_failed" and prev_status == "empty":
++                status = "latest_query_failed_previous_empty"
++            elif latest_status == "query_failed" or prev_status == "query_failed":
++                status = "query_failed"
++            else:
++                status = "empty_both_periods"
++            return {
++                "available": False,
++                "status": status,
++                "latest_status": latest_status,
++                "previous_status": prev_status,
++                "latest": None,
++                "previous": None,
++                "change_points": None,
++            }
+         result = {
++            "available": True,
++            "status": "ok",
++            "latest_status": latest_status,
++            "previous_status": prev_status,
+             "latest": latest,
+*** Update File: src/push/templates.py
+@@
+         if latest_ratio is not None:
+             change = top10.get("change_points")
+             change_text = f"，变化{change:+.2f}pct" if change is not None else ""
+             parts.append(f"前十大机构{latest_ratio:.2f}%{change_text}")
++        elif top10.get("available") is False:
++            status = str(top10.get("status") or "unavailable")
++            status_text = {
++                "latest_query_failed_previous_empty": "最新期接口异常,上期空",
++                "query_failed": "接口异常",
++                "empty_both_periods": "两期均空",
++            }.get(status, status)
++            parts.append(f"前十大机构数据不可用({status_text})")
+*** End Patch

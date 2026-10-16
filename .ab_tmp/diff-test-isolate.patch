@@ -1,0 +1,10 @@
+﻿*** Begin Patch
+*** Update File: tests/test_p218_pushplus_chunking.py
+@@
+ def test_send_intraday_report_diffs_against_last_snapshot(monkeypatch):
+     from src.push.pushplus import PushPlus
++    import src.feedback.event_tracker as event_tracker
+@@
+     monkeypatch.setattr(PushPlus, "send", _capture_send(captured))
++    monkeypatch.setattr(event_tracker, "collect_in_flight_events", lambda **kwargs: [])
+*** End Patch

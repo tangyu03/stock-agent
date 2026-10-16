@@ -1115,12 +1115,6 @@ def _fetch_main_force_flow(code: str) -> Dict[str, Any]:
         vote: 1=最近 5 日累计净流入看多, -1=累计净流出看空, 0=无趋势
     """
     clean_code = str(code).zfill(6)
-    if _is_bj_stock(clean_code):
-        return {
-            "vote": 0,
-            "detail": "主力资金:N/A(北交所数据源未覆盖)",
-            "raw": {"market": "BJ", "uncovered_market": True},
-        }
     if _api_disabled["main_force"]:
         return {"vote": 0, "detail": "主力资金接口已短路（连续多只失败）", "raw": {}}
     if _main_force_failures.get(clean_code, 0) >= _MAIN_FORCE_FAILURE_THRESHOLD:
@@ -1431,7 +1425,7 @@ def _fetch_top10_institutional_ratio(code: str) -> Optional[Dict[str, Any]]:
                 )
                 if frame is None or frame.empty:
                     logger.info("前十大流通股东上游为空 %s %s", clean_code, date)
-                    return None
+                    return None, "empty"
                 ratio_col = "占总流通股本持股比例"
                 nature_col = "股东性质"
                 if ratio_col not in frame.columns:
@@ -1439,7 +1433,7 @@ def _fetch_top10_institutional_ratio(code: str) -> Optional[Dict[str, Any]]:
                         "前十大流通股东字段变动 %s %s: %s",
                         clean_code, date, list(frame.columns)[:12],
                     )
-                    return None
+                    return None, "schema_changed"
                 total = 0.0
                 count = 0
                 fund_count = 0
@@ -1454,19 +1448,52 @@ def _fetch_top10_institutional_ratio(code: str) -> Optional[Dict[str, Any]]:
                     count += 1
                     if "证券投资基金" in nature or "基金" in nature:
                         fund_count += 1
-                return {"date": date, "ratio": round(total, 2), "rows": count, "fund_rows": fund_count}
+                return (
+                    {"date": date, "ratio": round(total, 2), "rows": count, "fund_rows": fund_count},
+                    "ok",
+                )
             except Exception as exc:
                 logger.warning(
                     "前十大流通股东单期查询失败 %s %s: %s",
                     clean_code, date, str(exc)[:120],
                 )
-                return None
+                return None, "query_failed"
 
-        latest = summarize(latest_date)
-        prev = summarize(prev_date)
+        latest, latest_status = summarize(latest_date)
+        prev, prev_status = summarize(prev_date)
         if latest is None and prev is None:
-            return None
+            if latest_status == "query_failed" and prev_status == "empty":
+                status = "latest_query_failed_previous_empty"
+            elif latest_status == "query_failed" or prev_status == "query_failed":
+                status = "query_failed"
+            else:
+                status = "empty_both_periods"
+            return {
+                "available": False,
+                "status": status,
+                "latest_status": latest_status,
+                "previous_status": prev_status,
+                "latest": None,
+                "previous": None,
+                "change_points": None,
+            }
+        latest_fallback_status = None
+        if latest is None:
+            if prev_status != "ok":
+                latest_fallback_status = "latest_unavailable_previous_not_ok"
+            elif latest_status == "empty":
+                latest_fallback_status = "latest_empty_previous_ok"
+            elif latest_status == "schema_changed":
+                latest_fallback_status = "latest_schema_changed_previous_ok"
+            elif latest_status == "query_failed":
+                latest_fallback_status = "latest_query_failed_previous_ok"
+            else:
+                latest_fallback_status = "latest_unavailable_previous_ok"
         result = {
+            "available": True,
+            "status": latest_fallback_status or "ok",
+            "latest_status": latest_status,
+            "previous_status": prev_status,
             "latest": latest,
             "previous": prev,
             "change_points": (
@@ -1692,11 +1719,7 @@ def score_institutional_holding(
     bearish_count = sum(1 for v in vote_scores if v < 0)
     neutral_count = sum(1 for v in vote_scores if v == 0)
 
-    main_force_missing = bool(
-        _is_bj_stock(code)
-        and votes["main_force"].get("raw", {}).get("uncovered_market")
-    )
-    data_sufficient = not (main_force_missing or turnover_available is False)
+    data_sufficient = turnover_available is not False
     if not data_sufficient:
         vote_scores = [0 for _ in vote_scores]
         total_score = 0

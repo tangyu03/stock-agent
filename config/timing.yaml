@@ -132,7 +132,7 @@ timing:
   # → 收缩为仅创新高可再入。
   reentry:
     enabled: true
-    max_reentries: 2                     # 同标的再入场次数上限
+    max_reentries: 0                     # 已废弃：再入场不限制次数
     new_high_ratio: 0.99                 # 创新高再入场：现价≥近20日高×此值
 
   # ──────────────── 【Phase4 P3-1】趋势延续策略 (timing_engine) ────────────────

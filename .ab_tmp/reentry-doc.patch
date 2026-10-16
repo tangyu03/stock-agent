@@ -1,0 +1,6 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+-      "reason": str,            # 创新高 / 收复Z线 / 次数用尽 / 无历史事件
++      "reason": str,            # 创新高 / 收复Z线 / 额度提示 / 无历史事件
+*** End Patch

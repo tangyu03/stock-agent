@@ -6,7 +6,7 @@
 9/3 六条信号 9/4 全灭后无一重新评估——止损在系统里等于死刑判决。
 
 纪律（反方对冲）：再入场必须是新事件（创新高或收复 Z 线，
-且重新通过完整触发条件），绝不基于沉没成本；次数上限 2 次。
+且重新通过完整触发条件），绝不基于沉没成本；历史失败次数仅提示，不限次数。
 
 验证：蘅东光 9/7 创新高时应出现在待命队列头部而非观察区中部；
 9/4 止损记录与 9/7 再评估记录在事件追踪表中形成链路。
@@ -72,7 +72,7 @@ class TestReentryStatus:
         assert status["standby"] is True
         assert status["reason"] == "创新高"
         assert "再入场待命·头部" in status["note"]
-        assert "已用1/2，剩余1次" in status["note"]
+        assert "历史失败尝试1次；再入场不限次数" in status["note"]
         assert "2026-09-04" in status["note"]          # 9/4 止损记录与 9/7 再评估形成链路
 
     def test_z_line_recovery_puts_stock_in_standby(self):
@@ -102,8 +102,8 @@ class TestReentryStatus:
         assert status["standby"] is False
         assert status["reason"] == "新事件未成立"
 
-    def test_attempts_exhausted(self):
-        """次数用尽：2 次尝试后 → 转入长期观察（真死刑）"""
+    def test_prior_attempts_do_not_limit_new_signals(self):
+        """历史失败只计数；新高后仍进入待命队列，不设额度"""
         from src.analyzers.signal_lifecycle import reentry_status, reentry_exhausted
         store = _store_with_prior_events([
             ("evt-0903", "2026-09-03", "invalidated", 475.0, "确认追强"),
@@ -113,11 +113,11 @@ class TestReentryStatus:
             "920045", current_price=530.0, recent_high=528.0,
             max_reentries=2, store=store,
         )
-        assert status["standby"] is False
-        assert status["reason"] == "次数用尽"
-        assert "已用2/2，剩余0次" in status["note"]
-        assert "转入长期观察" in status["note"]
-        assert reentry_exhausted("920045", 2, store=store) is True
+        assert status["standby"] is True
+        assert status["reason"] == "创新高"
+        assert "历史失败尝试2次；再入场不限次数" in status["note"]
+        assert "已用2/2" not in status["note"]
+        assert reentry_exhausted("920045", 2, store=store) is False
 
     def test_triggered_event_is_not_reentry_candidate(self):
         """已成交事件不得进入再入队列——同一 evt_id 不能同时说买和持有。"""
@@ -176,7 +176,7 @@ class TestReentryStatus:
 
 
 class TestReentryGateInEngine:
-    """check_entry_signals 的再入场次数上限（拒绝留痕）"""
+    """check_entry_signals 的再入场历史失败提示"""
 
     def _engine_with_store(self, monkeypatch, store, tech):
         from src.analyzers.timing_engine import TimingEngine, StopLossCalc
@@ -216,8 +216,8 @@ class TestReentryGateInEngine:
         te = self._engine_with_store(monkeypatch, store, self._breakout_tech())
         signals = te.check_entry_signals("920045", "蘅东光", "defend", "main_trend")
         assert len(signals) == 1
-        assert "再入场额度已用尽（已用2/2，剩余0次）" in signals[0].trigger_reason
-        assert "本信号按新事件放行" in signals[0].trigger_reason
+        assert "有2次历史失败尝试" in signals[0].trigger_reason
+        assert "再入场不限次数" in signals[0].trigger_reason
         assert te._entry_rejections.get("920045") is None
 
     def test_one_prior_attempt_still_allows_new_signal(self, monkeypatch):

@@ -167,7 +167,7 @@ DEFAULT_TIMING_CONFIG = {
     # 【Phase4 P1-2】再入场循环：止损是尝试的结束，不是死刑判决
     "reentry": {
         "enabled": True,
-        "max_reentries": 2,               # 同标的再入场额度；超限仅显式提示，不自动拦截
+        "max_reentries": 0,               # 已废弃：再入场不限制次数
         "new_high_ratio": 0.99,           # 创新高再入场：现价 ≥ 近20日高×此值
     },
     # 【Phase4 P3-1】趋势延续：突破后 1~10 日延续段回踩入场（沃尔德 9/7 类）
@@ -961,12 +961,11 @@ class TimingEngine:
             from .signal_lifecycle import reentry_usage
             reentry_cfg = self._cfg("reentry") or {}
             if reentry_cfg.get("enabled", True):
-                max_reentries = int(reentry_cfg.get("max_reentries", 2))
-                usage = reentry_usage(stock_code, max_reentries, store=self._lifecycle.store)
-                if usage["remaining"] <= 0:
+                usage = reentry_usage(stock_code, store=self._lifecycle.store)
+                if usage["used"] > 0:
                     notice = (
-                        f"⚠ 再入场额度已用尽（已用{usage['used']}/{max_reentries}，剩余0次）；"
-                        "本信号按新事件放行，需人工确认是否接受重复失败风险"
+                        f"⚠ 该标的有{usage['used']}次历史失败尝试；再入场不限次数，"
+                        "完整触发条件成立后按新事件调度"
                     )
                     tech_data["reentry_notice"] = notice
                     logger.warning("%s %s", stock_code, notice)
@@ -2005,6 +2004,21 @@ class TimingEngine:
 
     # ============ 出场信号 ============
 
+    def _tech_vote_reason_suffix(self, tech_data: Dict[str, Any]) -> str:
+        """把技术综合票展开到可复核的分组原因，禁止只给一个偏空分数。"""
+        tech = tech_data.get("tech_signals", {})
+        if not isinstance(tech, dict):
+            return ""
+        details = tech.get("vote_details") or []
+        reasons = []
+        for detail in details[:4]:
+            text = str(detail or "").strip()
+            if text:
+                reasons.append(text)
+        if not reasons:
+            return ""
+        return "；投票依据: " + "；".join(reasons)
+
     def _volume_context(self, tech_data: Dict[str, Any]) -> str:
         """输出量能的判定口径，禁止只给一个无法复核的量比。"""
         snapshot = tech_data.get("tech_signals", {}).get("volume_snapshot", {})
@@ -2351,9 +2365,17 @@ class TimingEngine:
         # ── 投票（趋势转弱，不是冲高止盈）──
         # 修复问题2: 温和偏空不应作为卖出信号，偏空只是 medium，只有强烈看空才是 strong
         if tech_vote == '强烈看空':
-            weakness.append(('strong', f'{tech_vote}({tech_score:+.1f})'))
+            weakness.append((
+                'strong',
+                f'{tech_vote}({tech_score:+.1f})'
+                f'{self._tech_vote_reason_suffix(tech_data)}'
+            ))
         elif tech_vote == '偏空':
-            weakness.append(('medium', f'{tech_vote}({tech_score:+.1f})'))
+            weakness.append((
+                'medium',
+                f'{tech_vote}({tech_score:+.1f})'
+                f'{self._tech_vote_reason_suffix(tech_data)}'
+            ))
         # 温和偏空和中性不作为卖出信号 — 只是轻微偏空，不构成卖出理由
 
         # ── 极端超卖共振：只降级技术走弱，不拦截破位止损 ──
@@ -3136,6 +3158,13 @@ class TimingEngine:
             lines.append(f"②技术: {vote_label} | ⚠️矛盾: {' | '.join(contradictions)}")
         else:
             lines.append(f"②技术: {vote_label}")
+        vote_reasons = [
+            str(detail).strip()
+            for detail in (tech.get("vote_details") or [])
+            if str(detail).strip()
+        ]
+        if vote_reasons:
+            lines.append(f"  ↳投票依据: {'；'.join(vote_reasons)}")
 
         # ②.5 机构持仓打分（4 数据源投票，中等权重 25%）
         # 简单投票制：北向/龙虎榜/主力/股东户数 各 1 票

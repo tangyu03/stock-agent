@@ -193,9 +193,10 @@ class TestExpectedValueGate:
         }
         scheduled = schedule_live_signals([sig], [], market_mode="defend")
         assert scheduled["stats"]["buy_ev_gate"] == 1
-        assert scheduled["stats"]["buy_hypothesis_rejected"] == 0
+        assert scheduled["stats"]["buy_hypothesis_rejected"] == 1
         assert len(scheduled["buy"]) == 0
-        assert scheduled["skipped"]["buy_ev_gate"][0]["stock_code"] == "EV01"
+        assert scheduled["warnings"]["buy_ev_gate"][0]["stock_code"] == "EV01"
+        assert scheduled["skipped"]["buy_ev_gate"] == []
 
 
 # ---------------------------------------------------------------

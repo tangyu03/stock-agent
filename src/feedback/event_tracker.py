@@ -391,11 +391,31 @@ def collect_in_flight_events(
 def render_in_flight_events(rows: List[Dict]) -> str:
     """渲染广播表（HTML），顶部第一段就是事件状态，不再是持仓散文。"""
     if not rows:
-        return "<b>在飞事件 0</b><br/>&nbsp;&nbsp;今日无合格事件；空仓是合法输出<br/>"
+        return "<b>现役事件 0</b><br/>&nbsp;&nbsp;今日无合格事件；空仓是合法输出<br/>"
     active = sum(1 for r in rows if r.get("active"))
     completed = len(rows) - active
-    parts = [f"<b>在飞事件 {len(rows)}（活跃{active}/完结{completed}）</b>"]
-    for r in rows:
+    parts = [f"<b>现役事件 {active}｜完结 {completed}</b>"]
+    completed_rows = [r for r in rows if not r.get("active")]
+
+    def append_completed_summary(target: List[str]) -> None:
+        summary_by_status: Dict[str, List[str]] = {}
+        for row in completed_rows:
+            label = str(row.get("status_label") or row.get("status") or "完结")
+            identity = str(row.get("stock_name") or row.get("stock_code") or "")
+            event_id = str(row.get("event_id") or "")
+            token = f"{identity}#{event_id[-8:]}" if event_id else identity
+            summary_by_status.setdefault(label, []).append(token)
+        for label, tokens in summary_by_status.items():
+            target.append(f"&nbsp;&nbsp;{label}{len(tokens)}：")
+            target.extend(f"&nbsp;&nbsp;&nbsp;&nbsp;{token}" for token in tokens)
+
+    if not active and completed:
+        append_completed_summary(parts)
+        return "<br/>".join(parts) + "<br/>"
+
+    active_rows = [r for r in rows if r.get("active")]
+    rendered_rows = 0
+    for r in active_rows:
         try:
             entry = float(r.get("entry_price") or 0)
             stop = float(r.get("stop_loss") or 0)
@@ -442,17 +462,18 @@ def render_in_flight_events(rows: List[Dict]) -> str:
             reason = str(r["invalid_reason"])
             seg += f" ({reason[:42]})"
         parts.append(seg)
+        rendered_rows += 1
         history = r.get("history") or []
         if history:
-            trail = "；".join(
-                f"#{str(item.get('event_id'))[-8:]}{item.get('status_label', '')}"
-                f"({str(item.get('invalid_reason') or '无原因')[:24]})"
-                for item in history if item.get("status_label")
+            trail = "、".join(
+                f"#{str(item.get('event_id'))[-8:]}"
+                for item in history if item.get("event_id")
             )
             if trail:
-                parts.append(f"&nbsp;&nbsp;&nbsp;&nbsp;轨迹: {trail}")
-    rendered_rows = sum(1 for item in parts[1:] if not item.startswith("&nbsp;&nbsp;&nbsp;&nbsp;轨迹: "))
-    if rendered_rows != len(rows):
+                parts.append(f"&nbsp;&nbsp;&nbsp;&nbsp;轨迹{len(history)}: {trail}")
+    if completed_rows:
+        append_completed_summary(parts)
+    if rendered_rows != len(active_rows):
         parts.append("<b>⚠事件渲染计数不一致，本段结果不可用于执行</b>")
     return "<br/>".join(parts) + "<br/>"
 

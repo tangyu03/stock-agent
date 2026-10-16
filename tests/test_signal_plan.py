@@ -388,8 +388,10 @@ def test_score_gate_reason_discloses_score_components():
     scheduled = schedule_live_signals([sig], [])
 
     assert scheduled["stats"]["buy_score_gate"] == 1
-    reason = scheduled["skipped"]["buy_score_gate"][0]["reason"]
-    assert "综合评分1/6≤1" in reason
+    reason = scheduled["warnings"]["buy_score_gate"][0]["reason"]
+    assert scheduled["buy"][0].stock_code == "GATE01"
+    assert scheduled["skipped"]["buy_score_gate"] == []
+    assert "综合评分1/6" in reason
     assert "RRR0.20<1.5降档" in reason
 
 
@@ -607,9 +609,58 @@ def test_observation_render_uses_compact_reasoning_format():
     assert "③量能 [盘口数据不足]" in rendered
     assert "接口量比0.86@时间未标注(缩量;口径未标注)" in rendered
     assert "④资金:🔴资金看空" in rendered or "资金看空(-3票" in rendered
-    assert "⑤拦截:技术投票偏空" in rendered
+    assert "⑤买入检查:技术投票偏空" in rendered
     assert "⑥风控:止损未触发" in rendered
     assert "技术面" not in rendered
+
+
+def test_sell_signal_uses_same_seven_question_reasoning_format():
+    data = {
+        "stock_name": "测试股",
+        "stock_code": "600001",
+        "current_price": 369.02,
+        "change_pct": -2.22,
+        "market_mode": "defend",
+        "sector_name": "通信设备",
+        "sector_status": "retreating",
+        "exit_type": "技术走弱",
+        "trigger_price": 369.02,
+        "stop_loss_price": 317.54,
+        "urgency": "重要",
+        "reason": "[medium]布林下轨；[medium]偏空(-2.0)",
+        "ma5": 380.0,
+        "ma10": 390.0,
+        "ma20": 400.0,
+        "rsi": 39.4,
+        "rsi6": 26.9,
+        "bias6": -13.6,
+        "volume_ratio": 1.41,
+        "turnover_rate": 3.13,
+        "tech_signals": {
+            "category_votes": {
+                "trend": {"vote": -1, "details": ["MACD死叉延续+绿柱扩大"]},
+                "momentum": {"vote": 0, "details": ["RSI弱势(39)"]},
+                "pattern": {"vote": 0, "details": ["K线偏涨但不足"]},
+                "volume": {"vote": -1, "details": ["放量下跌"]},
+            }
+        },
+        "institutional_holding": {
+            "vote_score": -1,
+            "vote_label": "资金偏空",
+            "bullish_count": 0,
+            "bearish_count": 1,
+            "votes": {},
+        },
+    }
+
+    _, rendered = render_exit_signal(data)
+
+    assert "七问" in rendered
+    assert "①方向:MA空头排列" in rendered
+    assert "④资金:" in rendered and "资金偏空" in rendered
+    assert "⑥风控:类型:技术走弱｜理由:" in rendered
+    assert "技术面" not in rendered
+    assert "退出逻辑" not in rendered
 
 
 def test_timing_line_shows_threshold_gaps_and_discrete_hits():

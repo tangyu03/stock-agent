@@ -225,6 +225,63 @@ class TestLifecycleInvalidation:
         assert failed.status == "invalidated"
         assert "回踩失败已撤单" in notices[0]["reason"]
 
+    def test_same_day_same_strategy_is_not_reborn(self):
+        from src.analyzers.signal_lifecycle import (
+            InMemorySignalEventStore,
+            SignalLifecycle,
+        )
+        store = InMemorySignalEventStore()
+        lifecycle = SignalLifecycle(store, valid_days=5)
+        first = lifecycle.register_event(
+            "688797", "臻宝", "恐慌抄底",
+            breakout_level=186.17, entry_price=224.40, stop_loss=171.28,
+            target_low=239.21, target_high=249.0,
+        )
+        second = lifecycle.register_event(
+            "688797", "臻宝", "恐慌抄底",
+            breakout_level=186.17, entry_price=224.40, stop_loss=171.28,
+            target_low=239.21, target_high=249.0,
+        )
+
+        assert second.event_id == first.event_id
+        assert len(store.events) == 1
+
+        lifecycle.invalidate(first.event_id, "盘中重复扫描，保留原判定")
+        third = lifecycle.register_event(
+            "688797", "臻宝", "恐慌抄底",
+            breakout_level=186.17, entry_price=224.40, stop_loss=171.28,
+            target_low=239.21, target_high=249.0,
+        )
+
+        assert third.event_id == first.event_id
+        assert third.status == "invalidated"
+        assert len(store.events) == 1
+
+    def test_scheduler_rejected_valid_event_expires_without_reentry_count(self):
+        from src.analyzers.signal_lifecycle import (
+            InMemorySignalEventStore,
+            SignalLifecycle,
+            reentry_usage,
+        )
+        store = InMemorySignalEventStore()
+        lifecycle = SignalLifecycle(store, valid_days=5)
+        event = lifecycle.register_event(
+            "688521", "芯原股份", "恐慌抄底",
+            breakout_level=100.0, entry_price=110.0, stop_loss=95.0,
+            target_low=125.0, target_high=135.0,
+        )
+
+        assert lifecycle.mark_scheduler_rejected(
+            event.event_id, "688521", "恐慌抄底",
+            "调度拒绝撤单：期望值闸门拦截",
+        ) is True
+        assert store.events[event.event_id].status == "expired"
+        assert reentry_usage("688521", 2, store=store)["used"] == 0
+
+        assert lifecycle.mark_scheduler_rejected(
+            event.event_id, "688521", "恐慌抄底", "重复调用"
+        ) is False
+
     def test_event_expires_after_valid_days(self, monkeypatch):
         """N 日内回踩买点有效，超期作废"""
         from src.analyzers.timing_engine import get_backtest_timing_engine

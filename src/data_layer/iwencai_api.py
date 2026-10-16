@@ -19,11 +19,14 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+from ..config_env import load_project_env
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 配置
 # ---------------------------------------------------------------------------
+load_project_env()
 IWENCAI_BASE_URL = os.environ.get("IWENCAI_BASE_URL", "https://openapi.iwencai.com")
 IWENCAI_API_KEY = os.environ.get("IWENCAI_API_KEY", "")
 API_ENDPOINT = f"{IWENCAI_BASE_URL}/v1/query2data"

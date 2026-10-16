@@ -505,7 +505,6 @@ def run_unified_analysis(
                 reentry_cfg = timing._cfg("reentry") or {}
                 status = reentry_status(
                     code, current_price=current_price, recent_high=recent_high,
-                    max_reentries=int(reentry_cfg.get("max_reentries", 2)),
                     new_high_ratio=float(reentry_cfg.get("new_high_ratio", 0.99)),
                     store=timing._lifecycle.store,
                     prior_high=prior_high,
@@ -518,8 +517,6 @@ def run_unified_analysis(
                         "note": status.get("note"),
                         "attempts": status.get("attempts", 0),
                     })
-                    diagnostics = status["note"] + "\n" + diagnostics
-                elif status.get("reason") == "次数用尽":
                     diagnostics = status["note"] + "\n" + diagnostics
             except Exception as e:
                 logger.debug("再入场判定失败 %s: %s", code, str(e)[:60])
@@ -657,11 +654,24 @@ def run_unified_analysis(
             config=timing_cfg, sector_of_entry=lambda sig: getattr(sig, "sector_name", ""),
         )
         if budget_result["applied"] and budget_result.get("blocked"):
+            entry_by_code = {
+                getattr(sig, "stock_code", ""): sig for sig in batch.entries
+            }
+            for blocked in budget_result["blocked"]:
+                blocked["event_id"] = getattr(
+                    entry_by_code.get(blocked.get("stock_code", "")),
+                    "event_id", "",
+                ) or ""
             batch.entries = [sig for sig in batch.entries
                              if sig.stock_code not in {b["stock_code"] for b in budget_result["blocked"]}]
             batch.budget_blocked = budget_result["blocked"]
             batch.rejected.extend(budget_result["blocked"])
             for blocked in budget_result["blocked"]:
+                if blocked.get("event_id"):
+                    timing._lifecycle.mark_scheduler_rejected(
+                        blocked["event_id"], blocked["stock_code"],
+                        blocked["entry_type"], blocked["reason"],
+                    )
                 batch.entry_diagnostics[blocked["stock_code"]] = blocked["reason"]
             logger.info(
                 "组合预算拦截 %d 条同板块新信号: %s",

@@ -1,0 +1,20 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/event_calendar.py
+@@
+ def _scheduled_date(row: Dict) -> str:
+     """优先使用变更后预约日；未变更回退首次预约。"""
+     for key in ("三次变更", "二次变更", "初次变更", "首次预约"):
+         value = row.get(key)
+-        if value is not None and str(value).strip() and str(value) != "NaT":
++        if value is None:
++            continue
++        try:
++            import pandas as pd
++            if pd.isna(value):
++                continue
++        except (ImportError, TypeError, ValueError):
++            pass
++        text = str(value).strip()
++        if text and text.lower() not in ("nan", "nat", "none"):
+             return str(value)[:10]
+*** End Patch

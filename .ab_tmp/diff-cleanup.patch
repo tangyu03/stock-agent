@@ -1,0 +1,12 @@
+﻿*** Begin Patch
+*** Update File: src/push/pushplus.py
+@@
+-        previous_codes = set(previous_stocks)
+         state_changed: List[str] = []
+@@
+         lines.extend(state_changed)
+         for code, state in previous_stocks.items():
+-            if code not in current_stocks and code not in previous_codes:
+-                continue
+             if code not in current_stocks:
+*** End Patch

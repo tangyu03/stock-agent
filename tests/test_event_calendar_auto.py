@@ -1,0 +1,64 @@
+from datetime import datetime, timedelta
+
+import pandas as pd
+
+from src.analyzers import event_calendar as calendar
+
+
+def test_upcoming_events_include_auto_scheduled_reports(monkeypatch):
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    frame = pd.DataFrame([
+        {
+            "股票代码": "688008",
+            "股票简称": "澜起科技",
+            "首次预约": tomorrow,
+            "初次变更": None,
+            "二次变更": None,
+            "三次变更": None,
+            "实际披露": None,
+        }
+    ])
+    monkeypatch.setattr(calendar, "_load_unlock_summary", lambda: None)
+    monkeypatch.setattr(calendar, "_load_scheduled_reports", lambda now=None: (frame, "2026三季"))
+
+    events = calendar.get_upcoming_events("688008", days=30)
+
+    assert any(
+        event["code"] == "688008"
+        and event["date"] == tomorrow
+        and event["type"] == "财报"
+        and "2026三季" in event["detail"]
+        for event in events
+    )
+
+
+def test_upcoming_events_include_manual_yaml_calendar(monkeypatch):
+    monkeypatch.setattr(calendar, "_load_unlock_summary", lambda: None)
+    monkeypatch.setattr(calendar, "_load_scheduled_reports", lambda now=None: (None, "2026三季"))
+
+    events = calendar.get_upcoming_events("688630", days=30)
+
+    assert any(
+        event["code"] == "688630"
+        and event["type"] == "财报"
+        and "芯碁微装" in event["detail"]
+        for event in events
+    )
+
+
+def test_changed_schedule_date_wins_over_first_schedule():
+    row = {
+        "首次预约": "2026-10-24",
+        "初次变更": "2026-10-28",
+        "二次变更": None,
+        "三次变更": None,
+    }
+
+    assert calendar._scheduled_date(row) == "2026-10-28"
+
+
+def test_current_report_period_switches_at_statutory_deadline():
+    assert calendar._current_report_period(datetime(2026, 4, 30)) == "2026一季"
+    assert calendar._current_report_period(datetime(2026, 8, 31)) == "2026半年报"
+    assert calendar._current_report_period(datetime(2026, 10, 31)) == "2026三季"
+    assert calendar._current_report_period(datetime(2026, 11, 1)) == "2026年报"

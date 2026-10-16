@@ -1,0 +1,72 @@
+﻿*** Begin Patch
+*** Update File: tests/test_data_source_fixes.py
+@@
+     def test_latest_period_failure_falls_back_to_previous(self, monkeypatch):
+@@
+         assert result["previous"]["rows"] == 1
+         assert result["change_points"] is None
++
++    def test_latest_failure_with_empty_previous_is_not_real_fund_vote(self, monkeypatch):
++        latest_date, prev_date = _inst._latest_report_dates()
++        fake_akshare = types.ModuleType("akshare")
++
++        def _free_top_10(*, symbol: str, date: str):
++            if date == latest_date:
++                raise ValueError("Length mismatch")
++            return pd.DataFrame()
++
++        fake_akshare.stock_gdfx_free_top_10_em = _free_top_10
++        monkeypatch.setitem(sys.modules, "akshare", fake_akshare)
++        monkeypatch.setattr(_inst, "call_ak_with_retry", lambda func, **kwargs: func(**kwargs))
++
++        result = _inst._fetch_top10_institutional_ratio("301666")
++
++        assert result["available"] is False
++        assert result["status"] == "latest_query_failed_previous_empty"
++        assert result["latest_status"] == "query_failed"
++        assert result["previous_status"] == "empty"
++        assert result["latest"] is None
++        assert result["previous"] is None
+*** Update File: tests/test_f1_audit_fixes.py
+@@
+ def test_fund_display_includes_coverage_and_scope():
+@@
+     assert "覆盖2/4" in text
+     assert "快源" in text
++
++
++def test_top10_unavailable_status_is_disclosed():
++    from src.push.templates import _institutional
++
++    text = _institutional({
++        "institutional_holding": {
++            "vote_score": 0, "vote_label": "资金中性",
++            "votes": {},
++            "vote_freshness": {},
++            "top10_institutional_ratio": {
++                "available": False,
++                "status": "latest_query_failed_previous_empty",
++                "latest": None,
++                "previous": None,
++            },
++        },
++    })
++
++    assert "前十大机构数据不可用(最新期接口异常,上期空)" in text
+*** Update File: tests/test_orchestrator_low_confidence.py
+@@
+ from types import SimpleNamespace
++
++
++def test_position_limit_conflict_is_canonicalized_by_final_mode():
++    from src.orchestrator.engine import _canonicalize_position_limit
++
++    env = _canonicalize_position_limit({
++        "market_mode": "defend",
++        "position_limit": 0.10,
++    })
++
++    assert env["position_limit"] == 0.5
++    assert env["position_limit_override"] == 0.10
++    assert "已按最终模式修正" in env["position_limit_override_reason"]
+*** End Patch

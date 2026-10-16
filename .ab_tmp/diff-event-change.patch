@@ -1,0 +1,36 @@
+﻿*** Begin Patch
+*** Update File: src/push/pushplus.py
+@@
+         previous_stocks = previous.get("stocks") or {}
+         current_stocks = current.get("stocks") or {}
++        previous_codes = set(previous_stocks)
+         state_changed: List[str] = []
+         for code, state in current_stocks.items():
+             old = previous_stocks.get(code)
+-            if old is None:
++            previous_event_id = str((old or {}).get("event_id") or "")
++            current_event_id = str(state.get("event_id") or "")
++            if old is None:
+                 action = {
+@@
+                     f"{state.get('entry_type') or ''} {state.get('status_label') or ''}".strip()
+                 )
++            elif current_event_id and current_event_id != previous_event_id:
++                lines.append(
++                    f"新触发: {state.get('identity') or code} "
++                    f"{state.get('entry_type') or ''} "
++                    f"{state.get('status_label') or ''}".strip()
++                )
++                if previous_event_id:
++                    lines.append(
++                        f"旧事件退出: {state.get('identity') or code}"
++                    )
+             elif (
+@@
+         lines.extend(state_changed)
+         for code, state in previous_stocks.items():
+-            if code not in current_stocks:
++            if code not in current_stocks and code not in previous_codes:
++                continue
++            if code not in current_stocks:
+*** End Patch

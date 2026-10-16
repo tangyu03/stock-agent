@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 from src.loop.market_mode_adaptive import MarketModeAdaptive
+from src.analyzers.market_resonance import assess_sector_resonance
+from src.push.templates import render_environment_overview
 
 
 def _mma():
@@ -46,3 +48,53 @@ def test_defend_mode_marks_extreme_breadth_for_observation_upgrade(monkeypatch):
     assert result["breadth_upgrade"] is True
     assert "宽度5.83:1" in result["mode_reason"]
     assert "观察池升级1~2只" in result["mode_reason"]
+
+
+def test_sector_resonance_discloses_bullish_divergence_without_voting():
+    sectors = [
+        {"classification": "main_trend"},
+        {"classification": "main_trend"},
+        {"classification": "rotational"},
+        {"classification": "retreating"},
+        {"classification": "unknown"},
+    ]
+
+    result = assess_sector_resonance(
+        "defend",
+        sectors,
+        snapshot_date="2026-10-16",
+    )
+
+    assert result["status"] == "bullish_divergence"
+    assert result["counts"]["main_trend"] == 2
+    assert result["counts"]["retreating"] == 1
+    assert "仅观测不投票" in result["line"]
+
+
+def test_environment_overview_warns_when_sector_snapshot_is_stale():
+    content = render_environment_overview({
+        "market_mode": "defend",
+        "sectors": {"main_trend": ["半导体"], "rotational": [], "retreating": []},
+        "sector_snapshot_risk": {
+            "available": True,
+            "snapshot_date": "2026-08-22",
+            "lag_days": 55,
+            "line": "板块快照2026-08-22滞后55天，板块状态降权",
+        },
+    })
+
+    assert "板块快照2026-08-22滞后55天" in content
+    assert "板块状态降权" in content
+
+
+def test_environment_overview_renders_sector_resonance():
+    content = render_environment_overview({
+        "market_mode": "defend",
+        "sectors": {"main_trend": ["半导体"], "rotational": [], "retreating": []},
+        "sector_resonance": {
+            "line": "共振观测: 指数defend | 行业主线2(40%) | 退潮1(20%) | bullish_divergence | 快照2026-10-16,仅观测不投票",
+        },
+    })
+
+    assert "共振:共振观测: 指数defend" in content
+    assert "仅观测不投票" in content

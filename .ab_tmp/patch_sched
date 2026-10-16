@@ -1,0 +1,120 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+     def invalidate(
+         self, event_id: str, reason: str,
+         trigger_data: Optional[Dict] = None,
+         rule_entry: Optional[str] = None,
+@@
+             rule_entry=rule_entry,
+         )
++
++    def mark_scheduler_rejected(
++        self, event_id: str, stock_code: str, entry_type: str, reason: str,
++    ) -> bool:
++        """调度闸门拒绝后撤单。
++
++        用 expired 而不是 invalidated：候选没有进入订单流，不应被
++        计入再入场失败次数；但仍必须离开活跃事件表，避免幽灵挂单。
++        """
++        for event in self.get_active_events(stock_code, entry_type):
++            if event.event_id != event_id or event.status != "valid":
++                continue
++            self.store.update_status(
++                event_id, "expired", reason,
++                rule_entry="R5.1调度拒绝撤单",
++            )
++            return True
++        return False
+ 
+     def expire(self, event_id: str, trigger_data: Optional[Dict] = None) -> None:
+*** Update File: src/orchestrator/unified_engine.py
+@@
+         budget_result = apply_portfolio_budget(
+             batch.entries, holdings=holdings,
+             config=timing_cfg, sector_of_entry=lambda sig: getattr(sig, "sector_name", ""),
+         )
+         if budget_result["applied"] and budget_result.get("blocked"):
++            entry_by_code = {
++                getattr(sig, "stock_code", ""): sig for sig in batch.entries
++            }
++            for blocked in budget_result["blocked"]:
++                blocked["event_id"] = getattr(
++                    entry_by_code.get(blocked.get("stock_code", "")),
++                    "event_id", "",
++                ) or ""
+             batch.entries = [sig for sig in batch.entries
+                              if sig.stock_code not in {b["stock_code"] for b in budget_result["blocked"]}]
+             batch.budget_blocked = budget_result["blocked"]
+             batch.rejected.extend(budget_result["blocked"])
+             for blocked in budget_result["blocked"]:
++                if blocked.get("event_id"):
++                    timing._lifecycle.mark_scheduler_rejected(
++                        blocked["event_id"], blocked["stock_code"],
++                        blocked["entry_type"], blocked["reason"],
++                    )
+                 batch.entry_diagnostics[blocked["stock_code"]] = blocked["reason"]
+*** Update File: src/orchestrator/engine.py
+@@
+         scheduled_exit_batch = []
+         for s in scheduled['sell']:
+@@
+                 'urgency': s.urgency,
+             })
++
++        # 调度拒绝不是“继续观察中的挂单”：提示流必须同步撤掉生命周期。
++        try:
++            from ..analyzers.timing_engine import get_timing_engine
++            rejected_by_code = {}
++            for bucket, items in (scheduled.get('skipped') or {}).items():
++                for item in items or []:
++                    code = str(item.get('stock_code') or '')
++                    if code:
++                        rejected_by_code[code] = str(item.get('reason') or bucket)
++            scheduled_codes = {s.stock_code for s in scheduled.get('buy') or []}
++            lifecycle = get_timing_engine()._lifecycle
++            for sig in entry_batch:
++                code = str(sig.get('stock_code') or '')
++                event_id = str(sig.get('event_id') or '')
++                if code in rejected_by_code and code not in scheduled_codes and event_id:
++                    lifecycle.mark_scheduler_rejected(
++                        event_id, code,
++                        str(sig.get('entry_type') or ''),
++                        f"调度拒绝撤单：{rejected_by_code[code]}",
++                    )
++        except Exception as e:
++            logger.warning("调度拒绝事件撤单失败: %s", e)
+ 
+         # 【P1-3/P1-5/P2-8】输出端摘要：拦截的信号要有名字，候梯要能排序，
+*** Update File: tests/test_signal_lifecycle.py
+@@
+     def test_same_day_same_strategy_is_not_reborn(self):
+@@
+         assert third.status == "invalidated"
+         assert len(store.events) == 1
++
++    def test_scheduler_rejected_valid_event_expires_without_reentry_count(self):
++        from src.analyzers.signal_lifecycle import (
++            InMemorySignalEventStore,
++            SignalLifecycle,
++            reentry_usage,
++        )
++        store = InMemorySignalEventStore()
++        lifecycle = SignalLifecycle(store, valid_days=5)
++        event = lifecycle.register_event(
++            "688521", "芯原股份", "恐慌抄底",
++            breakout_level=100.0, entry_price=110.0, stop_loss=95.0,
++            target_low=125.0, target_high=135.0,
++        )
++
++        assert lifecycle.mark_scheduler_rejected(
++            event.event_id, "688521", "恐慌抄底",
++            "调度拒绝撤单：期望值闸门拦截",
++        ) is True
++        assert store.events[event.event_id].status == "expired"
++        assert reentry_usage("688521", 2, store=store)["used"] == 0
++
++        assert lifecycle.mark_scheduler_rejected(
++            event.event_id, "688521", "恐慌抄底", "重复调用"
++        ) is False
+*** End Patch

@@ -1,0 +1,19 @@
+﻿*** Begin Patch
+*** Update File: src/config_env.py
+@@
+-    loaded = False
++    values: dict[str, str] = {}
+     for filename in filenames:
+-        for key, value in _parse_env_file(root / filename).items():
+-            if value and not os.environ.get(key):
+-                os.environ[key] = value
+-                loaded = True
+-    return loaded
++        values.update(_parse_env_file(root / filename))
++    loaded = False
++    for key, value in values.items():
++        if value and not os.environ.get(key):
++            os.environ[key] = value
++            loaded = True
++    return loaded
+*** End Patch

@@ -1,0 +1,113 @@
+﻿*** Begin Patch
+*** Update File: tests/test_live_scheduler_summary.py
+@@
+ def test_multiple_signals_are_not_capped_by_count():
+@@
+     assert "单次建议上限" not in summary
++
++
++def test_scheduler_summary_discloses_every_gate_rejection():
++    scheduled = {
++        "stats": {
++            "buy_executed": 0,
++            "entry_in": 2,
++            "buy_hypothesis_rejected": 0,
++            "buy_strategy_offline": 0,
++            "buy_skipped_low_confidence": 0,
++            "sell_executed": 0,
++            "sell_in": 0,
++            "sell_skipped_invalid_price": 0,
++            "position_advice": 0,
++        },
++        "buy": [],
++        "sell": [],
++        "position_advice": [],
++        "skipped": {
++            "buy_no_budget": [],
++            "buy_dust_order": [],
++            "buy_low_confidence": [],
++            "buy_hypothesis_rejected": [],
++            "buy_score_gate": [{
++                "stock_code": "688008", "stock_name": "澜起科技",
++                "entry_type": "恐慌抄底", "reason": "评分闸门: 1/6≤1",
++            }],
++            "buy_ev_gate": [{
++                "stock_code": "688521", "stock_name": "芯原股份",
++                "entry_type": "恐慌抄底", "reason": "RRR-0.30，负期望",
++            }],
++            "buy_strategy_offline": [],
++        },
++    }
++
++    summary = format_scheduled_summary(scheduled)
++
++    assert "买入: 0/2" in summary
++    assert "评分闸门拦截（逐条）" in summary
++    assert "688008 澜起科技" in summary
++    assert "期望值闸门拦截（逐条）" in summary
++    assert "688521 芯原股份" in summary
++    assert "RRR-0.30" in summary
+*** Update File: tests/test_signal_lifecycle.py
+@@
+     def test_daily_close_state_machine(self):
+@@
+         assert failed.status == "invalidated"
+         assert "回踩失败已撤单" in notices[0]["reason"]
++
++    def test_same_day_same_strategy_is_not_reborn(self):
++        from src.analyzers.signal_lifecycle import (
++            InMemorySignalEventStore,
++            SignalLifecycle,
++        )
++        store = InMemorySignalEventStore()
++        lifecycle = SignalLifecycle(store, valid_days=5)
++        first = lifecycle.register_event(
++            "688797", "臻宝", "恐慌抄底",
++            breakout_level=186.17, entry_price=224.40, stop_loss=171.28,
++            target_low=239.21, target_high=249.0,
++        )
++        second = lifecycle.register_event(
++            "688797", "臻宝", "恐慌抄底",
++            breakout_level=186.17, entry_price=224.40, stop_loss=171.28,
++            target_low=239.21, target_high=249.0,
++        )
++
++        assert second.event_id == first.event_id
++        assert len(store.events) == 1
++
++        lifecycle.invalidate(first.event_id, "盘中重复扫描，保留原判定")
++        third = lifecycle.register_event(
++            "688797", "臻宝", "恐慌抄底",
++            breakout_level=186.17, entry_price=224.40, stop_loss=171.28,
++            target_low=239.21, target_high=249.0,
++        )
++
++        assert third.event_id == first.event_id
++        assert third.status == "invalidated"
++        assert len(store.events) == 1
+*** Update File: tests/test_market_mode_render.py
+@@
+ from src.loop.market_mode_adaptive import MarketModeAdaptive
++from src.push.templates import render_environment_overview
+@@
+ def test_defend_mode_marks_extreme_breadth_for_observation_upgrade(monkeypatch):
+@@
+     assert "宽度5.83:1" in result["mode_reason"]
+     assert "观察池升级1~2只" in result["mode_reason"]
++
++
++def test_environment_overview_warns_when_sector_snapshot_is_stale():
++    content = render_environment_overview({
++        "market_mode": "defend",
++        "sectors": {"main_trend": ["半导体"], "rotational": [], "retreating": []},
++        "sector_snapshot_risk": {
++            "available": True,
++            "snapshot_date": "2026-08-22",
++            "lag_days": 55,
++            "line": "板块快照2026-08-22滞后55天，板块状态降权",
++        },
++    })
++
++    assert "板块快照2026-08-22滞后55天" in content
++    assert "板块状态降权" in content
+*** End Patch

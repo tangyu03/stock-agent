@@ -1,0 +1,10 @@
+import sqlite3
+
+con = sqlite3.connect("data/stock_agent.db")
+cur = con.cursor()
+rows = cur.execute(
+    "select cache_key,created_at,expire_at,length(cache_value) "
+    "from data_cache order by created_at desc limit 80"
+).fetchall()
+for row in rows:
+    print(row)

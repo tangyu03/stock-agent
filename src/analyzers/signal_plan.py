@@ -994,9 +994,8 @@ def _evaluate_ev_gate(
 
     if score < min_conf:
         reason = (
-            f"期望值闸门: 置信度{score}/6(全池最低档)不提供胜率证据，"
-            f"{rrr_txt}，{be_txt}，系统不能假设超出盈亏平衡胜率 "
-            f"→ 负期望不出场，空仓是合法输出"
+            f"期望值闸门: 置信度评分{score}/6低于放行线{min_conf}/6，"
+            f"{rrr_txt}，{be_txt}；空仓是合法输出"
         )
         return {
             "enabled": True, "rejected": True, "reason": reason,

@@ -114,7 +114,7 @@ _PATTERN_DEFS = {
         "short": "真实抛压", "bias": -1,
         "verdict": "主动性出逃，防加速破位",
         "strategy": "风控优先", "strategy_short": "风控",
-        "confirms": ["反弹量能不萎缩则继续回避", "主力净流出扩大", "跌破MA20减仓"],
+        "confirms": ["反弹缩量且主动差未改善则继续回避；放量承接需另行复核", "主力净流出扩大", "跌破MA20减仓"],
         "confirm_target": "风控优先",
     },
     "阴跌不止型": {
@@ -1046,22 +1046,22 @@ def render_volume_pattern(result: Dict) -> List[str]:
     else:
         lines.append(f"③量能 [盘口数据不足] {' | '.join(data_bits)}")
         return lines
-    lines.append("③·数据: " + " | ".join(data_bits))
+    lines.append("③·证据: " + " | ".join(data_bits))
     volume_vs_ma60 = result.get("volume_vs_ma60")
     if volume_vs_ma60 is not None:
         lines.append(
-            f"③·量强: 60日均量强度{float(volume_vs_ma60):.2f}x"
+            f"③·强度: 60日均量强度{float(volume_vs_ma60):.2f}x"
             f"({result.get('volume_ma60_caliber')})"
         )
     if result.get("judgment"):
-        lines.append(f"③·判读: {result['judgment']}——{result['verdict']}")
+        lines.append(f"③·推论: {result['judgment']}——{result['verdict']}")
     if result.get("conflict"):
         lines.append(f"③·{result['conflict']}")
     if result.get("commission_note"):
         lines.append(f"③·{result['commission_note']}")
     if result.get("confirms"):
         lines.append(
-            f"③·确认: {' | '.join(result['confirms'])} → {result['confirm_target']}"
+            f"③·下一步: {' | '.join(result['confirms'])} → {result['confirm_target']}"
         )
     return lines
 

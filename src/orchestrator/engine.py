@@ -140,6 +140,24 @@ def _get_git_head() -> str:
     return _GIT_HEAD
 
 
+def _canonicalize_position_limit(env: Dict) -> Dict:
+    canonical = {"attack": 0.8, "defend": 0.5, "retreat": 0.1}.get(
+        str(env.get("market_mode") or "defend"), 0.5,
+    )
+    try:
+        current = float(env.get("position_limit", canonical))
+    except (TypeError, ValueError):
+        current = canonical
+    if abs(current - canonical) > 1e-9:
+        env["position_limit_override"] = current
+        env["position_limit_override_reason"] = (
+            f"环境传入{current:.2f}与模式映射{canonical:.2f}冲突，"
+            "已按最终模式修正"
+        )
+        env["position_limit"] = canonical
+    return env
+
+
 _WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 
@@ -265,7 +283,9 @@ class Orchestrator:
         try:
             from ..loop.market_mode_adaptive import get_market_mode_adaptive
             adaptive = get_market_mode_adaptive()
-            env = adaptive.assess_daily(force_refresh=True, ref_date=ref_date)
+            env = _canonicalize_position_limit(
+                adaptive.assess_daily(force_refresh=True, ref_date=ref_date)
+            )
         except Exception as e:
             logger.warning("自适应环境评估失败，回退到缓存模式: %s", e)
             ms = self._market_scorer.get_current_mode()
@@ -274,6 +294,7 @@ class Orchestrator:
                 "market_score": ms.get("score", 5.0),
                 "position_limit": ms.get("position_limit", 0.5),
             })
+            env = _canonicalize_position_limit(env)
 
         # P2-13 审计：透出数据参考日，非交易日复盘时推送/日志可明确"上一交易日"口径
         env["ref_date"] = ref_date
@@ -321,6 +342,30 @@ class Orchestrator:
             market_score=float(env.get("market_score", 0) or 0),
             ref_date=ref_date,
         )
+        try:
+            from ..cache import get_sector_map_service
+            sector_snapshot_risk = get_sector_map_service().audit_status()
+            if not sector_snapshot_risk.get("available") or sector_snapshot_risk.get("lag_days", 0) > 0:
+                env["sector_snapshot_risk"] = sector_snapshot_risk
+        except Exception as e:
+            logger.warning("板块快照审计失败: %s", e)
+            env["sector_snapshot_risk"] = {
+                "available": False, "snapshot_date": "", "lag_days": 0,
+                "line": "板块快照审计失败，板块状态降权",
+            }
+        try:
+            from ..cache import get_sector_map_service
+            from ..analyzers.market_resonance import assess_sector_resonance
+            sector_snapshot, sector_lag_days = get_sector_map_service().get_snapshot()
+            if sector_snapshot is not None:
+                env["sector_resonance"] = assess_sector_resonance(
+                    market_mode,
+                    sector_snapshot.sectors.values(),
+                    snapshot_date=sector_snapshot.snapshot_date,
+                    lag_days=sector_lag_days,
+                )
+        except Exception as e:
+            logger.warning("市场板块共振观测失败: %s", e)
 
         # ---- 3. 构建信号列表 ----
         sector_ranks = {}
@@ -574,19 +619,54 @@ class Orchestrator:
                 'urgency': s.urgency,
             })
 
+        # 调度拒绝不是“继续观察中的挂单”：提示流必须同步撤掉生命周期。
+        try:
+            from ..analyzers.timing_engine import get_timing_engine
+            rejected_by_code = {}
+            for bucket, items in (scheduled.get('skipped') or {}).items():
+                for item in items or []:
+                    code = str(item.get('stock_code') or '')
+                    if code:
+                        rejected_by_code[code] = str(item.get('reason') or bucket)
+            scheduled_codes = {s.stock_code for s in scheduled.get('buy') or []}
+            lifecycle = get_timing_engine()._lifecycle
+            for sig in entry_batch:
+                code = str(sig.get('stock_code') or '')
+                event_id = str(sig.get('event_id') or '')
+                if code in rejected_by_code and code not in scheduled_codes and event_id:
+                    lifecycle.mark_scheduler_rejected(
+                        event_id, code,
+                        str(sig.get('entry_type') or ''),
+                        f"调度拒绝撤单：{rejected_by_code[code]}",
+                    )
+        except Exception as e:
+            logger.warning("调度拒绝事件撤单失败: %s", e)
+
         # 【P1-3/P1-5/P2-8】输出端摘要：拦截的信号要有名字，候梯要能排序，
         # 板块集中只做一行提醒。这里只组装展示数据，不做资金管理。
         score_gate_items = []
         for bucket in ('buy_score_gate', 'buy_ev_gate'):
-            for item in scheduled['skipped'].get(bucket, []):
-                score_gate_items.append(
-                    f"{item.get('stock_name', item.get('stock_code'))}"
-                    f"({item.get('stock_code')}) | {item.get('reason', '')}"
-                )
+            for item in (scheduled.get('warnings') or {}).get(bucket, []):
+                score_gate_items.append({
+                    'stock_code': str(item.get('stock_code') or ''),
+                    'stock_name': str(item.get('stock_name') or item.get('stock_code') or ''),
+                    'reason': str(item.get('reason') or ''),
+                    'confidence_details': list(item.get('confidence_details') or []),
+                    'score': item.get('score'),
+                    'applicable_score': item.get('applicable_score'),
+                    'min_confidence_score': item.get('min_confidence_score'),
+                    'rrr_low': item.get('rrr_low'),
+                    'breakeven_win_rate': item.get('breakeven_win_rate'),
+                    'ev': item.get('ev'),
+                })
         if score_gate_items:
             env['score_gate'] = {
                 'count': len(score_gate_items),
-                'detail': ' '.join(score_gate_items),
+                'detail': ' '.join(
+                    f"{item['stock_name']}({item['stock_code']}) | {item['reason']}"
+                    for item in score_gate_items
+                ),
+                'items': score_gate_items,
             }
 
         # 退潮板块不是新买入闸门；只对实际持仓降级为“不加仓”。
@@ -737,7 +817,7 @@ class Orchestrator:
                 for item in standby_queue[:10]:
                     standby_lines.append(f"  {_stock_push_line(item)}")
                 standby_lines.append(
-                    "  （待完整触发条件重新确认后入场；同一标的再入场额度 2 次，超限放行但显式提示）"
+                    "  （待完整触发条件重新确认后入场；历史失败次数仅提示，不限次数）"
                 )
                 self._pushplus.send(
                     "再入场待命队列",

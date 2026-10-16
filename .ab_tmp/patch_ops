@@ -1,0 +1,115 @@
+﻿*** Begin Patch
+*** Update File: src/decision/live_scheduler.py
+@@
+     offline_skipped = scheduled.get('skipped', {}).get('buy_strategy_offline') or []
+     if offline_skipped:
+         lines.append("⛔ 策略下线过滤:")
+         for r in offline_skipped:
+             lines.append(f"  {r['stock_code']} {r['stock_name']} | {r['entry_type']}: {r['reason']}")
+         lines.append("")
++
++    score_skipped = scheduled.get('skipped', {}).get('buy_score_gate') or []
++    if score_skipped:
++        lines.append("⛔ 评分闸门拦截（逐条）:")
++        for r in score_skipped:
++            lines.append(f"  {r['stock_code']} {r['stock_name']} | {r['entry_type']}: {r['reason'][:180]}")
++        lines.append("")
++
++    ev_skipped = scheduled.get('skipped', {}).get('buy_ev_gate') or []
++    if ev_skipped:
++        lines.append("⛔ 期望值闸门拦截（逐条）:")
++        for r in ev_skipped:
++            lines.append(f"  {r['stock_code']} {r['stock_name']} | {r['entry_type']}: {r['reason'][:180]}")
++        lines.append("")
+ 
+     return '\n'.join(lines)
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+         rules_version: str = "",
+         entry_snapshot: Optional[Dict] = None,
+     ) -> SignalEvent:
+         hyp = hypothesis or {}
+         born = born or date.today()
++
++        # 盘中引擎会多轮运行；同一交易日、同一策略不允许反复建档。
++        # 否则同一天会把一次判断拆成多个事件，再入场额度被重复计数。
++        same_day_active = [
++            e for e in self.get_active_events(stock_code)
++            if e.entry_type == entry_type
++        ]
++        if same_day_active:
++            return same_day_active[-1]
++
++        same_day_terminal = [
++            e for e in self.get_prior_events(stock_code)
++            if e.entry_type == entry_type
++            and e.born_date == born.isoformat()
++        ]
++        if same_day_terminal:
++            existing = same_day_terminal[-1]
++            logger.debug(
++                "同日同策略事件已存在，复用 %s（不重复建档）",
++                existing.event_id,
++            )
++            return existing
++
+         event = SignalEvent(
+*** Update File: src/cache/sector_map_service.py
+@@
+     def ensure_snapshot(self, force: bool = False) -> Tuple[Optional[BoardSnapshot], int]:
+@@
+             finally:
+                 self._clear_building(today)
++
++    def audit_status(self) -> Dict:
++        """板块快照可用性审计：报告层必须显式提示 stale/不可用。"""
++        snap, lag = self.get_snapshot()
++        if snap is None:
++            return {
++                "available": False,
++                "snapshot_date": "",
++                "lag_days": 0,
++                "line": "板块快照不可用，板块状态降权",
++            }
++        return {
++            "available": True,
++            "snapshot_date": snap.snapshot_date,
++            "lag_days": int(lag),
++            "line": (
++                f"板块快照{snap.snapshot_date}滞后{int(lag)}天，"
++                "板块状态降权"
++            ) if lag > 0 else "",
++        }
+ 
+     # ---------------- 跨进程构建标记 ----------------
+*** Update File: src/orchestrator/engine.py
+@@
+         # 板块分类由 sector_ranker（涨跌幅百分位排名）统一完成，不再需要 scanner 预扫
+         from .unified_engine import run_unified_analysis
+         batch = run_unified_analysis(
+@@
+             ref_date=ref_date,
+         )
++        try:
++            from ..cache import get_sector_map_service
++            sector_snapshot_risk = get_sector_map_service().audit_status()
++            if not sector_snapshot_risk.get("available") or sector_snapshot_risk.get("lag_days", 0) > 0:
++                env["sector_snapshot_risk"] = sector_snapshot_risk
++        except Exception as e:
++            logger.warning("板块快照审计失败: %s", e)
++            env["sector_snapshot_risk"] = {
++                "available": False, "snapshot_date": "", "lag_days": 0,
++                "line": "板块快照审计失败，板块状态降权",
++            }
+ 
+         # ---- 3. 构建信号列表 ----
+*** Update File: src/push/templates.py
+@@
+     # 板块态势
+     sectors = data.get("sectors") or {}
+     if sectors:
++        sector_risk = data.get("sector_snapshot_risk") or {}
++        if sector_risk:
++            content += f"&nbsp;&nbsp;⚠{_esc(str(sector_risk.get('line') or '板块快照风险'))}<br/>"
+         mt = sectors.get("main_trend", [])
+*** End Patch

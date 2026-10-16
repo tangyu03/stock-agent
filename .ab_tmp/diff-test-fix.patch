@@ -1,0 +1,35 @@
+﻿*** Begin Patch
+*** Update File: tests/test_p218_pushplus_chunking.py
+@@
+-    monkeypatch.setattr(PushPlus, "_load_report_snapshot", lambda: None)
+-    monkeypatch.setattr(PushPlus, "_save_report_snapshot", lambda snapshot: None)
++    monkeypatch.setattr(PushPlus, "_load_report_snapshot", staticmethod(lambda: None))
++    monkeypatch.setattr(
++        PushPlus, "_save_report_snapshot", staticmethod(lambda snapshot: None)
++    )
+@@
+-    monkeypatch.setattr(PushPlus, "_load_report_snapshot", lambda: None)
+-    monkeypatch.setattr(PushPlus, "_save_report_snapshot", lambda snapshot: None)
++    monkeypatch.setattr(PushPlus, "_load_report_snapshot", staticmethod(lambda: None))
++    monkeypatch.setattr(
++        PushPlus, "_save_report_snapshot", staticmethod(lambda snapshot: None)
++    )
+@@
+-    monkeypatch.setattr(PushPlus, "_load_report_snapshot", lambda: previous)
+-    monkeypatch.setattr(PushPlus, "_save_report_snapshot", lambda snapshot: saved.append(snapshot))
++    monkeypatch.setattr(PushPlus, "_load_report_snapshot", staticmethod(lambda: previous))
++    monkeypatch.setattr(
++        PushPlus,
++        "_save_report_snapshot",
++        staticmethod(lambda snapshot: saved.append(snapshot)),
++    )
+@@
+-    monkeypatch.setattr(PushPlus, "_load_report_snapshot", lambda: None)
+-    monkeypatch.setattr(PushPlus, "_save_report_snapshot", lambda snapshot: saved.append(snapshot))
++    monkeypatch.setattr(PushPlus, "_load_report_snapshot", staticmethod(lambda: None))
++    monkeypatch.setattr(
++        PushPlus,
++        "_save_report_snapshot",
++        staticmethod(lambda snapshot: saved.append(snapshot)),
++    )
+*** End Patch

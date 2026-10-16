@@ -3,6 +3,7 @@ PushPlus 微信推送
 免费版每日200条限制，有频率限制（约5 req/s）
 """
 import logging
+import re
 import time
 import threading
 from typing import Dict, Optional, List
@@ -27,6 +28,31 @@ class PushPlus:
     MAX_CONTENT_LEN = 18000
     # 超长内容分块时优先在安全边界断开，避免切断 HTML 标签触发服务端 999 校验
     _CHUNK_BOUNDARIES = ("<br/>", "<br>", "<hr/>", "<hr>", "</table>", "</div>", "\n")
+    _REPORT_SNAPSHOT_KEY = "last_intraday_report_snapshot"
+
+    @staticmethod
+    def _compact_gate_reason(reason: str, item: Optional[Dict] = None) -> str:
+        text = str(reason or "")
+        item = item or {}
+        parts = []
+        confidence = None
+        score = item.get("score")
+        applicable = item.get("applicable_score")
+        if score is not None:
+            parts.append(f"评分{int(score)}/{int(applicable or 6)}")
+        else:
+            confidence = re.search(r"(?:置信度评分|置信度|综合评分)(\d+/\d+)", text)
+            if confidence:
+                parts.append(f"评分{confidence.group(1)}")
+        rrr = re.search(r"RRR\s*(-?\d+(?:\.\d+)?)", text)
+        balance = re.search(r"盈亏平衡胜率(\d+(?:\.\d+)?%)", text)
+        if confidence:
+            parts.append(f"评分{confidence.group(1)}")
+        if rrr:
+            parts.append(f"RRR{rrr.group(1)}")
+        if balance:
+            parts.append(f"平衡胜率{balance.group(1)}")
+        return "｜".join(parts) if parts else text[:120]
 
     def __init__(self, config_path: Optional[str] = None):
         config_file = config_path or str(CONFIG_DIR / "push.yaml")
@@ -320,6 +346,7 @@ class PushPlus:
         exits = exits or []
         observations = observations or []
         data_missing = environment.get("data_missing") or []
+        previous_snapshot = self._load_report_snapshot()
 
         from .templates import (
             _esc,
@@ -387,7 +414,8 @@ class PushPlus:
                     row["current_price"] = current_prices[row["stock_code"]]
             active_events = render_in_flight_events(event_rows)
         except Exception:
-            active_events = "<b>在飞事件 0</b><br/>&nbsp;&nbsp;今日无合格事件；空仓是合法输出<br/>"
+            active_events = "<b>现役事件 0</b><br/>&nbsp;&nbsp;今日无合格事件；空仓是合法输出<br/>"
+            event_rows = []
 
         content = (
             f"{stamp_content}<b>① 结论与今日行动</b><br/>"
@@ -396,13 +424,42 @@ class PushPlus:
             "<br/><b>③ 相对上一推送 DIFF</b><br/>"
         )
 
+        current_snapshot = self._build_report_snapshot(
+            environment, entries, exits, observations, event_rows,
+        )
+        diff_lines = self._report_diff_lines(previous_snapshot, current_snapshot)
+        if diff_lines:
+            content += "".join(
+                f"&nbsp;&nbsp;{_esc(line)}<br/>" for line in diff_lines
+            )
+        else:
+            content += "&nbsp;&nbsp;相对上一推送无结构变化<br/>"
+
         # 【P1-3】评分闸门摘要：已触发但被输出端闸门拦截，不能静默消失。
         score_gate = environment.get("score_gate") or {}
         if score_gate:
+            gate_items = score_gate.get("items") or []
+            content += f"<b>买入提示｜{score_gate.get('count', 0)}条，已调度</b><br/>"
             content += (
-                f"<b>评分闸门</b><br/>&nbsp;&nbsp;拦截{score_gate.get('count', 0)}条"
-                f"(评分≤1): {_esc(score_gate.get('detail', ''))}<br/>"
+                "&nbsp;&nbsp;口径: 技术同向｜机构同向｜主线板块｜无冲突｜"
+                "环境≥6｜RRR2.5-5；每项1分，放行线≥2<br/>"
             )
+            if gate_items:
+                for item in gate_items:
+                    identity = (
+                        f"{item.get('stock_name') or item.get('stock_code')}"
+                        f"({item.get('stock_code')})"
+                    )
+                    reason = self._compact_gate_reason(item.get("reason"), item)
+                    details = [
+                        str(detail) for detail in (item.get("confidence_details") or [])
+                        if str(detail)
+                    ]
+                    if details:
+                        reason += "｜依据:" + "；".join(details[:5])
+                    content += f"&nbsp;&nbsp;{_esc(identity)}｜{_esc(reason)}<br/>"
+            else:
+                content += f"&nbsp;&nbsp;{_esc(score_gate.get('detail', ''))}<br/>"
 
         concentration = environment.get("sector_concentration") or {}
         position_no_add = environment.get("position_no_add") or []
@@ -498,7 +555,255 @@ class PushPlus:
             "重要" if (entries or exits or data_missing) else "常规"
         )
 
-        return self.send(title, content, level=level)
+        sent = self.send(title, content, level=level)
+        if sent:
+            self._save_report_snapshot(current_snapshot)
+        return sent
+
+    @staticmethod
+    def _report_stock_states(
+        entries: List[Dict], exits: List[Dict], observations: List[Dict],
+        event_rows: List[Dict],
+    ) -> Dict[str, Dict]:
+        states: Dict[str, Dict] = {}
+        role_priority = {"exit": 0, "entry": 1, "observation": 2}
+
+        for row in event_rows:
+            code = str(row.get("stock_code") or "")
+            if not code:
+                continue
+            states[code] = {
+                "identity": (
+                    f"{row.get('stock_name') or code}({code})"
+                ),
+                "role": "",
+                "event_id": str(row.get("event_id") or ""),
+                "entry_type": str(row.get("entry_type") or ""),
+                "status": str(row.get("status") or ""),
+                "status_label": str(row.get("status_label") or ""),
+                "active": bool(row.get("active")),
+            }
+
+        report_signals = [
+            *[(signal, "exit") for signal in exits],
+            *[(signal, "entry") for signal in entries],
+            *[(signal, "observation") for signal in observations],
+        ]
+        for signal, role in report_signals:
+            code = str(signal.get("stock_code") or "")
+            if not code:
+                continue
+            state = states.setdefault(code, {
+                "identity": (
+                    f"{signal.get('stock_name') or code}({code})"
+                ),
+                "event_id": str(signal.get("event_id") or ""),
+                "entry_type": str(signal.get("entry_type") or ""),
+                "status": "",
+                "status_label": "",
+                "active": False,
+                "role": "",
+            })
+            state["identity"] = state.get("identity") or (
+                f"{signal.get('stock_name') or code}({code})"
+            )
+            if not state.get("event_id") and signal.get("event_id"):
+                state["event_id"] = str(signal.get("event_id"))
+            if not state.get("entry_type") and signal.get("entry_type"):
+                state["entry_type"] = str(signal.get("entry_type"))
+            if not state.get("role") or role_priority[role] < role_priority.get(
+                state.get("role"), 2
+            ):
+                state["role"] = role
+        return states
+
+    @staticmethod
+    def _build_report_snapshot(
+        environment: Dict,
+        entries: List[Dict],
+        exits: List[Dict],
+        observations: List[Dict],
+        event_rows: List[Dict],
+    ) -> Dict:
+        score_gate = environment.get("score_gate") or {}
+        gate_detail = str(score_gate.get("detail") or "")
+        gate_matches = re.findall(
+            r"[A-Za-z0-9\u4e00-\u9fff]+\((\d{6})\)", gate_detail,
+        )
+        gate_identity: Dict[str, str] = {}
+        for item in score_gate.get("items") or []:
+            code = str(item.get("stock_code") or "")
+            name = str(item.get("stock_name") or "")
+            if code:
+                gate_identity[code] = f"{name}({code})" if name else code
+        if not gate_identity:
+            for name, code in re.findall(
+                r"([A-Za-z0-9\u4e00-\u9fff]+)\((\d{6})\)", gate_detail,
+            ):
+                gate_identity[code] = f"{name}({code})"
+
+        data_missing_by_code = {}
+        for item in environment.get("data_missing") or []:
+            code = str(item.get("stock_code") or "")
+            if code:
+                data_missing_by_code[code] = (
+                    f"{item.get('stock_name') or code}({code})"
+                )
+
+        no_add_by_code = {}
+        for item in environment.get("position_no_add") or []:
+            code = str(item.get("stock_code") or "")
+            if code:
+                no_add_by_code[code] = (
+                    f"{item.get('stock_name') or code}({code})"
+                )
+
+        return {
+            "pushed_at": datetime.now().isoformat(timespec="seconds"),
+            "market_mode": str(environment.get("market_mode") or ""),
+            "market_score": float(environment.get("market_score") or 0.0),
+            "stocks": PushPlus._report_stock_states(
+                entries, exits, observations, event_rows,
+            ),
+            "gate_codes": list(dict.fromkeys(gate_matches)),
+            "gate_identity": gate_identity,
+            "gate_detail": gate_detail,
+            "sector_concentration": str(
+                (environment.get("sector_concentration") or {}).get("line") or ""
+            ),
+            "no_add_codes": list(no_add_by_code),
+            "no_add": no_add_by_code,
+            "virtual_fill_counts": environment.get("virtual_fill_counts") or {},
+            "missing_codes": list(data_missing_by_code),
+            "missing": data_missing_by_code,
+        }
+
+    @staticmethod
+    def _report_diff_lines(previous: Optional[Dict], current: Dict) -> List[str]:
+        if not previous:
+            return ["首次快照：本条推送建立DIFF基线"]
+
+        lines: List[str] = []
+        previous_mode = str(previous.get("market_mode") or "")
+        current_mode = str(current.get("market_mode") or "")
+        if previous_mode != current_mode:
+            mode_names = {"attack": "进攻", "defend": "防守", "retreat": "撤退"}
+            lines.append(
+                f"模式变化: {mode_names.get(previous_mode, previous_mode)}"
+                f" → {mode_names.get(current_mode, current_mode)}"
+            )
+
+        previous_stocks = previous.get("stocks") or {}
+        current_stocks = current.get("stocks") or {}
+        state_changed: List[str] = []
+        for code, state in current_stocks.items():
+            old = previous_stocks.get(code)
+            previous_event_id = str((old or {}).get("event_id") or "")
+            current_event_id = str(state.get("event_id") or "")
+            if old is None:
+                action = {
+                    "entry": "新触发",
+                    "exit": "新卖出",
+                    "observation": "新增观察",
+                }.get(str(state.get("role")), "新增事件")
+                lines.append(
+                    f"{action}: {state.get('identity') or code} "
+                    f"{state.get('entry_type') or ''} {state.get('status_label') or ''}".strip()
+                )
+            elif current_event_id and current_event_id != previous_event_id:
+                lines.append(
+                    f"新触发: {state.get('identity') or code} "
+                    f"{state.get('entry_type') or ''} "
+                    f"{state.get('status_label') or ''}".strip()
+                )
+                if previous_event_id:
+                    lines.append(
+                        f"旧事件退出: {state.get('identity') or code}"
+                    )
+            elif (
+                str(old.get("event_id") or "") != str(state.get("event_id") or "")
+                or str(old.get("status") or "") != str(state.get("status") or "")
+                or str(old.get("status_label") or "") != str(state.get("status_label") or "")
+                or str(old.get("role") or "") != str(state.get("role") or "")
+            ):
+                old_label = str(old.get("status_label") or old.get("status") or "无")
+                current_label = str(state.get("status_label") or state.get("status") or "无")
+                if old_label != current_label:
+                    state_changed.append(
+                        f"状态变化: {state.get('identity') or code} "
+                        f"{old_label} → {current_label}"
+                    )
+                elif old.get("role") != state.get("role"):
+                    state_changed.append(
+                        f"角色变化: {state.get('identity') or code} "
+                        f"{old.get('role') or '无'} → {state.get('role') or '无'}"
+                    )
+        lines.extend(state_changed)
+        for code, state in previous_stocks.items():
+            if code not in current_stocks:
+                lines.append(f"退出: {state.get('identity') or code}")
+
+        previous_gate = set(previous.get("gate_codes") or [])
+        current_gate = set(current.get("gate_codes") or [])
+        current_gate_identity = current.get("gate_identity") or {}
+        previous_gate_identity = previous.get("gate_identity") or {}
+        if not previous_gate_identity:
+            for name, code in re.findall(
+                r"([A-Za-z0-9\u4e00-\u9fff]+)\((\d{6})\)",
+                str(previous.get("gate_detail") or ""),
+            ):
+                previous_gate_identity[code] = f"{name}({code})"
+        for code in current_gate - previous_gate:
+            identity = (
+                current_gate_identity.get(code)
+                or (current_stocks.get(code) or {}).get("identity")
+                or code
+            )
+            lines.append(f"买入提示新增: {identity}")
+        for code in previous_gate - current_gate:
+            identity = (
+                previous_gate_identity.get(code)
+                or (previous_stocks.get(code) or {}).get("identity")
+                or code
+            )
+            lines.append(f"买入提示解除: {identity}")
+
+        previous_no_add = set(previous.get("no_add_codes") or [])
+        current_no_add = set(current.get("no_add_codes") or [])
+        for code in current_no_add - previous_no_add:
+            lines.append(f"不加仓新增: {code}")
+        for code in previous_no_add - current_no_add:
+            lines.append(f"不加仓消失: {code}")
+
+        previous_missing = set(previous.get("missing_codes") or [])
+        current_missing = set(current.get("missing_codes") or [])
+        for code in current_missing - previous_missing:
+            lines.append(f"数据缺失新增: {code}")
+        for code in previous_missing - current_missing:
+            lines.append(f"数据缺失恢复: {code}")
+
+        previous_sector = str(previous.get("sector_concentration") or "")
+        current_sector = str(current.get("sector_concentration") or "")
+        if previous_sector != current_sector:
+            lines.append(f"板块提示变化: {current_sector or '无'}")
+        return lines
+
+    @staticmethod
+    def _load_report_snapshot() -> Optional[Dict]:
+        try:
+            from ..data_layer.data_cache import get_data_cache
+            return get_data_cache().get(PushPlus._REPORT_SNAPSHOT_KEY)
+        except Exception as exc:
+            logger.warning("读取上一推送快照失败: %s", exc)
+            return None
+
+    @staticmethod
+    def _save_report_snapshot(snapshot: Dict) -> None:
+        try:
+            from ..data_layer.data_cache import get_data_cache
+            get_data_cache().set(PushPlus._REPORT_SNAPSHOT_KEY, snapshot, ttl_hours=24 * 14)
+        except Exception as exc:
+            logger.warning("保存推送快照失败: %s", exc)
 
     def send_daily_review(self, review: str) -> bool:
         """发送盘后复盘"""

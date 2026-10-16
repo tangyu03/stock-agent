@@ -17,6 +17,10 @@ import logging
 import logging.handlers
 from pathlib import Path
 
+from src.config_env import load_project_env
+
+load_project_env()
+
 if sys.platform != "win32":
     # Linux/macOS：显式指定中国时区（POSIX TZ 格式需经 tzset 生效）
     os.environ.setdefault("TZ", "Asia/Shanghai")

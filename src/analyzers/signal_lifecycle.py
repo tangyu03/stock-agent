@@ -748,6 +748,29 @@ class SignalLifecycle:
     ) -> SignalEvent:
         hyp = hypothesis or {}
         born = born or date.today()
+
+        # 盘中引擎会多轮运行；同一交易日、同一策略不允许反复建档。
+        # 否则同一天会把一次判断拆成多个事件，再入场额度被重复计数。
+        same_day_active = [
+            e for e in self.get_active_events(stock_code)
+            if e.entry_type == entry_type
+        ]
+        if same_day_active:
+            return same_day_active[-1]
+
+        same_day_terminal = [
+            e for e in self.get_prior_events(stock_code)
+            if e.entry_type == entry_type
+            and e.born_date == born.isoformat()
+        ]
+        if same_day_terminal:
+            existing = same_day_terminal[-1]
+            logger.debug(
+                "同日同策略事件已存在，复用 %s（不重复建档）",
+                existing.event_id,
+            )
+            return existing
+
         event = SignalEvent(
             event_id=event_id or f"evt-{datetime.now().strftime('%Y%m%d%H%M%S')}-{stock_code}-{entry_type}",
             stock_code=stock_code,
@@ -806,6 +829,24 @@ class SignalLifecycle:
             trigger_data=trigger_data,
             rule_entry=rule_entry,
         )
+
+    def mark_scheduler_rejected(
+        self, event_id: str, stock_code: str, entry_type: str, reason: str,
+    ) -> bool:
+        """调度闸门拒绝后撤单。
+
+        用 expired 而不是 invalidated：候选没有进入订单流，不应被
+        计入再入场失败次数；但仍必须离开活跃事件表，避免幽灵挂单。
+        """
+        for event in self.get_active_events(stock_code, entry_type):
+            if event.event_id != event_id or event.status != "valid":
+                continue
+            self.store.update_status(
+                event_id, "expired", reason,
+                rule_entry="R5.1调度拒绝撤单",
+            )
+            return True
+        return False
 
     def expire(self, event_id: str, trigger_data: Optional[Dict] = None) -> None:
         self.store.update_status(
@@ -1497,38 +1538,39 @@ class SignalLifecycle:
 # 纪律（反方对冲，必须写进实现）：
 #   - 再入场必须是新事件（创新高或收复 Z 线，且重新通过完整触发条件），
 #     绝不基于“已经亏了所以补回”的沉没成本逻辑；
-#   - 同一标的再入场次数设上限（默认 2 次）。
+#   - 历史失败次数仅审计提示，不设再入场上限。
 # 作废条件：若统计显示再入场的期望值显著低于首入场
 # （二次突破失败率 >70%），收缩为仅创新高可再入。
 # ============================================================
 
-def reentry_exhausted(stock_code: str, max_reentries: int = 2, store=None) -> bool:
-    """再入场次数是否用尽（真实失败终态 ≥ 上限 → 转入长期观察）。
+def reentry_exhausted(stock_code: str, max_reentries: int = 0, store=None) -> bool:
+    """兼容保留；再入场不再设置次数上限，因此恒为 False。
 
     triggered 是已成交事件，不能算“已结束尝试”；expired 是未成交，
     也不具备“止损/失效后再走强”的再入场语义。
     """
-    prior = (store or InMemorySignalEventStore()).get_prior_events(stock_code)
-    return len([e for e in prior if e.status in TERMINAL_REENTRY_STATUSES]) >= max_reentries
+    del stock_code, max_reentries, store
+    return False
 
 
-def reentry_usage(stock_code: str, max_reentries: int = 2, store=None) -> Dict:
-    """Return auditable reentry quota usage without deciding whether to block."""
+def reentry_usage(stock_code: str, max_reentries: int = 0, store=None) -> Dict:
+    """Return auditable historical attempts without a quota."""
     prior = (store or InMemorySignalEventStore()).get_prior_events(stock_code)
     used = len([e for e in prior if e.status in TERMINAL_REENTRY_STATUSES])
-    return {"used": used, "remaining": max(0, max_reentries - used)}
+    del max_reentries
+    return {"used": used, "remaining": None}
 
 
 def reentry_status(
     stock_code: str,
     current_price: float = 0,
     recent_high: float = 0,
-    max_reentries: int = 2,
+    max_reentries: int = 0,
     new_high_ratio: float = 0.99,
     store=None,
     prior_high: float = 0,
 ) -> Dict:
-    """再入场待命判定（观察卡/待命队列用）。
+    """再入场待命判定（观察卡/待命队列用）；历史失败只计数，不限制。
 
     【Phase5 回炉】创新高判定锚 prior_high（近20日高剔除当日，
     参数为 0 时回退 recent_high）：盘中创新高但收盘回落 >1% 的
@@ -1536,17 +1578,18 @@ def reentry_status(
 
     返回 {
       "standby": bool,          # 是否进入再入场待命队列
-      "reason": str,            # 创新高 / 收复Z线 / 次数用尽 / 无历史事件
+      "reason": str,            # 创新高 / 收复Z线 / 额度提示 / 无历史事件
       "attempts": int,          # 已用尝试次数（历史 triggered/invalidated 数）
-      "remaining": int,         # 剩余再入场次数
+      "remaining": None,        # 已废弃：不再限制次数
       "note": str,              # 展示文案
     }
     """
     prior = (store or InMemorySignalEventStore()).get_prior_events(stock_code)
+    del max_reentries
     prior_attempts = len([e for e in prior if e.status in TERMINAL_REENTRY_STATUSES])
-    prior_remaining = max(0, max_reentries - prior_attempts)
+    prior_remaining = None
     usage_note = (
-        f"再入场额度已用{prior_attempts}/{max_reentries}，剩余{prior_remaining}次"
+        f"历史失败尝试{prior_attempts}次；再入场不限次数"
     )
 
     # 写入口唯一：任何活跃事件都由事件库跟踪，队列不得覆盖或复制它。
@@ -1569,8 +1612,6 @@ def reentry_status(
 
     # 再入场只服务止损/失效终态；triggered/expired 不是可再入语义。
     attempts = len([e for e in prior if e.status in TERMINAL_REENTRY_STATUSES])
-    remaining = max(0, max_reentries - attempts)
-
     if not prior or attempts == 0:
         return {
             "standby": False,
@@ -1582,19 +1623,6 @@ def reentry_status(
                 "正常信号流程覆盖该标的" if prior else usage_note
             ),
         }
-    if remaining <= 0:
-        terminal_events = [e for e in prior if e.status in TERMINAL_REENTRY_STATUSES]
-        last = terminal_events[-1]
-        return {
-            "standby": False, "reason": "次数用尽", "attempts": attempts,
-            "event_id": last.event_id if attempts else "",
-            "remaining": 0,
-            "note": (
-                f"{usage_note}；本标的转入长期观察，"
-                "需人工重置或更新口径后才会重新生成信号"
-            ),
-        }
-
     terminal_events = [e for e in prior if e.status in TERMINAL_REENTRY_STATUSES]
     last = terminal_events[-1]
     # 新事件判定一：创新高（锚前期高点，剔除当日）

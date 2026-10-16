@@ -202,6 +202,10 @@ def schedule_live_signals(
         'buy_ev_gate': [],
         'buy_strategy_offline': [],
     }
+    warnings = {
+        'buy_score_gate': [],
+        'buy_ev_gate': [],
+    }
     holdings = holdings or []
     held_map = {}
     for h in holdings:
@@ -275,36 +279,47 @@ def schedule_live_signals(
             confidence_score = int(plan.get('confidence_score', -1))
         except (TypeError, ValueError):
             confidence_score = -1
+        gate_notes = []
+        gate_note_text = ' | '.join(gate_notes)
         if not plan.get('ev_gate') and 0 <= confidence_score <= 1:
             gate_reasons = list(plan.get('confidence_details') or [])
             gate_reasons.extend(plan.get('rejection_reasons') or [])
             gate_reason_text = '；'.join(str(item) for item in gate_reasons if str(item))
             gate_reason = (
-                f"评分闸门: 综合评分{confidence_score}/{plan.get('applicable_score', '?')}≤1，"
-                "已触发未放行"
+                f"评分提示: 综合评分{confidence_score}/{plan.get('applicable_score', '?')}，"
+                "策略已命中，按规则调度"
             )
             if gate_reason_text:
                 gate_reason += f" | {gate_reason_text}"
-            skipped['buy_score_gate'].append({
+            gate_notes.append(gate_reason)
+            warnings['buy_score_gate'].append({
                 'stock_code': code,
                 'stock_name': sig.get('stock_name', code),
                 'entry_type': entry_type,
                 'reason': gate_reason,
+                'confidence_details': list(plan.get('confidence_details') or []),
             })
             stats['buy_score_gate'] += 1
-            continue
 
-        # 【评分层→决策层】期望值闸门（防御纵深：0/6 低置信/EV<0 不进调度）
+        # 【评分层→决策层】期望值提示：低置信/EV<0 不拦截，只显著提示。
         ev_verdict = plan.get('ev_gate') or {}
         if ev_verdict.get('rejected'):
-            skipped['buy_ev_gate'].append({
+            gate_reason = str(ev_verdict.get('reason') or '期望值闸门提示')
+            gate_notes.append(f"EV提示: {gate_reason}")
+            warnings['buy_ev_gate'].append({
                 'stock_code': code,
                 'stock_name': sig.get('stock_name', code),
                 'entry_type': entry_type,
-                'reason': str(ev_verdict.get('reason') or '期望值闸门拒绝'),
+                'reason': gate_reason,
+                'confidence_details': list(plan.get('confidence_details') or []),
+                'score': ev_verdict.get('score'),
+                'applicable_score': plan.get('applicable_score', 6),
+                'min_confidence_score': ev_verdict.get('min_confidence_score'),
+                'rrr_low': ev_verdict.get('rrr_low'),
+                'breakeven_win_rate': ev_verdict.get('breakeven_win_rate'),
+                'ev': ev_verdict.get('ev'),
             })
             stats['buy_ev_gate'] += 1
-            continue
 
         # 【一】假说门（防御纵深：timing_engine 已在生成阶段拒绝，此处兜底）
         if plan.get('execute') is False or plan.get('hypothesis_rejected'):
@@ -358,6 +373,7 @@ def schedule_live_signals(
                 schedule_note=(
                     f'持仓{int(held.get("shares") or 0)}股@{held.get("cost_price", 0):.2f} | '
                     + ('板块退潮，禁止加仓 | ' if no_add else '')
+                    + (f'{gate_note_text} | ' if gate_note_text else '')
                     + f'买入事件对持仓者=加仓评估（不是重新买入）| '
                     f'假说: {hypothesis.get("sentence", "")}'
                 ),
@@ -451,6 +467,8 @@ def schedule_live_signals(
             audience='empty',
             hypothesis=hypothesis,
             schedule_note=(
+                (f'{gate_note_text} | ' if gate_note_text else '')
+                +
                 f'基准{benchmark_price:.2f} | RRR{rrr_low:.2f} | '
                 f'Z认错{hypothesis.get("z", 0) or sig.get("stop_loss", 0):.2f} | '
                 f'产业系数{industry_multiplier:.2f} | '
@@ -481,6 +499,7 @@ def schedule_live_signals(
         'sell': scheduled_sells,
         'position_advice': position_advices,
         'skipped': skipped,
+        'warnings': warnings,
         'stats': stats,
     }
 
@@ -543,6 +562,20 @@ def format_scheduled_summary(scheduled: Dict[str, Any]) -> str:
         lines.append("⛔ 策略下线过滤:")
         for r in offline_skipped:
             lines.append(f"  {r['stock_code']} {r['stock_name']} | {r['entry_type']}: {r['reason']}")
+        lines.append("")
+
+    score_warnings = (scheduled.get('warnings') or {}).get('buy_score_gate') or []
+    if score_warnings:
+        lines.append("⚠️ 评分提示（逐条，不拦截）:")
+        for r in score_warnings:
+            lines.append(f"  {r['stock_code']} {r['stock_name']} | {r['entry_type']}: {r['reason'][:180]}")
+        lines.append("")
+
+    ev_warnings = (scheduled.get('warnings') or {}).get('buy_ev_gate') or []
+    if ev_warnings:
+        lines.append("⚠️ 期望值提示（逐条，不拦截）:")
+        for r in ev_warnings:
+            lines.append(f"  {r['stock_code']} {r['stock_name']} | {r['entry_type']}: {r['reason'][:180]}")
         lines.append("")
 
     return '\n'.join(lines)

@@ -1,0 +1,109 @@
+﻿*** Begin Patch
+*** Update File: src/push/pushplus.py
+@@
+-            if not state.get("role") or role_priority[role] < role_priority[
+-                role_priority.get(state.get("role"), 2)
+-            ]:
++            if not state.get("role") or role_priority[role] < role_priority.get(
++                state.get("role"), 2
++            ):
+*** Update File: tests/test_p218_pushplus_chunking.py
+@@
+     monkeypatch.setattr(PushPlus, "send", _send)
++    monkeypatch.setattr(PushPlus, "_load_report_snapshot", lambda: None)
++    monkeypatch.setattr(PushPlus, "_save_report_snapshot", lambda snapshot: None)
+     PushPlus.__new__(PushPlus).send_intraday_report(
+@@
+     monkeypatch.setattr(event_tracker, "collect_in_flight_events", lambda **kwargs: [])
++    monkeypatch.setattr(PushPlus, "_load_report_snapshot", lambda: None)
++    monkeypatch.setattr(PushPlus, "_save_report_snapshot", lambda snapshot: None)
+     PushPlus.__new__(PushPlus).send_intraday_report(
+@@
+     assert positions == sorted(positions)
+     assert content.index("#t-300394") < content.index("③ 相对上一推送 DIFF")
+     assert "综合评分1/6≤1" in content
++
++
++def test_send_intraday_report_diffs_against_last_snapshot(monkeypatch):
++    from src.push.pushplus import PushPlus
++
++    captured = {}
++    saved = []
++    previous = {
++        "market_mode": "attack",
++        "market_score": 6.0,
++        "stocks": {
++            "688008": {
++                "identity": "澜起科技(688008)",
++                "role": "entry",
++                "event_id": "evt-old",
++                "entry_type": "恐慌抄底",
++                "status": "valid",
++                "status_label": "挂单中",
++                "active": True,
++            },
++            "301666": {
++                "identity": "大普微(301666)",
++                "role": "entry",
++                "event_id": "evt-dapu",
++                "entry_type": "确认追强",
++                "status": "filled",
++                "status_label": "已触发",
++                "active": True,
++            },
++        },
++        "gate_codes": ["603061"],
++        "no_add_codes": [],
++        "missing_codes": [],
++        "sector_concentration": "",
++    }
++    monkeypatch.setattr(PushPlus, "send", _capture_send(captured))
++    monkeypatch.setattr(PushPlus, "_load_report_snapshot", lambda: previous)
++    monkeypatch.setattr(PushPlus, "_save_report_snapshot", lambda snapshot: saved.append(snapshot))
++    PushPlus.__new__(PushPlus).send_intraday_report(
++        {
++            "market_mode": "defend",
++            "market_score": 5.0,
++            "score_gate": {"count": 1, "detail": "天孚通信(300394) | 评分闸门"},
++            "data_missing": [{
++                "stock_name": "天孚通信", "stock_code": "300394", "reason": "现价未取到",
++            }],
++        },
++        entries=[{
++            "stock_name": "芯原股份", "stock_code": "688008",
++            "entry_type": "回踩MA5", "event_id": "evt-new",
++        }],
++    )
++
++    diff = captured["content"][captured["content"].index("③ 相对上一推送 DIFF"):
++        captured["content"].index("④ 附录：环境与信号全文")]
++    assert "模式变化: 进攻 → 防守" in diff
++    assert "新触发: 芯原股份(688008) 回踩MA5" in diff
++    assert "状态变化: 澜起科技(688008) 挂单中 → 无" in diff
++    assert "拦截新增: 300394" in diff
++    assert "拦截消失: 603061" in diff
++    assert "数据缺失新增: 300394" in diff
++    assert "退出: 大普微(301666)" in diff
++    assert saved and saved[0]["stocks"]["688008"]["event_id"] == "evt-new"
++
++
++def test_failed_send_does_not_replace_last_snapshot(monkeypatch):
++    from src.push.pushplus import PushPlus
++
++    saved = []
++    monkeypatch.setattr(PushPlus, "send", lambda self, title, content, level="常规": False)
++    monkeypatch.setattr(PushPlus, "_load_report_snapshot", lambda: None)
++    monkeypatch.setattr(PushPlus, "_save_report_snapshot", lambda snapshot: saved.append(snapshot))
++    PushPlus.__new__(PushPlus).send_intraday_report({}, entries=[{
++        "stock_name": "芯原股份", "stock_code": "688008",
++    }])
++
++    assert saved == []
++
++
++def _capture_send(captured):
++    def _send(self, title, content, level="常规"):
++        captured.update({"title": title, "content": content, "level": level})
++        return True
++    return _send
+*** End Patch

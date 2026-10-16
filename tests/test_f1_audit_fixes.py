@@ -58,6 +58,26 @@ def test_fund_display_includes_coverage_and_scope():
     assert "覆盖4/4" in text
 
 
+def test_top10_unavailable_status_is_disclosed():
+    from src.push.templates import _institutional
+
+    text = _institutional({
+        "institutional_holding": {
+            "vote_score": 0, "vote_label": "资金中性",
+            "votes": {},
+            "vote_freshness": {},
+            "top10_institutional_ratio": {
+                "available": False,
+                "status": "latest_query_failed_previous_empty",
+                "latest": None,
+                "previous": None,
+            },
+        },
+    })
+
+    assert "前十大机构数据不可用(最新期接口异常,上期空)" in text
+
+
 def test_technical_score_detail_sums_to_score():
     from src.push.templates import _tech
 

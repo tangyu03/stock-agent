@@ -299,6 +299,29 @@ class TestVoteWeights:
         assert "主力" in text and "股东" in text
 
 
+class TestBJMainForceSource:
+    def test_bj_stock_uses_fund_flow_sources_instead_of_static_na(self, monkeypatch):
+        """920045 实测东财有资金流；不能用市场前缀直接判 N/A。"""
+        from src.data_layer import iwencai_api
+        flows = [-46_400_000.0, -5_100_000.0, -2_800_000.0, -2_400_000.0, -3_100_000.0]
+
+        def fake_query(code, call_type="normal"):
+            if call_type == "normal":
+                return None
+            return {
+                "net_flows_5d": flows,
+                "super_large_flows_5d": [],
+                "large_flows_5d": [],
+            }
+
+        monkeypatch.setattr(iwencai_api, "query_stock_fund_flow", fake_query)
+        result = _inst._fetch_main_force_flow("920045")
+
+        assert result["vote"] == -1
+        assert "5日累计" in result["detail"]
+        assert "北交所数据源未覆盖" not in result["detail"]
+
+
 # ============================================================
 # 4. 观察卡七问：基本面行（含数据口径）
 # ============================================================
@@ -440,7 +463,7 @@ class TestTop10HolderEmptyPeriodResilience:
 
         fake_akshare = types.ModuleType("akshare")
 
-        def _free_top_10(*, symbol: str, date: str):
+        def _free_top_10(*, symbol: str, date: str, **kwargs):
             calls.append((symbol, date))
             if date == latest_date:
                 raise ValueError("Length mismatch")
@@ -464,3 +487,79 @@ class TestTop10HolderEmptyPeriodResilience:
         assert result["previous"]["ratio"] == 3.5
         assert result["previous"]["rows"] == 1
         assert result["change_points"] is None
+
+    def test_latest_failure_with_empty_previous_is_not_real_fund_vote(self, monkeypatch):
+        latest_date, prev_date = _inst._latest_report_dates()
+        fake_akshare = types.ModuleType("akshare")
+
+        def _free_top_10(*, symbol: str, date: str, **kwargs):
+            if date == latest_date:
+                raise ValueError("Length mismatch")
+            return pd.DataFrame()
+
+        fake_akshare.stock_gdfx_free_top_10_em = _free_top_10
+        monkeypatch.setitem(sys.modules, "akshare", fake_akshare)
+        def _fake_call(func, *args, retries: int = 0, timeout: float = 15.0, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(_inst, "call_ak_with_retry", _fake_call)
+
+        result = _inst._fetch_top10_institutional_ratio("301666")
+
+        assert result["available"] is False
+        assert result["status"] == "latest_query_failed_previous_empty"
+        assert result["latest_status"] == "query_failed"
+        assert result["previous_status"] == "empty"
+        assert result["latest"] is None
+        assert result["previous"] is None
+
+    def test_latest_empty_with_previous_ok_is_disclosed(self, monkeypatch):
+        latest_date, prev_date = _inst._latest_report_dates()
+        fake_akshare = types.ModuleType("akshare")
+
+        def _free_top_10(*, symbol: str, date: str, **kwargs):
+            if date == latest_date:
+                return pd.DataFrame()
+            return pd.DataFrame({
+                "股东名称": ["香港中央结算有限公司"],
+                "股东性质": ["香港中央结算"],
+                "占总流通股本持股比例": [3.5],
+            })
+
+        fake_akshare.stock_gdfx_free_top_10_em = _free_top_10
+        monkeypatch.setitem(sys.modules, "akshare", fake_akshare)
+        monkeypatch.setattr(
+            _inst, "call_ak_with_retry",
+            lambda func, *args, **kwargs: func(*args, **kwargs),
+        )
+        result = _inst._fetch_top10_institutional_ratio("603061")
+
+        assert result["available"] is True
+        assert result["status"] == "latest_empty_previous_ok"
+        assert result["latest_status"] == "empty"
+        assert result["previous_status"] == "ok"
+        assert result["change_points"] is None
+
+    def test_latest_schema_changed_with_previous_ok_is_disclosed(self, monkeypatch):
+        latest_date, prev_date = _inst._latest_report_dates()
+        fake_akshare = types.ModuleType("akshare")
+
+        def _free_top_10(*, symbol: str, date: str, **kwargs):
+            if date == latest_date:
+                return pd.DataFrame({"wrong": [1]})
+            return pd.DataFrame({
+                "股东名称": ["香港中央结算有限公司"],
+                "股东性质": ["香港中央结算"],
+                "占总流通股本持股比例": [3.5],
+            })
+
+        fake_akshare.stock_gdfx_free_top_10_em = _free_top_10
+        monkeypatch.setitem(sys.modules, "akshare", fake_akshare)
+        monkeypatch.setattr(
+            _inst, "call_ak_with_retry",
+            lambda func, *args, **kwargs: func(*args, **kwargs),
+        )
+        result = _inst._fetch_top10_institutional_ratio("603061")
+
+        assert result["available"] is True
+        assert result["status"] == "latest_schema_changed_previous_ok"

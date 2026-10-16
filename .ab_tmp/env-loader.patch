@@ -1,0 +1,99 @@
+﻿*** Begin Patch
+*** Add File: src/config_env.py
++"""加载项目本地环境变量，支持 .env 与 .env.local。"""
++from pathlib import Path
++import os
++from typing import Iterable, Optional
++
++
++def _parse_env_file(path: Path) -> dict[str, str]:
++    values: dict[str, str] = {}
++    if not path.is_file():
++        return values
++    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
++        line = raw_line.strip()
++        if not line or line.startswith("#"):
++            continue
++        if line.startswith("export "):
++            line = line[len("export "):].strip()
++        if "=" not in line:
++            continue
++        key, value = line.split("=", 1)
++        key = key.strip()
++        value = value.strip()
++        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
++            value = value[1:-1]
++        if key:
++            values[key] = value
++    return values
++
++
++def load_project_env(
++    project_root: Optional[Path] = None,
++    filenames: Iterable[str] = (".env", ".env.local"),
++) -> bool:
++    """加载缺失的环境变量；已存在的非空变量不会被覆盖。"""
++    root = project_root or Path(__file__).parent.parent
++    loaded = False
++    for filename in filenames:
++        for key, value in _parse_env_file(root / filename).items():
++            if value and not os.environ.get(key):
++                os.environ[key] = value
++                loaded = True
++    return loaded
+*** Update File: src/data_layer/iwencai_api.py
+@@
+ import urllib.error
+ import urllib.request
+ from typing import Any, Dict, List, Optional
+ 
++from ..config_env import load_project_env
++
+ logger = logging.getLogger(__name__)
+@@
+-IWENCAI_BASE_URL = os.environ.get("IWENCAI_BASE_URL", "https://openapi.iwencai.com")
++load_project_env()
++IWENCAI_BASE_URL = os.environ.get("IWENCAI_BASE_URL", "https://openapi.iwencai.com")
+*** Update File: src/main.py
+@@
+ from pathlib import Path
+ 
++from src.config_env import load_project_env
++
++load_project_env()
++
+ if sys.platform != "win32":
+*** Add File: .env.example
++# 复制为 .env 后填写真实值。不要把 .env 提交到 Git。
++IWENCAI_API_KEY=
++IWENCAI_BASE_URL=https://openapi.iwencai.com
+*** Add File: tests/test_config_env.py
++from pathlib import Path
++
++from src.config_env import load_project_env
++
++
++def test_load_project_env_prefers_local_override(tmp_path: Path, monkeypatch):
++    (tmp_path / ".env").write_text('IWENCAI_API_KEY="base"\n', encoding="utf-8")
++    (tmp_path / ".env.local").write_text(
++        "IWENCAI_API_KEY=local\n", encoding="utf-8"
++    )
++    monkeypatch.delenv("IWENCAI_API_KEY", raising=False)
++
++    assert load_project_env(project_root=tmp_path) is True
++    import os
++
++    assert os.environ["IWENCAI_API_KEY"] == "local"
++
++
++def test_load_project_env_does_not_override_nonempty_value(tmp_path: Path):
++    (tmp_path / ".env").write_text("IWENCAI_API_KEY=from-file\n", encoding="utf-8")
++    import os
++
++    os.environ["IWENCAI_API_KEY"] = "from-process"
++    try:
++        assert load_project_env(project_root=tmp_path) is False
++        assert os.environ["IWENCAI_API_KEY"] == "from-process"
++    finally:
++        del os.environ["IWENCAI_API_KEY"]
+*** End Patch

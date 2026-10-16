@@ -1,0 +1,13 @@
+import sqlite3
+
+con = sqlite3.connect("data/stock_agent.db")
+con.row_factory = sqlite3.Row
+cur = con.cursor()
+print([row[1] for row in cur.execute("pragma table_info(signal_rejections)")])
+rows = cur.execute(
+    "select * from signal_rejections where reason like ? "
+    "order by created_at desc limit 20",
+    ("%本标的转入长期观察%",),
+).fetchall()
+for row in rows:
+    print(dict(row))

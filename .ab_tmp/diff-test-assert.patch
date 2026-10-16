@@ -1,0 +1,6 @@
+﻿*** Begin Patch
+*** Update File: tests/test_p218_pushplus_chunking.py
+@@
+-    assert "状态变化: 澜起科技(688008) 挂单中 → 无" in diff
++    assert "状态变化: 澜起科技(688008) 挂单中 → 无" not in diff
+*** End Patch

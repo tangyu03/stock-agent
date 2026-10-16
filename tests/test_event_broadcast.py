@@ -53,7 +53,7 @@ class TestInFlightBroadcast:
             ])
         text = render_in_flight_events(rows)
 
-        assert "在飞事件 1（活跃1/完结0）" in text
+        assert "现役事件 1｜完结 0" in text
         assert "蘅东光通讯 确认追强 已成交" in text
         assert "#evt-000001" not in text
         assert "#t-000001" in text
@@ -67,6 +67,35 @@ class TestInFlightBroadcast:
 
     def test_render_empty_is_honest(self):
         assert "今日无合格事件" in render_in_flight_events([])
+
+    def test_completed_rows_render_one_per_line(self):
+        rows = collect_in_flight_events(
+            as_of=date(2026, 9, 8), events=[
+                self._event("000001", "完结股一", "invalidated",
+                            invalid_reason="回踩失败已撤单"),
+                self._event("000002", "完结股二", "invalidated",
+                            invalid_reason="回踩失败已撤单"),
+            ])
+        text = render_in_flight_events(rows)
+
+        assert "已撤单2：" in text
+        assert "&nbsp;&nbsp;&nbsp;&nbsp;完结股一#t-000001" in text
+        assert "&nbsp;&nbsp;&nbsp;&nbsp;完结股二#t-000002" in text
+
+    def test_render_compacts_completed_rows_and_keeps_active_rows_detailed(self):
+        rows = collect_in_flight_events(
+            as_of=date(2026, 9, 8), events=[
+                self._event("000001", "现役股", "valid", current_price=549.63),
+                self._event("000002", "完结股", "invalidated",
+                            invalid_reason="回踩失败已撤单"),
+            ])
+        text = render_in_flight_events(rows)
+
+        assert "现役事件 1｜完结 1" in text
+        assert "买544.14" in text
+        assert "已撤单1：" in text
+        assert "&nbsp;&nbsp;&nbsp;&nbsp;完结股#t-000002" in text
+        assert "完结股 买544.14" not in text
 
     def test_frozen_event_is_active_and_chase_abandon_is_closed(self):
         rows = collect_in_flight_events(
@@ -100,9 +129,9 @@ class TestInFlightBroadcast:
         ]
 
         text = render_in_flight_events(rows)
-        assert "在飞事件 1（活跃1/完结0）" in text
+        assert "现役事件 1｜完结 0" in text
         assert text.count("现价股") == 1
-        assert "轨迹: #0009-old已撤单" in text
+        assert "轨迹1: #0009-old" in text
 
     def test_semantically_identical_generated_rows_are_deduped(self):
         first = self._event("000010", "重复股", "invalidated",

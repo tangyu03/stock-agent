@@ -20,6 +20,59 @@ def test_multiple_signals_are_not_capped_by_count():
     assert "单次建议上限" not in summary
 
 
+def test_scheduler_summary_discloses_every_gate_rejection():
+    scheduled = {
+        "stats": {
+            "buy_executed": 0,
+            "entry_in": 2,
+            "buy_hypothesis_rejected": 0,
+            "buy_strategy_offline": 0,
+            "buy_skipped_low_confidence": 0,
+            "sell_executed": 0,
+            "sell_in": 0,
+            "sell_skipped_invalid_price": 0,
+            "position_advice": 0,
+        },
+        "warnings": {
+            "buy_score_gate": [{
+                "stock_code": "688008", "stock_name": "澜起科技",
+                "entry_type": "恐慌抄底", "reason": "评分提示: 1/6",
+            }],
+            "buy_ev_gate": [{
+                "stock_code": "688521", "stock_name": "芯原股份",
+                "entry_type": "恐慌抄底", "reason": "EV提示: RRR-0.30，负期望",
+            }],
+        },
+        "buy": [],
+        "sell": [],
+        "position_advice": [],
+        "skipped": {
+            "buy_no_budget": [],
+            "buy_dust_order": [],
+            "buy_low_confidence": [],
+            "buy_hypothesis_rejected": [],
+            "buy_score_gate": [{
+                "stock_code": "688008", "stock_name": "澜起科技",
+                "entry_type": "恐慌抄底", "reason": "评分闸门: 1/6≤1",
+            }],
+            "buy_ev_gate": [{
+                "stock_code": "688521", "stock_name": "芯原股份",
+                "entry_type": "恐慌抄底", "reason": "RRR-0.30，负期望",
+            }],
+            "buy_strategy_offline": [],
+        },
+    }
+
+    summary = format_scheduled_summary(scheduled)
+
+    assert "买入: 0/2" in summary
+    assert "评分提示（逐条，不拦截）" in summary
+    assert "688008 澜起科技" in summary
+    assert "期望值提示（逐条，不拦截）" in summary
+    assert "688521 芯原股份" in summary
+    assert "RRR-0.30" in summary
+
+
 def test_buy_signals_ignore_total_asset_budget():
     signals = [
         {

@@ -1,0 +1,45 @@
+﻿*** Begin Patch
+*** Update File: src/analyzers/signal_lifecycle.py
+@@
+     if remaining <= 0:
+         terminal_events = [e for e in prior if e.status in TERMINAL_REENTRY_STATUSES]
+         last = terminal_events[-1]
+         return {
+-            "standby": False, "reason": "次数用尽", "attempts": attempts,
++            "standby": False, "reason": "额度提示", "attempts": attempts,
+             "event_id": last.event_id if attempts else "",
+             "remaining": 0,
+             "note": (
+-                f"{usage_note}；本标的转入长期观察，"
+-                "需人工重置或更新口径后才会重新生成信号"
++                f"{usage_note}；不拦截新事件。完整触发条件成立后仍按新事件调度，"
++                "但推送会披露重复失败风险"
+             ),
+         }
+*** Update File: src/orchestrator/unified_engine.py
+@@
+-                elif status.get("reason") == "次数用尽":
++                elif status.get("reason") == "额度提示":
+                     diagnostics = status["note"] + "\n" + diagnostics
+*** Update File: src/push/templates.py
+@@
+-    if buy_text and buy_text != "无买入拦截明细":
+-        content += f"&nbsp;&nbsp;⑤拦截:{buy_text}<br/>"
++    if buy_text and buy_text != "无买入拦截明细":
++        content += f"&nbsp;&nbsp;⑤买入检查:{buy_text}<br/>"
+*** Update File: tests/test_reentry_cycle.py
+@@
+     def test_attempts_exhausted(self):
+-        """次数用尽：2 次尝试后 → 转入长期观察（真死刑）"""
++        """次数用尽：只做额度提示，不再长期拦截"""
+@@
+-        assert status["reason"] == "次数用尽"
++        assert status["reason"] == "额度提示"
+         assert "已用2/2，剩余0次" in status["note"]
+-        assert "转入长期观察" in status["note"]
++        assert "不拦截新事件" in status["note"]
+*** Update File: tests/test_signal_plan.py
+@@
+-    assert "⑤拦截:技术投票偏空" in rendered
++    assert "⑤买入检查:技术投票偏空" in rendered
+*** End Patch

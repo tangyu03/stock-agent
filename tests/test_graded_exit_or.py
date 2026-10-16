@@ -135,6 +135,12 @@ class TestStopClassGradedOR:
         tech["tech_signals"] = {
             "vote": "偏空", "vote_score": -1.5,
             "bollinger": {"position": "below"},     # medium 2
+            "vote_details": [
+                "趋势组:看空(×1.0) [MACD死叉+绿柱扩大]",
+                "动量组:中性(×1.0) [RSI弱势(38.0)(中性不投票)]",
+                "形态组:看多(×1.0) [K线看涨(加权80,最强s=90)]",
+                "量能组:看空(×1.0) [放量下跌-5.0%(接口量比1.40x)]",
+            ],
         }
         # 现价不破 Z：隔离"技术走弱"分级 OR 通道
         tech["current_price"] = 190.0
@@ -146,6 +152,9 @@ class TestStopClassGradedOR:
         assert len(weakness) == 1
         assert "分级OR·止损类" in weakness[0].reason
         assert "medium2/2" in weakness[0].reason
+        assert "趋势组:看空" in weakness[0].reason
+        assert "量能组:看空" in weakness[0].reason
+        assert "形态组:看多" in weakness[0].reason
 
     def test_medium1_alone_still_does_not_trigger(self):
         """medium 1/2（单一走弱信号）不触发——不是把弱信号也变成卖出指令"""

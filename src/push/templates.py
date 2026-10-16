@@ -510,6 +510,31 @@ def _institutional(data) -> str:
             change = top10.get("change_points")
             change_text = f"，变化{change:+.2f}pct" if change is not None else ""
             parts.append(f"前十大机构{latest_ratio:.2f}%{change_text}")
+        elif top10.get("available") is False or latest_ratio is None:
+            status = str(top10.get("status") or "unavailable")
+            status_text = {
+                "latest_query_failed_previous_empty": "最新期接口异常,上期空",
+                "query_failed": "接口异常",
+                "empty_both_periods": "两期均空",
+                "latest_empty_previous_ok": "最新期空,展示上期",
+                "latest_schema_changed_previous_ok": "最新期字段变动,展示上期",
+                "latest_query_failed_previous_ok": "最新期接口异常,展示上期",
+                "latest_unavailable_previous_ok": "最新期不可用,展示上期",
+                "latest_unavailable_previous_not_ok": "最新期不可用,上期也不可用",
+            }.get(status, status)
+            if (
+                status in (
+                    "latest_empty_previous_ok",
+                    "latest_schema_changed_previous_ok",
+                    "latest_query_failed_previous_ok",
+                    "latest_unavailable_previous_ok",
+                )
+                and prev.get("ratio") is not None
+            ):
+                prev_text = f"{float(prev['ratio']):.2f}%@{prev.get('date') or '日期未标注'}"
+                parts.append(f"前十大机构{status_text},上期{prev_text}")
+            else:
+                parts.append(f"前十大机构数据不可用({status_text})")
 
     # 【P2-2】资金拆层：慢变量（主力3日/股东报告期）单独计票，
     # 不参与当日价格投票——时间尺度错配不再污染当日判定。
@@ -703,31 +728,18 @@ def _timing_line(data) -> str:
     return "时机: " + " | ".join(parts)
 
 
-def _render_compact_observation_signal(data):
-    name = data.get("stock_name", "")
-    code = data.get("stock_code", "")
-    current_price = data.get("current_price")
-    change_pct = data.get("change_pct")
+def _render_seven_questions(data, buy_text=None, exit_text=None):
     tech = data.get("tech_signals") or {}
     categories = tech.get("category_votes") or {}
     note = str(data.get("note", "") or "")
-    buy_note, _, exit_note = note.partition(" | 卖出: ")
+    if buy_text is None:
+        buy_note, _, note_exit = note.partition(" | 卖出: ")
+        buy_text = buy_note.replace("买入: ", "", 1) or "无买入拦截明细"
+    if exit_text is None:
+        _, _, note_exit = note.partition(" | 卖出: ")
+        exit_text = note_exit or "无卖出检查明细"
 
-    title = f"观察 {name}({code})"
-    content = f"<b>观察 {name}({code})</b>"
-    if current_price:
-        price_line = f"现价{current_price:.2f}"
-        if change_pct is not None:
-            try:
-                price_line += f" {float(change_pct):+.2f}%"
-            except (TypeError, ValueError):
-                pass
-        content += f" {price_line}"
-    content += "<br/><br/>"
-    upgrade_reason = str(data.get("breadth_upgrade_reason") or "")
-    if data.get("breadth_upgrade") and upgrade_reason:
-        content += f"<b>宽度升级</b> {_esc(upgrade_reason)}<br/><br/>"
-
+    content = ""
     trend = categories.get("trend") or {}
     ma5 = data.get("ma5")
     ma10 = data.get("ma10")
@@ -750,15 +762,10 @@ def _render_compact_observation_signal(data):
     for pattern_line in render_volume_pattern(build_volume_pattern(data)):
         content += f"&nbsp;&nbsp;{_esc(pattern_line)}<br/>"
     content += f"&nbsp;&nbsp;④资金:{_esc(_institutional(data) or '无数据')}<br/>"
-    buy_text = _esc(buy_note.replace("买入: ", "", 1) or "无买入拦截明细")
     buy_text = buy_text.replace("\n", "<br/>&nbsp;&nbsp;&nbsp;&nbsp;")
-    candidate_reason = str(data.get("candidate_reason") or "")
-    if candidate_reason:
-        content += f"&nbsp;&nbsp;距触发:{_esc(candidate_reason)}<br/>"
-    exit_text = _esc(exit_note or "无卖出检查明细")
     exit_text = exit_text.replace("\n", "<br/>&nbsp;&nbsp;&nbsp;&nbsp;")
     if buy_text and buy_text != "无买入拦截明细":
-        content += f"&nbsp;&nbsp;⑤拦截:{buy_text}<br/>"
+        content += f"&nbsp;&nbsp;⑤买入检查:{buy_text}<br/>"
     if exit_text and exit_text != "无卖出检查明细":
         content += f"&nbsp;&nbsp;⑥风控:{exit_text}<br/>"
     fundamental_text = _fundamental_line(data)
@@ -769,6 +776,34 @@ def _render_compact_observation_signal(data):
     if driver_text:
         content += f"&nbsp;&nbsp;⑧驱动源:{_esc(driver_text)}<br/>"
     content += "<br/>"
+    return content
+
+
+def _render_compact_observation_signal(data):
+    name = data.get("stock_name", "")
+    code = data.get("stock_code", "")
+    current_price = data.get("current_price")
+    change_pct = data.get("change_pct")
+
+    title = f"观察 {name}({code})"
+    content = f"<b>观察 {name}({code})</b>"
+    if current_price:
+        price_line = f"现价{current_price:.2f}"
+        if change_pct is not None:
+            try:
+                price_line += f" {float(change_pct):+.2f}%"
+            except (TypeError, ValueError):
+                pass
+        content += f" {price_line}"
+    content += "<br/><br/>"
+    upgrade_reason = str(data.get("breadth_upgrade_reason") or "")
+    if data.get("breadth_upgrade") and upgrade_reason:
+        content += f"<b>宽度升级</b> {_esc(upgrade_reason)}<br/><br/>"
+
+    candidate_reason = str(data.get("candidate_reason") or "")
+    if candidate_reason:
+        content += f"&nbsp;&nbsp;距触发:{_esc(candidate_reason)}<br/>"
+    content += _render_seven_questions(data)
     return title, content
 
 
@@ -1229,18 +1264,11 @@ def render_exit_signal(data):
         content += f"<b>说明</b><br/>&nbsp;&nbsp;{_esc(note)}<br/>"
         return title, content
 
-    # 以下仅卖出信号显示
-    content += f"<b>技术面</b><br/>&nbsp;&nbsp;{_tech(data)}<br/><br/>"
-    # 机构持仓打分（4 数据源投票 + 具体数值）
-    inst_display = _institutional(data)
-    if inst_display:
-        content += f"<b>资金投票</b><br/>&nbsp;&nbsp;{inst_display}<br/><br/>"
-    bear = [p for p in data.get("kline_pattern",[]) if "看跌" in p.get("signal","") or "压力" in p.get("signal","")]
-    if bear:
-        content += "<b>看跌形态</b><br/>&nbsp;&nbsp;"
-        content += " ".join(f"{p['pattern']}({p['confidence']})" for p in bear) + "<br/><br/>"
-    # 退出逻辑
-    content += f"<b>退出逻辑</b><br/>&nbsp;&nbsp;类型:{et}<br/>&nbsp;&nbsp;理由:{_esc(reason).replace(chr(10), '<br/>&nbsp;&nbsp;')}<br/><br/>"
+    content += _render_seven_questions(
+        data,
+        buy_text="卖出信号不适用",
+        exit_text=f"类型:{et}｜理由:{reason}",
+    )
     content += f"<b>风控参数</b><br/>&nbsp;&nbsp;触发价:{_val(trigger)}<br/>"
     if stop_loss>0: content += f"&nbsp;&nbsp;止损:{_val(stop_loss)}<br/>"
     if is_urgent: content += "<br/><b>请立即执行卖出!</b>"
@@ -1464,6 +1492,9 @@ def render_environment_overview(data: Dict) -> str:
     # 板块态势
     sectors = data.get("sectors") or {}
     if sectors:
+        sector_risk = data.get("sector_snapshot_risk") or {}
+        if sector_risk:
+            content += f"&nbsp;&nbsp;⚠{_esc(str(sector_risk.get('line') or '板块快照风险'))}<br/>"
         mt = sectors.get("main_trend", [])
         rs = sectors.get("rotational", [])
         rt = sectors.get("retreating", [])
@@ -1476,18 +1507,26 @@ def render_environment_overview(data: Dict) -> str:
             if rt:
                 content += f"&nbsp;&nbsp;退潮:{','.join(rt)}<br/>"
 
+    resonance = data.get("sector_resonance")
+    if isinstance(resonance, dict) and resonance.get("line"):
+        content += f"&nbsp;&nbsp;共振:{_esc(str(resonance['line']))}<br/>"
+
     sector_changes = data.get("sector_changes") or {}
     if sector_changes:
         change_items = []
         for item in sector_changes.get("status_changes") or []:
             change_items.append(
-                f"{item.get('sector')}: {item.get('from_label')}→"
-                f"{item.get('to_label')}"
+                f"状态:{item.get('sector')} "
+                f"{item.get('from_label')}→{item.get('to_label')}"
             )
         for item in sector_changes.get("mapping_changes") or []:
+            from_label = str(item.get('from_label') or '')
+            to_label = str(item.get('to_label') or '')
+            change = f"{item.get('from_sector')}→{item.get('to_sector')}"
+            if from_label != to_label:
+                change += f"｜状态{from_label}→{to_label}"
             change_items.append(
-                f"{item.get('stock_name')}({item.get('stock_code')}): "
-                f"{item.get('from_label')}→{item.get('to_label')}"
+                f"映射:{item.get('stock_name')}({item.get('stock_code')}) {change}"
             )
         if change_items:
             content += "<br/><b>板块变更</b><br/>"
