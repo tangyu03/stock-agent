@@ -1617,7 +1617,7 @@ def reentry_status(
             "standby": False,
             "reason": "无已了结尝试" if prior else "无历史事件",
             "attempts": attempts,
-            "remaining": remaining,
+            "remaining": None,
             "note": (
                 "历史事件均为未入场形态（过期/撤单），无尝试可再入；"
                 "正常信号流程覆盖该标的" if prior else usage_note
@@ -1631,7 +1631,7 @@ def reentry_status(
         return {
             "standby": True, "reason": "创新高", "attempts": attempts,
             "event_id": last.event_id,
-            "remaining": remaining,
+            "remaining": None,
             "note": (
                 f"【再入场待命·头部】第{attempts}次尝试已结束("
                 f"{last.entry_type} {last.born_date}，{display_status(last.status)})；"
@@ -1647,7 +1647,7 @@ def reentry_status(
         return {
             "standby": True, "reason": "收复Z线", "attempts": attempts,
             "event_id": last.event_id,
-            "remaining": remaining,
+            "remaining": None,
             "note": (
                 f"【再入场待命】第{attempts}次尝试已结束("
                 f"{last.entry_type} {last.born_date}，{display_status(last.status)})；"
@@ -1659,7 +1659,7 @@ def reentry_status(
     return {
             "standby": False, "reason": "新事件未成立", "attempts": attempts,
             "event_id": last.event_id,
-        "remaining": remaining,
+        "remaining": None,
         "note": (
             f"上次尝试{last.born_date}已结束({display_status(last.status)})；"
             "创新高/收复Z线均未成立，再入场条件未激活；"

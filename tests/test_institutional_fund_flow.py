@@ -1,4 +1,4 @@
-import time
+﻿import time
 
 import importlib
 import akshare
@@ -225,6 +225,10 @@ def test_bse_missing_data_neutralizes_bullish_votes(monkeypatch):
         lambda code: {"vote": 1, "detail": "bullish", "raw": {}},
     )
     monkeypatch.setattr(
+        inst, "_fetch_main_force_flow",
+        lambda code: {"vote": 1, "detail": "bullish", "raw": {}},
+    )
+    monkeypatch.setattr(
         inst, "_fetch_shareholder_count",
         lambda code: {"vote": 1, "detail": "bullish", "raw": {}},
     )
@@ -238,7 +242,7 @@ def test_bse_missing_data_neutralizes_bullish_votes(monkeypatch):
     assert result["vote_label"] == "资金数据不足(降权)"
     assert result["data_sufficient"] is False
     assert result["downweighted"] is True
-    assert result["votes"]["main_force"]["raw"]["uncovered_market"] is True
+    assert result["votes"]["main_force"]["raw"].get("uncovered_market") is None
 
 
 def test_low_coverage_directional_vote_relabeled(monkeypatch):
