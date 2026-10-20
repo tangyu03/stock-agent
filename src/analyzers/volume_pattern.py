@@ -47,6 +47,14 @@ from typing import Dict, List, Optional
 _VOLUME_GEARS = ((0.9, "缩量"), (1.2, "平量"), (2.5, "温和放量"), (3.5, "明显放量"))
 VOLUME_EXTREME_GEAR = "剧烈放量"
 
+# ── 相对量能分档阈值（待校准：无回测依据，需通过历史数据验证后调整）──
+# 和昨日比 + 和20日基准比，双条件与逻辑
+# TODO: 回测 A 股近 3 年量能分布，找出放量/缩量的最优分界
+REL_VOL_HEAVY_VS_YESTERDAY = 1.5    # 今日量 > 昨日量 × 此值 → 偏放量
+REL_VOL_HEAVY_VS_BASELINE = 1.3     # 今日量 > 20日中位数 × 此值 → 偏放量
+REL_VOL_LIGHT_VS_YESTERDAY = 0.7    # 今日量 < 昨日量 × 此值 → 偏缩量
+REL_VOL_LIGHT_VS_BASELINE = 0.8     # 今日量 < 20日中位数 × 此值 → 偏缩量
+
 # ── 换手档阈值（%） ──
 _TURNOVER_GEARS = ((1.0, "清淡"), (3.0, "正常"), (7.0, "活跃"), (15.0, "过热"))
 TURNOVER_EXTREME_GEAR = "决战"
@@ -739,9 +747,9 @@ def _relative_volume_gear(data: Dict) -> Optional[str]:
             return None
         vs_yesterday = today_vol / yesterday_vol
         vs_baseline = today_vol / baseline
-        if vs_yesterday > 1.5 and vs_baseline > 1.3:
+        if vs_yesterday > REL_VOL_HEAVY_VS_YESTERDAY and vs_baseline > REL_VOL_HEAVY_VS_BASELINE:
             return "放量"
-        elif vs_yesterday < 0.7 and vs_baseline < 0.8:
+        elif vs_yesterday < REL_VOL_LIGHT_VS_YESTERDAY and vs_baseline < REL_VOL_LIGHT_VS_BASELINE:
             return "缩量"
         else:
             return "平量"
