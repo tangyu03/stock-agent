@@ -721,6 +721,34 @@ def _judgment_text(change_pct, vgear, drive, rsi6, ma5=None, current_price=None)
     return "、".join(bits)
 
 
+def _relative_volume_gear(data: Dict) -> Optional[str]:
+    """相对量能分档：和昨日比、和20日基准比。
+    返回 放量/缩量/平量/None（数据不足时降级到绝对阈值）。"""
+    kline = data.get("kline") or []
+    if len(kline) < 6:
+        return None
+    try:
+        volumes = [float(k.get("volume", k.get("成交量", 0)) or 0) for k in kline]
+        volumes = [v for v in volumes if v > 0]
+        if len(volumes) < 6:
+            return None
+        today_vol = volumes[-1]
+        yesterday_vol = volumes[-2]
+        baseline = sorted(volumes[-20:])[len(volumes[-20:]) // 2]
+        if yesterday_vol <= 0 or baseline <= 0:
+            return None
+        vs_yesterday = today_vol / yesterday_vol
+        vs_baseline = today_vol / baseline
+        if vs_yesterday > 1.5 and vs_baseline > 1.3:
+            return "放量"
+        elif vs_yesterday < 0.7 and vs_baseline < 0.8:
+            return "缩量"
+        else:
+            return "平量"
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
 def build_volume_pattern(data: Dict) -> Dict:
     """从推送数据字典构建分型结果。纯函数，无 I/O，字段缺失逐级降级。
 
@@ -767,7 +795,11 @@ def build_volume_pattern(data: Dict) -> Dict:
     wb = flow.get("wb_ratio")
 
     # 早盘只允许同期累计量比分档；接口量比只作对账/展示，不冒充分型证据。
-    vgear = volume_gear(effective_vr)
+    _rel_gear_v = _relative_volume_gear(data)
+    if _rel_gear_v:
+        vgear = _rel_gear_v
+    else:
+        vgear = volume_gear(effective_vr)
     tgear = turnover_gear(turnover)
     tgear_base = "绝对档"
     if turnover is not None:
@@ -803,6 +835,7 @@ def build_volume_pattern(data: Dict) -> Dict:
         "exempt": False, "exempt_reason": "",
         "change_pct": data.get("change_pct"),
         "volume_ratio": float(vr) if vr is not None else None,
+        "volume_gear_relative": _rel_gear_v,
         "raw_volume_ratio": float(vr) if vr is not None else None,
         "effective_volume_ratio": (
             float(effective_vr) if effective_vr is not None else None
