@@ -155,6 +155,8 @@ class TestLifecycleInvalidation:
         tech = _breakout_day_tech()
         monkeypatch.setattr(te, "_fetch_tech_data", lambda code, mode="defend": tech)
         te.check_entry_signals("688028", "沃尔德", "defend")
+        tech["kline"][-1]["low"] = 90.0
+        tech["kline"][-1]["high"] = 91.0
 
         # 次日跌回突破位 88.0 下方
         notices = te.evaluate_signal_events("688028", current_price=86.5, sector_status="rotational")
@@ -191,7 +193,7 @@ class TestLifecycleInvalidation:
         assert signals[0].entry_type == "价量突破"
 
     def test_daily_close_state_machine(self):
-        """日内低点触及 Y 且收盘守住 Y → 成交；收盘破 Y → 回踩撤单。"""
+        """盘中触及 Y → 成交跟踪；未触及且回落 → 撤单。"""
         from src.analyzers.signal_lifecycle import (
             InMemorySignalEventStore,
             SignalLifecycle,
@@ -209,7 +211,7 @@ class TestLifecycleInvalidation:
             day_low=89.40, close_price=90.10,
         )
         assert event.status == "filled"
-        assert "虚拟成交" in notices[0]["reason"]
+        assert "成交跟踪" in notices[0]["reason"]
 
         lifecycle = SignalLifecycle(InMemorySignalEventStore(), valid_days=5)
         failed = lifecycle.register_event(
@@ -220,10 +222,50 @@ class TestLifecycleInvalidation:
         )
         notices = lifecycle.evaluate_events(
             "688029", current_price=100.91, day_high=104.0,
-            day_low=101.50, close_price=100.91,
+            day_low=103.50, close_price=100.91,
         )
         assert failed.status == "invalidated"
         assert "回踩失败已撤单" in notices[0]["reason"]
+
+    def test_touched_entry_then_close_below_entry_is_filled_not_cancelled(self):
+        from src.analyzers.signal_lifecycle import (
+            InMemorySignalEventStore,
+            SignalLifecycle,
+        )
+
+        lifecycle = SignalLifecycle(InMemorySignalEventStore(), valid_days=5)
+        event = lifecycle.register_event(
+            "688030", "测试", "价量突破",
+            breakout_level=88.0, entry_price=89.50, stop_loss=83.50,
+            target_low=96.0, target_high=102.0,
+        )
+        notices = lifecycle.evaluate_events(
+            "688030", current_price=88.20, day_high=90.50,
+            day_low=89.30, close_price=88.20,
+        )
+        assert event.status == "filled"
+        assert "触及买点" in notices[0]["reason"]
+        assert "成交跟踪" in notices[0]["reason"]
+
+    def test_touched_entry_then_close_below_stop_is_signal_stop(self):
+        from src.analyzers.signal_lifecycle import (
+            InMemorySignalEventStore,
+            SignalLifecycle,
+        )
+
+        lifecycle = SignalLifecycle(InMemorySignalEventStore(), valid_days=5)
+        event = lifecycle.register_event(
+            "688031", "测试", "价量突破",
+            breakout_level=88.0, entry_price=89.50, stop_loss=88.50,
+            target_low=96.0, target_high=102.0,
+        )
+        notices = lifecycle.evaluate_events(
+            "688031", current_price=87.00, day_high=90.00,
+            day_low=89.00, close_price=87.00,
+        )
+        assert event.status == "sig_stop"
+        assert "信号止损" in notices[0]["exit_type"]
+        assert "按信号口径认错" in notices[0]["reason"]
 
     def test_same_day_same_strategy_is_not_reborn(self):
         from src.analyzers.signal_lifecycle import (

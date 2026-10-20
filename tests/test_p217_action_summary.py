@@ -59,7 +59,7 @@ def test_action_summary_has_trigger_confirm_watch():
     # 需盯价格：执行档/触发价
     assert "盯:" in out
     # 待验证条件：分型确认条件（观察票 confirms）
-    assert "待验:" in out
+    assert any(prefix in out for prefix in ("待验:", "待验(转多):", "待验(风控):"))
 
 
 def test_action_summary_empty_returns_empty():

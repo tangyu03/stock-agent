@@ -136,9 +136,9 @@ _PATTERN_DEFS = {
     _PENDING_SELL_PATTERN: {
         "short": "抛压待确认", "bias": -1,
         "verdict": "下跌且内盘占优但量能/跌幅未达抛压阈值，按抛压预案观察",
-        "strategy": "观察等抛压确认", "strategy_short": "观察",
-        "confirms": ["主动差跌破-8%", "跌幅扩大至3%+", "放量下破日内低点"],
-        "confirm_target": "抛压确认复核",
+        "strategy": "抛压增强则回避", "strategy_short": "回避预案",
+        "confirms": ["主动差跌破-8%(风控触发)", "跌幅扩大至3%+(风控触发)", "放量下破日内低点(风控触发)"],
+        "confirm_target": "确认回避",
     },
     _DIVERGENCE_PATTERN: {
         "short": "放量下跌分歧", "bias": 0,
@@ -565,6 +565,32 @@ def detect_conflict(pattern: str, inst: Optional[Dict]) -> Optional[str]:
     return None
 
 
+def _position_aware_confirms(pattern: str, confirms: List[str],
+                             close, ma5, ma20) -> List[str]:
+    """把价格已穿越的均线条件改成当日可判定的收复/风控条件。"""
+    def below(reference) -> bool:
+        try:
+            return float(close or 0) > 0 and float(reference or 0) > 0 \
+                and float(close) < float(reference)
+        except (TypeError, ValueError):
+            return False
+
+    output = []
+    for item in confirms:
+        text = str(item)
+        if below(ma5):
+            if "回踩不破MA5" in text:
+                text = text.replace("回踩不破MA5", "收复MA5后再复核")
+            elif "破MA5减仓" in text:
+                text = text.replace("破MA5减仓", "不收复MA5则减仓")
+        if below(ma20) and "跌破MA20减仓" in text:
+            text = text.replace("跌破MA20减仓", "不收复MA20则风控优先")
+        output.append(text)
+    if pattern == "健康推进型" and below(ma5):
+        output.append("未收复MA5前不做追强")
+    return output
+
+
 def commission_cross_check(drive: Optional[float], wb_pct) -> Optional[str]:
     """委比交叉验证（3.4）。委比缺失或噪音区间返回 None。"""
     if drive is None or wb_pct is None:
@@ -962,6 +988,9 @@ def build_volume_pattern(data: Dict) -> Dict:
     # E-修复：已带口径前缀（同期量比/接口量比）的确认项不再重复注入，
     # 避免“同期同期量比@...”重复词；只对裸“量比”补口径+采样时间。
     confirms = [_inject_ratio_caliber(item, ratio_label) for item in confirms]
+    confirms = _position_aware_confirms(
+        pattern, confirms, close, data.get("ma5"), data.get("ma20"),
+    )
     result.update({
         "pattern": pattern,
         "gear_gap": gear_gap,

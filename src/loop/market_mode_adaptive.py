@@ -720,7 +720,7 @@ class MarketModeAdaptive:
         try:
             from ..data_layer.akshare_adapter import get_akshare_adapter
             adapter = get_akshare_adapter()
-            result = adapter.get_index_data("000001")
+            result = adapter.get_index_data("sh000001")
             if result.success and result.data:
                 records = [
                     {"date": str(row.get("date", ""))[:10],

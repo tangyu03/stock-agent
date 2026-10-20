@@ -82,6 +82,17 @@ def _observation_upgrade_score(item: Dict) -> float:
     return score
 
 
+def _observation_technical_stop(timing_engine, stock_code: str, tech_data: Dict) -> Optional[float]:
+    """观察卡必须给出可执行技术跟踪止损；数据不足时返回 None。"""
+    try:
+        stop = float(
+            timing_engine.calculate_stop_loss(stock_code, tech_data).stop_loss_price or 0
+        )
+        return stop if stop > 0 else None
+    except Exception:
+        return None
+
+
 def _apply_defend_breadth_upgrade(env: Dict, observations: List[Dict]) -> None:
     """宽度>4:1 的防守日，标记最多2只观察升级，不改变市场模式或调度。"""
     if not env.get("breadth_upgrade") or not observations:
@@ -507,6 +518,7 @@ class Orchestrator:
                     "reason": missing_reason,
                 })
                 continue
+            observation_stop = _observation_technical_stop(te, code, td)
             position_hint = ""
             if code in held_codes:
                 position_hint = "持仓建议: 持有（无买卖信号触发）"
@@ -514,6 +526,7 @@ class Orchestrator:
                 "stock_name": name,
                 "stock_code": code,
                 "current_price": td.get("current_price", 0),
+                "stop_loss_price": observation_stop,
                 "change_pct": td.get("change_pct"),
                 "sector_status": sector_status,
                 "sector_name": sector_name,

@@ -1237,7 +1237,59 @@ class SignalLifecycle:
                 )
                 notices.append(_notice("冻结撤单", reason, "重要"))
                 continue
-            # 收盘规则优先级：止损是结构死亡 > 买点撤单 > 日内触及成交。
+            # 环境前提消失时不能先确认成交；回撤单优先于虚拟成交。
+            if sector_status == "retreating":
+                reason = "板块状态机转为退潮，假说环境前提消失"
+                self.invalidate(
+                    event.event_id, reason,
+                    trigger_data={
+                        "sector_status": sector_status,
+                        "today": today.isoformat(),
+                    },
+                )
+                notices.append(_notice("信号作废", reason + "——立即撤单", "重要"))
+                continue
+
+            if (
+                low is not None
+                and event.entry_price
+                and low <= event.entry_price
+            ):
+                self.mark_filled(
+                    event.event_id,
+                    trigger_data={
+                        "day_low": low,
+                        "entry_price": event.entry_price,
+                        "close": close,
+                        "today": today.isoformat(),
+                    },
+                )
+                close_text = f"，收盘{close:.2f}" if close is not None else ""
+                if close is not None and event.stop_loss and close < event.stop_loss:
+                    stop_reason = (
+                        f"日内最低{low:.2f}触及买点{event.entry_price:.2f}已成交；"
+                        f"收盘{close:.2f}跌破止损{event.stop_loss:.2f}，按信号口径认错"
+                    )
+                    self.mark_signal_stop(
+                        event.event_id,
+                        trigger_data={
+                            "close": close, "day_low": low,
+                            "day_high": high, "stop_loss": event.stop_loss,
+                            "entry_price": event.entry_price,
+                            "today": today.isoformat(),
+                            "price_source": price_source,
+                            "exchange_close": exchange_close_f,
+                        },
+                    )
+                    notices.append(_notice("信号止损", stop_reason, "紧急"))
+                    continue
+                reason = (
+                    f"日内最低{low:.2f}触及买点{event.entry_price:.2f}"
+                    f"{close_text}，已转入成交跟踪"
+                )
+                notices.append(_notice("信号成交", reason, "重要"))
+                continue
+
             if close is not None and event.stop_loss and close < event.stop_loss:
                 reason = (
                     f"收盘{close:.2f}跌破止损线{event.stop_loss:.2f}，"
@@ -1258,7 +1310,6 @@ class SignalLifecycle:
             failure_anchor = event.entry_price or event.breakout_level
             effective_current = close if close is not None else current_price
             if effective_current and failure_anchor and effective_current < failure_anchor:
-                touched = low is not None and low <= failure_anchor
                 anchor_text = (
                     f"{event.entry_price:.2f}" if event.entry_price
                     else f"{event.breakout_level:.2f}"
@@ -1266,7 +1317,6 @@ class SignalLifecycle:
                 reason = (
                     f"现价{effective_current:.2f}跌破买点{anchor_text}，"
                     "回踩失败已撤单"
-                    + ("（盘中曾触及买点，不能回补）" if touched else "")
                 )
                 self.invalidate(
                     event.event_id, reason,
@@ -1280,42 +1330,6 @@ class SignalLifecycle:
                     },
                 )
                 notices.append(_notice("信号作废", reason, "重要"))
-                continue
-
-            # 环境前提消失时不能先确认成交；回撤单优先于虚拟成交。
-            if sector_status == "retreating":
-                reason = "板块状态机转为退潮，假说环境前提消失"
-                self.invalidate(
-                    event.event_id, reason,
-                    trigger_data={
-                        "sector_status": sector_status,
-                        "today": today.isoformat(),
-                    },
-                )
-                notices.append(_notice("信号作废", reason + "——立即撤单", "重要"))
-                continue
-
-            if (
-                low is not None
-                and event.entry_price
-                and low <= event.entry_price
-                and (close is None or close >= event.entry_price)
-            ):
-                self.mark_filled(
-                    event.event_id,
-                    trigger_data={
-                        "day_low": low,
-                        "entry_price": event.entry_price,
-                        "close": close,
-                        "today": today.isoformat(),
-                    },
-                )
-                close_text = f"，收盘{close:.2f}" if close is not None else ""
-                reason = (
-                    f"日内最低{low:.2f}触及买点{event.entry_price:.2f}"
-                    f"{close_text}，虚拟成交"
-                )
-                notices.append(_notice("信号成交", reason, "重要"))
                 continue
 
             if event.expire_date and today.isoformat() > event.expire_date:

@@ -78,6 +78,8 @@ def _action_summary_line(data, kind: str) -> str:
         if vp.get("available"):
             confirms = [str(c) for c in (vp.get("confirms") or []) if c]
             if confirms:
+                bias = vp.get("bias")
+                confirm_prefix = "待验(风控)" if bias == -1 else ("待验(转多)" if bias == 1 else "待验")
                 confirm_text = " | ".join(confirms[:2])
     except Exception:
         confirm_text = ""
@@ -95,7 +97,7 @@ def _action_summary_line(data, kind: str) -> str:
 
     parts = [f"{_esc(name)}({_esc(code)}){_esc(event_id_text)} {_esc(event_text)}"]
     if confirm_text:
-        parts.append(f"待验:{_esc(confirm_text)}")
+        parts.append(f"{confirm_prefix}:{_esc(confirm_text)}")
     if price_text:
         parts.append(f"{_esc(price_text)}")
     return " | ".join(parts)
