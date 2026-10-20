@@ -41,3 +41,5 @@ data/*.parquet
 .ab_tmp/
 .tmp-pytest/
 pytest-basetemp/
+tests/.tmp-workspaces/
+.tmp_pushplus*
