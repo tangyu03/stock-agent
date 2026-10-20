@@ -13,6 +13,7 @@ from datetime import datetime
 from ..config_models import load_config
 from ..analyzers.market_scorer import get_market_scorer
 from ..analyzers.volume_pattern import _BULLISH_PATTERNS, build_volume_pattern, kline_position_inputs
+from ..analyzers.timing_t0 import build_t0_signal
 from ..push.pushplus import get_pushplus
 # templates 渲染已移至 pushplus.send_intraday_report 内部调用
 from ..push.templates import stock_identity
@@ -193,6 +194,7 @@ class Orchestrator:
         self._trade_logger = get_trade_logger()
         self._daily_review = get_daily_review()
         self._weekly_report = get_weekly_report()
+        self._t0_push_keys = set()
 
     # ================================================================
     # 统一入口
@@ -787,8 +789,104 @@ class Orchestrator:
                 0 if obs.get("breadth_upgrade") else 1,
                 0 if obs.get("stock_code") in standby_codes else 1,
                 ladder_rank.get(obs.get("stock_code"), 9999),
-            )
+                )
         )
+        env["t0_signals"] = []
+        t0_recorded_keys = self._trade_logger.get_today_t0_signal_keys(ref_date)
+        for holding in holdings or []:
+            code = str(holding.get("code") or "")
+            td = te._tech_data_full.get(code, {})
+            if not isinstance(td, dict) or not td:
+                continue
+            t0_signal = build_t0_signal(
+                holding,
+                td,
+                market_mode,
+                batch.stock_sector_status.get(code, "rotational"),
+            )
+            if not t0_signal:
+                continue
+            is_positive_t = t0_signal.get("direction") == "正T"
+            t0_log_type = "t0_buy" if is_positive_t else "t0_sell"
+            push_key = (
+                ref_date,
+                code,
+                t0_signal.get("signal_type", ""),
+                round(float(t0_signal.get("price_range", [0, 0])[0] or 0), 2),
+            )
+            primary_key = (
+                code,
+                t0_log_type,
+                str(t0_signal.get("signal_type") or ""),
+                round(float(t0_signal.get("entry_price") or 0), 2),
+            )
+            counter_type = "t0_sell" if is_positive_t else "t0_buy"
+            counter_key = (
+                code,
+                counter_type,
+                str(t0_signal.get("signal_type") or ""),
+                round(float(t0_signal.get("exit_price") or 0), 2),
+            )
+            if (
+                push_key not in self._t0_push_keys
+                and primary_key not in t0_recorded_keys
+                and counter_key not in t0_recorded_keys
+            ):
+                env["t0_signals"].append(t0_signal)
+
+        for t0_signal in env["t0_signals"]:
+            is_positive_t = t0_signal.get("direction") == "正T"
+            t0_log_type = "t0_buy" if is_positive_t else "t0_sell"
+            counter_type = "t0_sell" if is_positive_t else "t0_buy"
+            common_signal_data = {
+                "entry_type": t0_signal.get("signal_type", ""),
+                "mode_at_signal": market_mode,
+                "sector_status": batch.stock_sector_status.get(
+                    str(t0_signal.get("stock_code") or ""), "rotational"
+                ),
+                "market_score": env.get("market_score", 0),
+            }
+            note = (
+                f"{t0_signal.get('position_ratio', '')} | "
+                f"{t0_signal.get('trigger_reason', '')}"
+            )
+            primary_log_id = self._trade_logger.log_signal(
+                signal_type=t0_log_type,
+                stock_code=str(t0_signal.get("stock_code") or ""),
+                stock_name=str(t0_signal.get("stock_name") or ""),
+                signal_data={
+                    **common_signal_data,
+                    "trigger_price": t0_signal.get("entry_price", 0),
+                    "stop_loss": t0_signal.get("stop_loss_price", 0),
+                    "target_price": t0_signal.get("exit_price", 0),
+                },
+                shares=int(t0_signal.get("t0_shares") or 0),
+                note=note,
+            )
+            counter_log_id = self._trade_logger.log_signal(
+                signal_type=counter_type,
+                stock_code=str(t0_signal.get("stock_code") or ""),
+                stock_name=str(t0_signal.get("stock_name") or ""),
+                signal_data={
+                    **common_signal_data,
+                    "trigger_price": t0_signal.get("exit_price", 0),
+                    "stop_loss": t0_signal.get("stop_loss_price", 0),
+                    "target_price": t0_signal.get("entry_price", 0),
+                },
+                shares=int(t0_signal.get("t0_shares") or 0),
+                note=note + " | 配对腿",
+            )
+            if primary_log_id is None or counter_log_id is None:
+                logger.warning("T0信号落库不完整，跳过推送: %s", t0_signal)
+                continue
+            self._pushplus.send_t0_signal(t0_signal)
+            push_key = (
+                ref_date,
+                str(t0_signal.get("stock_code") or ""),
+                t0_signal.get("signal_type", ""),
+                round(float(t0_signal.get("price_range", [0, 0])[0] or 0), 2),
+            )
+            self._t0_push_keys.add(push_key)
         self._pushplus.send_intraday_report(env, scheduled_entry_batch, scheduled_exit_batch, observation_batch)
 
         # 【P1-1】踏空成本台账推送：防守模式未放行的创新高+放量标的

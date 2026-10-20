@@ -82,7 +82,10 @@ def test_low_confidence_signal_is_scheduled_not_observed(monkeypatch):
 
     orchestrator = SimpleNamespace(
         _pushplus=SimpleNamespace(send_intraday_report=_capture_report),
-        _trade_logger=SimpleNamespace(get_pending_signals=lambda day: []),
+        _trade_logger=SimpleNamespace(
+            get_pending_signals=lambda day: [],
+            get_today_t0_signal_keys=lambda day: set(),
+        ),
     )
 
     engine_module.Orchestrator._do_intraday(
@@ -175,6 +178,7 @@ def test_missing_price_stock_is_reported_not_observed(monkeypatch):
         _trade_logger=SimpleNamespace(
             get_pending_signals=lambda day: [],
             get_current_holdings=lambda: [{"code": "301666", "name": "DAPU"}],
+            get_today_t0_signal_keys=lambda day: set(),
         ),
     )
 

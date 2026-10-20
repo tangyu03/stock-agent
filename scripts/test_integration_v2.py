@@ -108,7 +108,7 @@ def test_timing_engine_config_loading():
     assert engine._cfg("arbitrage", "min_trigger_conditions") == 1
     assert engine._cfg("momentum_chase", "volume_confirm_ratio") == 1.2
     assert engine._cfg("exit", "exhaustion", "rsi_overbought") == 70
-    assert engine._cfg("stop_loss", "multiplier") == 0.97
+    assert engine._cfg("stop_loss", "multiplier") == 1.0
     assert engine._cfg("target_range", "panic_bottom_low") == 1.08
 
     print(f"   panic_bottom.index_drop_threshold = {engine._cfg('panic_bottom', 'index_drop_threshold')}")

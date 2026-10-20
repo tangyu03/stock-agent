@@ -267,6 +267,7 @@ class TestPanicBottomCumulativeAndGate:
             "tech_signals": {"rsi": 18.0, "kdj": {"j": -5.0}},
             "kline": [{"close": 100.0, "open": 100.0, "high": 101.0,
                        "low": 99.0, "volume": 1000} for _ in range(30)],
+            "ma20_falling": False,
         }
         tech.update(overrides)
         return tech
@@ -281,8 +282,8 @@ class TestPanicBottomCumulativeAndGate:
 
     def test_cumulative_grinddown_triggers(self, monkeypatch):
         """多日单边阴跌 + 个股超卖 → 恐慌抄底左侧试探（置信度封顶中）。"""
-        import src.analyzers.timing_engine as te_mod
-        monkeypatch.setattr(te_mod, "get_market_environment",
+        import src.analyzers.timing_entry_checkers as entry_mod
+        monkeypatch.setattr(entry_mod, "get_market_environment",
                             lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
         te = get_backtest_timing_engine()
         sig = self._sig(te, self._tech())
@@ -294,8 +295,8 @@ class TestPanicBottomCumulativeAndGate:
 
     def test_reversal_structure_fires_without_lagging_confirm(self, monkeypatch):
         """左侧反转结构(长下影+板块未退潮)替代滞后确认：传统超卖缺位也放行。"""
-        import src.analyzers.timing_engine as te_mod
-        monkeypatch.setattr(te_mod, "get_market_environment",
+        import src.analyzers.timing_entry_checkers as entry_mod
+        monkeypatch.setattr(entry_mod, "get_market_environment",
                             lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
         te = get_backtest_timing_engine()
         tech = self._tech(tech_signals={"rsi": 60.0, "kdj": {"j": 50.0}},
@@ -309,8 +310,8 @@ class TestPanicBottomCumulativeAndGate:
 
     def test_reversal_no_structure_still_blocks(self, monkeypatch):
         """既无传统超卖也无反转结构 → 仍不触发（不加宽到任何票）。"""
-        import src.analyzers.timing_engine as te_mod
-        monkeypatch.setattr(te_mod, "get_market_environment",
+        import src.analyzers.timing_entry_checkers as entry_mod
+        monkeypatch.setattr(entry_mod, "get_market_environment",
                             lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
         te = get_backtest_timing_engine()
         tech = self._tech(tech_signals={"rsi": 60.0, "kdj": {"j": 50.0}},
@@ -319,8 +320,8 @@ class TestPanicBottomCumulativeAndGate:
 
     def test_cumulative_no_oversold_blocks(self, monkeypatch):
         """累计恐慌但个股不超卖 → 不触发。"""
-        import src.analyzers.timing_engine as te_mod
-        monkeypatch.setattr(te_mod, "get_market_environment",
+        import src.analyzers.timing_entry_checkers as entry_mod
+        monkeypatch.setattr(entry_mod, "get_market_environment",
                             lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
         te = get_backtest_timing_engine()
         tech = self._tech(tech_signals={"rsi": 60.0, "kdj": {"j": 50.0}},
@@ -329,24 +330,26 @@ class TestPanicBottomCumulativeAndGate:
 
     def test_gate_close_break_uses_sse_index(self, monkeypatch):
         """B：上证收盘跌破3700关口 → 充分触发（旧逻辑用沪深300会标成4200）。"""
-        import src.analyzers.timing_engine as te_mod
-        monkeypatch.setattr(te_mod, "get_market_environment",
+        import src.analyzers.timing_entry_checkers as entry_mod
+        monkeypatch.setattr(entry_mod, "get_market_environment",
                             lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
         te = get_backtest_timing_engine()
         idx = [{"close": 3720.0, "low": 3710.0}, {"close": 3699.0, "low": 3690.0}]
-        tech = self._tech(index_kline=idx, index_cum_drop_5d=0.0, index_down_days_5d=0)
+        tech = self._tech(index_kline=idx, index_daily_drop=-4.5,
+                          index_cum_drop_5d=0.0, index_down_days_5d=0)
         sig = self._sig(te, tech)
         assert sig is not None
         assert "上证跌破3700关口" in sig.trigger_reason
 
     def test_gate_intraday_break_no_recover_degraded(self, monkeypatch):
         """B：盘中破3700且收盘未收回（前日已在关口下方）→ 降级充分。"""
-        import src.analyzers.timing_engine as te_mod
-        monkeypatch.setattr(te_mod, "get_market_environment",
+        import src.analyzers.timing_entry_checkers as entry_mod
+        monkeypatch.setattr(entry_mod, "get_market_environment",
                             lambda *a, **k: {"volume_percentile": 50.0, "csi300_close": 4166.0})
         te = get_backtest_timing_engine()
         idx = [{"close": 3698.0, "low": 3690.0}, {"close": 3695.0, "low": 3670.0}]
-        tech = self._tech(index_kline=idx, index_cum_drop_5d=0.0, index_down_days_5d=0)
+        tech = self._tech(index_kline=idx, index_daily_drop=-4.5,
+                          index_cum_drop_5d=0.0, index_down_days_5d=0)
         sig = self._sig(te, tech)
         assert sig is not None
         assert "盘中破3700关口未收回" in sig.trigger_reason

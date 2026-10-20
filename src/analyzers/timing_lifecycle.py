@@ -1,7 +1,8 @@
 """Signal event lifecycle for TimingEngine (mixin class)."""
 import logging
+from datetime import datetime
 from typing import Dict, Any, Optional, List
-from .timing_utils import _number_or_none
+from .timing_utils import _number_or_none, _volume_pattern_not_distribution
 
 
 logger = logging.getLogger(__name__)

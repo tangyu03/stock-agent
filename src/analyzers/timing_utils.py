@@ -34,6 +34,29 @@ def _number_or_none(value: Any) -> Optional[float]:
     return number if number == number else None
 
 
+def ma20_rising(tech_data: Dict) -> bool:
+    """Judge whether MA20 has turned upward; fail closed when evidence is missing."""
+    current = _number_or_none(tech_data.get("ma20"))
+    previous = _number_or_none(tech_data.get("ma20_prev"))
+    if current is not None and previous is not None:
+        return current > previous
+
+    falling = tech_data.get("ma20_falling")
+    if falling is not None:
+        return not bool(falling)
+
+    kline = tech_data.get("kline") or []
+    if len(kline) < 21:
+        return False
+    closes = []
+    for bar in kline[-21:]:
+        value = _number_or_none(bar.get("close", bar.get("收盘")))
+        if value is None or value <= 0:
+            return False
+        closes.append(value)
+    return sum(closes[1:]) / 20 > sum(closes[:-1]) / 20
+
+
 def _nested_config(config: Optional[Dict], *path, default=None):
     node = config or {}
     for key in path:

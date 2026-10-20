@@ -123,6 +123,7 @@
 
 ## 已完成修复
 
+- **2026-10-20 破位与做T闭环（P0/P1）**：修复信号生命周期导入缺失；破位三问接入个股/板块跌幅口径，数据缺失时明确“口径未知”，不再把可判定破位误标为未知；MA20 方向闸门按证据缺失 fail-closed；新增做 T 模块，下降周期只做压力位反 T、不做支撑低吸；正/反 T 双腿先落库、后推送，并用当日信号键跨进程去重。
 - **P0-1 实盘持仓来源**：TradeLogger 补 get_current_holdings()（add_plans 已执行计划）/get_account_summary()，消除 engine 调不存在方法的 AttributeError；持仓为空时明确告警并说明闸门兜底。
 - **P0-2 总仓位闸门**：schedule_live_signals 加 position_limit 参数，买入合计（含已有持仓成本）≤ position_limit×total_asset，新增 buy_position_limit 跳过类别；engine 传入 env 的真实 position_limit。
 - **P1-3 期望标签**：调度文案改"入场类型历史期望X%（非个股收益预测）"。

@@ -520,6 +520,32 @@ class TradeLogger:
         finally:
             conn.close()
 
+    def get_today_t0_signal_keys(self, date_str: str = "") -> set:
+        """Get dedupe keys for all T+0 legs already recorded on a date."""
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            day = date_str or date.today().isoformat()
+            cursor.execute(
+                "SELECT stock_code, signal_type, entry_type, trigger_price "
+                "FROM trade_logs WHERE date = ? AND signal_type IN ('t0_buy','t0_sell')",
+                (day,),
+            )
+            return {
+                (
+                    str(row["stock_code"] or ""),
+                    str(row["signal_type"] or ""),
+                    str(row["entry_type"] or ""),
+                    round(float(row["trigger_price"] or 0), 2),
+                )
+                for row in cursor.fetchall()
+            }
+        except Exception as e:
+            logger.error("获取当日做T信号键失败: %s", e)
+            return set()
+        finally:
+            conn.close()
+
     def get_today_unclosed_t0_positions(self) -> List[Dict]:
         """
         获取今日未了结的 T 仓列表

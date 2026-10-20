@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from .timing_models import EntrySignal
 from ..analyzers.market_env import get_market_environment
 from ..analyzers.stock_filter import get_stock_filter, FilterResult
-from .timing_utils import _number_or_none
+from .timing_utils import _number_or_none, ma20_rising
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,8 @@ class TimingEntryMixin:
         panic_market = []
         panic_sufficient = []  # D1: 充分条件
         cumulative_panic = False
+        if not ma20_rising(tech_data):
+            return None
 
         # === 必要条件：固定跌幅（保留但降级为必要不充分）===
         index_drop = tech_data.get("index_daily_drop", 0)
@@ -245,6 +247,8 @@ class TimingEntryMixin:
         条件：周线MACD向上 + 任一积极信号触发
         """
         if mode not in ("attack", "defend"):
+            return None
+        if not ma20_rising(tech_data):
             return None
         # 周线MACD过滤
         if not tech_data.get("weekly_macd_up"):

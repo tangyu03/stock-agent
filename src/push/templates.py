@@ -1826,7 +1826,7 @@ def render_holding_health(data):
         content += f"<b>技术细节</b><br/>&nbsp;&nbsp;MA:{_val(ma5)}/{_val(ma10)}/{_val(ma20)}<br/>"
         if price: content += f"&nbsp;&nbsp;现价:{_val(price)}<br/>"
         ts = data.get("tech_signals",{})
-        if ts: content += f"&nbsp;&nbsp;三维投票:{'看涨' if ts.get('vote')=='bullish' else '看跌' if ts.get('vote')=='bearish' else '中性'}({ts.get('vote_score',0):+d})<br/>"
+        if ts: content += f"&nbsp;&nbsp;三维投票:{'看涨' if ts.get('vote')=='bullish' else '看跌' if ts.get('vote')=='bearish' else '中性'}({float(ts.get('vote_score', 0) or 0):+.1f})<br/>"
         content += "<br/>"
     content += "<b>收益明细</b><br/>"
     if shares>0 and cost>0: content += f"&nbsp;&nbsp;持仓:{shares}股 x {_val(cost)}<br/>"

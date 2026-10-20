@@ -580,10 +580,19 @@ def run_unified_analysis(
             continue
         sector = _build_sector_for_stock(code, sector_map, stock_sector, stock_sector_status)
         stock_sector_name = stock_sector.get(code, "")
+        sector_change_pct = None
+        best_sector = (ranker_result.get(code) or {}).get("best_sector") or {}
+        try:
+            raw_sector_change = best_sector.get("change_pct")
+            if raw_sector_change is not None:
+                sector_change_pct = float(raw_sector_change)
+        except (TypeError, ValueError):
+            sector_change_pct = None
         exit_sigs = timing.check_exit_signals(
             stock_code=code, stock_name=name,
             market_mode=market_mode, sector_status=sector,
             sector_name=stock_sector_name,
+            sector_change_pct=sector_change_pct,
         )
         batch.exits.extend(exit_sigs)
 

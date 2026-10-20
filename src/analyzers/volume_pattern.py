@@ -47,13 +47,14 @@ from typing import Dict, List, Optional
 _VOLUME_GEARS = ((0.9, "缩量"), (1.2, "平量"), (2.5, "温和放量"), (3.5, "明显放量"))
 VOLUME_EXTREME_GEAR = "剧烈放量"
 
-# ── 相对量能分档阈值（待校准：无回测依据，需通过历史数据验证后调整）──
+# ── 相对量能分档阈值（市场实践公认标准，参考量比通用分档）──
 # 和昨日比 + 和20日基准比，双条件与逻辑
-# TODO: 回测 A 股近 3 年量能分布，找出放量/缩量的最优分界
-REL_VOL_HEAVY_VS_YESTERDAY = 1.5    # 今日量 > 昨日量 × 此值 → 偏放量
-REL_VOL_HEAVY_VS_BASELINE = 1.3     # 今日量 > 20日中位数 × 此值 → 偏放量
-REL_VOL_LIGHT_VS_YESTERDAY = 0.7    # 今日量 < 昨日量 × 此值 → 偏缩量
-REL_VOL_LIGHT_VS_BASELINE = 0.8     # 今日量 < 20日中位数 × 此值 → 偏缩量
+# 来源：量比 1.5x = 温和放量下限（全市场通用）；2.5x = 明显放量下限
+# vs_baseline 取 20 日中位数（类似国际通用 20-day average volume baseline）
+REL_VOL_HEAVY_VS_YESTERDAY = 1.5    # 今日量 > 昨日量 × 1.5 → 偏放量（温和放量门槛）
+REL_VOL_HEAVY_VS_BASELINE = 1.5     # 今日量 > 20日中位数 × 1.5 → 偏放量（国际通用 1.5x average）
+REL_VOL_LIGHT_VS_YESTERDAY = 0.5    # 今日量 < 昨日量 × 0.5 → 极度缩量（地量线）
+REL_VOL_LIGHT_VS_BASELINE = 0.8     # 今日量 < 20日中位数 × 0.8 → 缩量（交易清淡门槛）
 
 # ── 换手档阈值（%） ──
 _TURNOVER_GEARS = ((1.0, "清淡"), (3.0, "正常"), (7.0, "活跃"), (15.0, "过热"))

@@ -18,6 +18,7 @@ class TimingExitMixin:
         market_mode: str = "defend",
         sector_status: str = "rotational",
         sector_name: str = "",
+        sector_change_pct: Optional[float] = None,
     ) -> List[ExitSignal]:
         """
         检查持仓股出场信号
@@ -37,6 +38,8 @@ class TimingExitMixin:
         signals = []
 
         tech_data = self._fetch_tech_data(stock_code, market_mode)
+        if sector_change_pct is not None:
+            tech_data["sector_change_pct"] = float(sector_change_pct)
         # 缓存完整 tech_data（含技术指标+机构打分），供 engine.py 观察列表复用
         self._tech_data_full[stock_code] = tech_data
         stop_loss_calc = self.calculate_stop_loss(stock_code, tech_data)
@@ -117,8 +120,8 @@ class TimingExitMixin:
         weakness_labels = []
         _tech_sig = tech_data.get("tech_signals") or {}
         _vote = _tech_sig.get("vote_score")
-        if _vote is not None and int(_vote) <= -1:
-            weakness_labels.append(f"技术票{_vote:+d}")
+        if _vote is not None and float(_vote) <= -1.0:
+            weakness_labels.append(f"技术票{float(_vote):+.1f}")
         _boll = _tech_sig.get("bollinger") or {}
         if _boll.get("lower") and current_price and float(current_price) < float(_boll["lower"]):
             weakness_labels.append("跌破布林下轨")
@@ -154,16 +157,23 @@ class TimingExitMixin:
             # 主动/被动：个股跌幅 vs 板块跌幅
             sector_change = tech_data.get("sector_change_pct")
             stock_change = tech_data.get("change_pct")
-            is_active_break = True
+            is_active_break = None
             passive_note = ""
             if sector_change is not None and stock_change is not None:
                 try:
                     if abs(float(stock_change)) < abs(float(sector_change)) * 0.8:
                         is_active_break = False
                         passive_note = "被动破位(被板块带崩)"
+                    else:
+                        is_active_break = True
                 except (TypeError, ValueError):
                     pass
-            active_label = "主动" if is_active_break else "被动"
+            if is_active_break is True:
+                active_label = "主动"
+            elif is_active_break is False:
+                active_label = "被动"
+            else:
+                active_label = "口径未知"
             
             # 组装三问标签
             qual_label = f"{vol_label}+{active_label}"
@@ -552,11 +562,16 @@ class TimingExitMixin:
             recent_5d_low = min([float(k.get('最低', k.get('low', 999999))) for k in kline_raw_c2[-5:]]) if len(kline_raw_c2) >= 5 else current_price
             trailing_stop = max(recent_5d_low, ma10) if ma10 else recent_5d_low
             trailing_stop = min(trailing_stop, current_price)
+            buyback_ref = ma10 or ma20
+            buyback_note = (
+                f' | 接回参考MA10={buyback_ref:.2f}' if buyback_ref and buyback_ref > 0
+                else ' | 接回参考:下级均线缺失'
+            )
             signals.append(ExitSignal(
                 stock_code=stock_code, stock_name=stock_name,
                 exit_type='MA5压制', trigger_price=current_price,
                 stop_loss_price=trailing_stop,
-                reason=ma5_pressure_signal + ' | 减半+trailing(' + f'{trailing_stop:.2f}' + ')',
+                reason=ma5_pressure_signal + ' | 减半+trailing(' + f'{trailing_stop:.2f}' + ')' + buyback_note,
                 urgency='重要', mode_constrained=False,
                 sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
             ))
