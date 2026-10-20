@@ -810,7 +810,7 @@ def build_volume_pattern(data: Dict) -> Dict:
         "volume_caliber": str(
             vs.get("volume_ratio_caliber")
             or data.get("volume_ratio_caliber")
-            or "口径未标注"
+            or "N/A"
         ),
         "volume_sample_time": (
             vs.get("volume_ratio_sample_time") or data.get("volume_ratio_sample_time")
@@ -913,9 +913,9 @@ def build_volume_pattern(data: Dict) -> Dict:
     defs = _PATTERN_DEFS[pattern]
     confirms = list(defs["confirms"])
     ratio_label = (
-        f"同期量比@{_format_sample_time(result.get('same_period_sample_time')) or '时间未标注'} "
+        f"同期量比@{_format_sample_time(result.get('same_period_sample_time')) or '时间N/A'} "
         if result.get("early_window")
-        else f"接口量比@{_format_sample_time(result.get('volume_sample_time')) or '时间未标注'} "
+        else f"接口量比@{_format_sample_time(result.get('volume_sample_time')) or '时间N/A'} "
     )
     # E-修复：已带口径前缀（同期量比/接口量比）的确认项不再重复注入，
     # 避免“同期同期量比@...”重复词；只对裸“量比”补口径+采样时间。
@@ -994,7 +994,7 @@ def render_volume_pattern(result: Dict) -> List[str]:
             else result.get("volume_sample_time")
         )
         sample_text = _format_sample_time(sample_time)
-        time_text = f"@{sample_text}" if sample_text else "@时间未标注"
+        time_text = f"@{sample_text}" if sample_text else "@时间N/A"
         caliber = (
             result.get("same_period_caliber")
             if result.get("early_window")
@@ -1002,11 +1002,11 @@ def render_volume_pattern(result: Dict) -> List[str]:
         )
         data_bits.append(
             f"{label}{vr:.2f}{time_text}({result.get('vgear') or '?'};"
-            f"{caliber or '口径未标注'})"
+            f"{caliber or 'N/A'})"
         )
         if raw_vr is not None and result.get("early_window") and raw_vr != vr:
             data_bits.append(
-                f"接口量比{raw_vr:.2f}@{_format_sample_time(result.get('volume_sample_time')) or '时间未标注'}"
+                f"接口量比{raw_vr:.2f}@{_format_sample_time(result.get('volume_sample_time')) or '时间N/A'}"
                 f"(仅对账)"
             )
     else:
@@ -1061,7 +1061,7 @@ def render_volume_pattern(result: Dict) -> List[str]:
         lines.append(f"③·{result['commission_note']}")
     if result.get("confirms"):
         lines.append(
-            f"③·下一步: {' | '.join(result['confirms'])} → {result['confirm_target']}"
+            f"③·待验: {' | '.join(result['confirms'])} → {result['confirm_target']}"
         )
     return lines
 

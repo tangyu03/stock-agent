@@ -140,9 +140,9 @@ class TestDefectD_GateExpectation:
 
     def test_环境总览渲染闸门预期(self):
         html = render_environment_overview({"market_mode": "defend", "market_score": 5.0})
-        assert "闸门预期:今日若收盘站回MA5且多头排列(MA5>MA10>MA20)且派发日≤5，明日转进攻" in html
+        assert "转档:今日若收盘站回MA5且多头排列(MA5&gt;MA10&gt;MA20)且派发日≤5，明日转进攻" in html
         html_attack = render_environment_overview({"market_mode": "attack", "market_score": 8.0})
-        assert "闸门预期" not in html_attack
+        assert "转档:" not in html_attack
 
 
 class TestDefectE_DuplicateWord:

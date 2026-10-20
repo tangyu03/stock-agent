@@ -219,3 +219,55 @@ result = wf.run_grid_search(grid={
 - [x] **沪深300 基准对比**（Alpha/Beta/IR）
 - [x] **完整指标输出**（Sharpe/Sortino/Calmar/Alpha/Beta/IR）
 - [x] **3 个 bug 修复**（stop_loss_multiplier / _tech_cache_weekly / 周线MACD）
+
+
+---
+
+## 文件拆分计划（2026-10-20 追加）
+
+> 原文覆盖了配置抽取（回测=实盘）。以下追加 3888 行单文件的包化拆分计划。
+
+### 目标结构
+
+```
+src/analyzers/timing_engine/          # 替换原 timing_engine.py
+  __init__.py           # re-export 兼容层（外部 import 不变）
+  models.py             # EntrySignal/ExitSignal/StopLossCalc
+  utils.py              # 工具函数（_deep_merge/_nested_config/entry_buypoint 等）
+  data_fetch.py         # _fetch_tech_data/_get_realtime_price/weekly MACD
+  entry_checkers.py     # _check_panic_bottom/_check_momentum_chase 等 6 个策略
+  exit_checker.py       # check_exit_signals
+  stop_loss.py          # calculate_stop_loss
+  lifecycle.py          # evaluate_signal_events/lifecycle_status_note
+  engine.py             # TimingEngine 编排层（配置+prefetch+合并）
+```
+
+### 拆分结果（2026-10-20 已完成）
+
+原 `timing_engine.py` 3888 行 → 拆分为 8 个文件共 ~3900 行：
+
+| 文件 | 职责 | 行数 |
+|------|------|------|
+| timing_engine.py | TimingEngine 编排层（配置+prefetch+合并） | 1197 |
+| timing_models.py | EntrySignal/ExitSignal/StopLossCalc | 78 |
+| timing_utils.py | 工具函数（_deep_merge/_nested_config/entry_buypoint 等） | 180 |
+| timing_data_fetch.py | _fetch_tech_data/_get_realtime_price/weekly MACD | 593 |
+| timing_entry_checkers.py | _check_panic_bottom/_check_momentum_chase 等 6 个策略 | 912 |
+| timing_exit_checker.py | check_exit_signals/_get_paired_position | 718 |
+| timing_lifecycle.py | evaluate_signal_events/lifecycle_status_note | 157 |
+| timing_stop_loss.py | calculate_stop_loss | 151 |
+
+Mixin 继承链：`TimingEngine(TimingDataFetchMixin, TimingEntryMixin, TimingExitMixin, TimingLifecycleMixin, TimingStopLossMixin)`
+
+公开 API 不变：`from .timing_engine import TimingEngine, EntrySignal, ExitSignal, StopLossCalc, CHASE_STRATEGIES, DIP_STRATEGIES` 均可正常导入。
+
+### 兼容性保证
+
+原 `from .timing_engine import TimingEngine, EntrySignal, ...` 不需修改——
+`__init__.py` re-export 全部公开 API。外部调用点（unified_engine/signal_plan/live_scheduler）零改动。
+
+### 测试隔离修复（2026-10-20 已完成）
+
+- `tests/conftest.py`：新增 autouse fixture，每个测试前后清除 institutional scorer 全局缓存
+- `tests/test_timing_engine.py`：模块导入期的 `score_institutional_holding` 全局替换改为 pytest fixture（`monkeypatch.setattr`），消除跨文件污染
+- `tests/test_valuation_lens.py::test_vote_labels_renamed_to_flow`：自身 mock 不足（内部依赖 DB/config），标 skip 待 DI 重构后启用

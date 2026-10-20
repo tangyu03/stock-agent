@@ -8,6 +8,7 @@ Step1 板块层面数据拉取纯逻辑（无 DB 读写、可独立单测）
 
 注意：本模块不做 DB 写入；worker 线程只拉数据回传，指标计算/落库在主线程。
 """
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -98,17 +99,69 @@ def fetch_eastmoney_ranking(retries: int = 10, max_pages: int = 6) -> Optional[D
     result: Dict[str, dict] = {}
     for i, b in enumerate(all_boards):
         if i < top_n:
-            b["classification"] = "main_trend"
+            b["single_day_class"] = "main_trend"
         elif i >= n - bottom_n:
-            b["classification"] = "retreating"
+            b["single_day_class"] = "retreating"
         else:
-            b["classification"] = "rotational"
+            b["single_day_class"] = "rotational"
         b["rank"] = i + 1
         result[b["name"]] = b
 
-    logger.info("板块涨跌幅实时拉取(东财push2): %d 个板块, 前20%%=%d主线, 后20%%=%d退潮",
+    result = _apply_multi_day_consistency(result)
+    logger.info("板块涨跌幅实时拉取(东财push2): %d 个板块, 前20%%=%d主线, 后20%%=%d退潮(5日确认后)",
                 n, top_n, bottom_n)
     return result
+
+
+SECTOR_HISTORY_PATH = "data/sector_ranking_history.json"
+_SECTOR_CONFIRM_DAYS = 5
+_SECTOR_MIN_CONSISTENT = 3
+
+
+def _save_daily_ranking(result: Dict[str, dict]) -> None:
+    try:
+        import datetime as _dt
+        today = _dt.date.today().isoformat()
+        history: dict = {}
+        from pathlib import Path
+        p = Path(SECTOR_HISTORY_PATH)
+        if p.exists():
+            history = json.loads(p.read_text(encoding="utf-8"))
+        daily = {name: info.get("single_day_class", "rotational") for name, info in result.items()}
+        history[today] = daily
+        cutoff = (_dt.date.today() - _dt.timedelta(days=10)).isoformat()
+        history = {k: v for k, v in history.items() if k >= cutoff}
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(history, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        logger.debug("保存板块排名历史失败: %s", e)
+
+
+def _apply_multi_day_consistency(result: Dict[str, dict]) -> Dict[str, dict]:
+    try:
+        _save_daily_ranking(result)
+        from pathlib import Path
+        p = Path(SECTOR_HISTORY_PATH)
+        if not p.exists():
+            return result
+        history = json.loads(p.read_text(encoding="utf-8"))
+        dates = sorted(history.keys())[-_SECTOR_CONFIRM_DAYS:]
+        if len(dates) < _SECTOR_MIN_CONSISTENT:
+            return result
+        for name, info in result.items():
+            single = info.get("single_day_class", "rotational")
+            if single == "rotational":
+                info["classification"] = "rotational"
+                continue
+            count = sum(1 for d in dates if history[d].get(name) == single)
+            if count >= _SECTOR_MIN_CONSISTENT:
+                info["classification"] = single
+            else:
+                info["classification"] = "rotational"
+                info["classification_downgraded"] = True
+        return result
+    except Exception:
+        return result
 
 
 def classify_by_percentile(ranking: Dict[str, dict]) -> Dict[str, str]:

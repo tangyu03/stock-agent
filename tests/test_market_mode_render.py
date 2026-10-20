@@ -71,7 +71,7 @@ def test_sector_resonance_discloses_bullish_divergence_without_voting():
     assert "仅观测不投票" in result["line"]
 
 
-def test_environment_overview_warns_when_sector_snapshot_is_stale():
+def test_environment_overview_omits_stale_sector_snapshot_warning():
     content = render_environment_overview({
         "market_mode": "defend",
         "sectors": {"main_trend": ["半导体"], "rotational": [], "retreating": []},
@@ -79,12 +79,12 @@ def test_environment_overview_warns_when_sector_snapshot_is_stale():
             "available": True,
             "snapshot_date": "2026-08-22",
             "lag_days": 55,
-            "line": "板块快照2026-08-22滞后55天，板块状态降权",
+            "line": "",
         },
     })
 
-    assert "板块快照2026-08-22滞后55天" in content
-    assert "板块状态降权" in content
+    assert "板块归属快照" not in content
+    assert "板块状态标签仅供参考" not in content
 
 
 def test_environment_overview_renders_sector_resonance():
@@ -96,5 +96,5 @@ def test_environment_overview_renders_sector_resonance():
         },
     })
 
-    assert "共振:共振观测: 指数defend" in content
+    assert "共振 共振观测: 指数defend" in content
     assert "仅观测不投票" in content

@@ -25,7 +25,7 @@ def sqlite_db(tmp_path, monkeypatch):
 def test_report_header_stamps_global_rules_version():
     content = render_environment_overview({"market_mode": "defend"})
     assert get_rules_version() == RULES_VERSION
-    assert f"规则版本:{RULES_VERSION}" in content
+    assert f"口径:{RULES_VERSION}" in content
 
 
 def test_new_event_snapshots_global_rules_version(sqlite_db):

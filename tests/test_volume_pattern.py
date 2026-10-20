@@ -419,12 +419,12 @@ class TestStarsAndRender:
         lines = render_volume_pattern(build_volume_pattern(_feirongda_data()))
         assert lines[0] == "③量能 [抛压衰竭型] ★★★"
         assert lines[1] == (
-            "③·证据: 接口量比0.89@时间未标注(缩量;口径未标注) | 换手6.55%(活跃,基准:绝对档) "
+            "③·证据: 接口量比0.89@时间N/A(缩量;N/A) | 换手6.55%(活跃,基准:绝对档) "
             "| 主动差+2.5%(外盘占优) | 位置:破位(距前高-9.6%｜MA20偏离-9.3%｜20日涨幅-15.0%)"
         )
         assert "RSI6=21超卖" in lines[2] and "跌不动了" in lines[2]
         assert any("量价资金背离" in line for line in lines)
-        assert any("接口量比@时间未标注 回升1.2+" in line and "低吸复核" in line for line in lines)
+        assert any("接口量比@时间N/A 回升1.2+" in line and "低吸复核" in line for line in lines)
 
     def test_render_without_order_flow(self):
         data = _feirongda_data(tech_signals={})
@@ -465,10 +465,10 @@ class TestTemplateIntegration:
     def test_observation_card_renders_pattern_block(self):
         from src.push.templates import _render_compact_observation_signal
         title, content = _render_compact_observation_signal(_feirongda_data())
-        assert "③量能 [抛压衰竭型] ★★★" in content
+        assert "4 量能:[抛压衰竭型] ★★★" in content
         assert "③·推论" in content
         assert "量价资金背离" in content
-        assert "③·下一步" in content
+        assert "③·待验" in content
         # 旧陈列文案不再出现
         assert "(展示)" not in content
 
@@ -477,7 +477,7 @@ class TestTemplateIntegration:
         data = _feirongda_data(tech_signals={})
         _, content = _render_compact_observation_signal(data)
         assert "盘口数据不足" in content
-        assert "④资金" in content
+        assert "5 资金:" in content
 
     def test_entry_card_lines_include_pattern_block(self):
         from src.push.templates import _entry_decision_lines

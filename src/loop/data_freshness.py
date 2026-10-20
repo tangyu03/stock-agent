@@ -42,7 +42,8 @@ def find_recent_trading_day(target_date: str, max_lookback: int = 10,
     start = 1 if skip_today else 0
     for i in range(start, max_lookback + start):
         d = dt - timedelta(days=i)
-        if d.weekday() < 5:  # 周一~周五
+        from ..utils.trading_calendar import is_trading_day
+        if is_trading_day(d):
             return d.strftime("%Y-%m-%d")
     return dt.strftime("%Y-%m-%d")
 

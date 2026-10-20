@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from typing import Callable, Dict, Iterable, List, Optional
 
 from ..db import get_conn
+from ..utils.trading_calendar import is_trading_day as _is_trading_day
 
 
 CHECKPOINTS = ("T+5", "T+10", "T+20")
@@ -119,7 +120,7 @@ def _business_days_between(start: date, end: date) -> int:
     days = 0
     cursor = start + timedelta(days=1)
     while cursor <= end:
-        if cursor.weekday() < 5:
+        if _is_trading_day(cursor):
             days += 1
         cursor += timedelta(days=1)
     return days
@@ -133,7 +134,7 @@ def _due_date(track_date: str, offset: int, as_of: date) -> Optional[str]:
     cursor = start + timedelta(days=1)
     seen = 0
     while cursor <= as_of:
-        if cursor.weekday() < 5:
+        if _is_trading_day(cursor):
             seen += 1
             if seen == offset:
                 return cursor.isoformat()

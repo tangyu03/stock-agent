@@ -7,7 +7,6 @@ from typing import Optional
 from datetime import datetime, date
 
 from ..db import get_connection
-from ..decision.aggregator import get_aggregator
 from ..feedback.trade_logger import get_trade_logger
 from ..push.pushplus import get_pushplus
 
@@ -18,7 +17,6 @@ class DailyReview:
     """盘后复盘"""
 
     def __init__(self):
-        self._aggregator = get_aggregator()
         self._logger = get_trade_logger()
         self._pushplus = get_pushplus()
 

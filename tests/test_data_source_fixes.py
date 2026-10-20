@@ -266,14 +266,15 @@ class TestVoteWeights:
     def test_disclosed_sources_keep_full_weight(self, monkeypatch):
         """两融+1、龙虎榜+1（交易所披露口径）→ 加权 2.0 → 资金看多。"""
         monkeypatch.setattr(_inst, "_fetch_margin_balance",
-                            lambda c: {"vote": 1, "detail": "两融增加", "raw": {"as_of": "2026-10-14"}})
+                            lambda c: {"vote": 1, "detail": "两融增加", "raw": {"as_of": datetime.now().date().isoformat()}})
         monkeypatch.setattr(_inst, "_fetch_lhb_institutional",
-                            lambda c: {"vote": 1, "detail": "机构净买", "raw": {"as_of": "2026-10-14"}})
+                            lambda c: {"vote": 1, "detail": "机构净买", "raw": {"as_of": datetime.now().date().isoformat()}})
         monkeypatch.setattr(_inst, "_fetch_main_force_flow",
                             lambda c: {"vote": 0, "detail": "中性", "raw": {}})
         monkeypatch.setattr(_inst, "_fetch_shareholder_count",
                             lambda c: {"vote": 0, "detail": "中性", "raw": {}})
         monkeypatch.setattr(_inst, "_fetch_top10_institutional_ratio", lambda c: None)
+        _inst._reset_institutional_state()
         result = _REAL_SCORE("603061")
         assert result["vote_score"] == 2
         assert result["vote_label"] == "资金看多"
@@ -345,8 +346,7 @@ class TestObservationFundamental:
             "note": "买入: 无 | 卖出: 无",
         }
         title, content = _render_compact_observation_signal(data)
-        assert "七问" in content
-        assert "⑦基本面" in content
+        assert "9 基本面:业绩=" in content
         assert "预亏" in content
         assert "业绩雷" in content
         assert "报告期2026-06" in content

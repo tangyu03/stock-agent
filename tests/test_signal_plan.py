@@ -564,6 +564,24 @@ def test_entry_render_uses_compact_execution_format():
     assert "风控参数" not in rendered
 
 
+def test_fixed_card_renders_nearest_key_levels():
+    from src.push.templates import _key_levels
+
+    data = {
+        "current_price": 100.0,
+        "prev_low": 92.0,
+        "ma5": 103.0,
+        "ma10": 98.0,
+        "ma20": 95.0,
+        "prior_high": 110.0,
+        "recent_high": 108.0,
+        "tech_signals": {"bollinger": {"lower": 90.0, "upper": 105.0}},
+    }
+    rendered = _key_levels(data)
+    assert "支撑:MA10 98(-2.0%)" in rendered
+    assert "压力:布林上轨 105(+5.0%)" in rendered
+
+
 def test_observation_render_uses_compact_reasoning_format():
     data = {
         "stock_name": "测试股",
@@ -603,15 +621,41 @@ def test_observation_render_uses_compact_reasoning_format():
     _, rendered = render_exit_signal(data)
 
     assert "市场:防守(5.0)" not in rendered
-    assert "①方向:MACD死叉延续" in rendered
-    assert "时机: RSI6=N/A(条件不可评) | RSI14=30.3(弱于40,此条件已满足) | 离散信号0/4(金叉|底背驰|缩量止跌|放量下破)" in rendered
-    # 【分型引擎】③从陈列升级为分型；无内外盘时降级为"盘口数据不足"+数据行
-    assert "③量能 [盘口数据不足]" in rendered
-    assert "接口量比0.86@时间未标注(缩量;口径未标注)" in rendered
-    assert "④资金:🔴资金看空" in rendered or "资金看空(-3票" in rendered
-    assert "⑤买入检查:技术投票偏空" in rendered
-    assert "⑥风控:止损未触发" in rendered
+    assert "2 方向:MA排列=N/A" in rendered
+    assert "MACD状态=MACD死叉延续" in rendered
+    assert "3 时机:RSI6=N/A(条件不可评)" in rendered
+    assert "RSI14=30.3 触线(弱于40)" in rendered
+    assert "4 量能:[盘口数据不足] 接口量比0.86@时间N/A(缩量;N/A)" in rendered
+    assert "5 资金:两融=融资余额减少" in rendered
+    assert "覆盖N/A/4｜票值-3" in rendered
+    assert "6 买入:结论=技术投票偏空，未触发买入" in rendered
+    assert "7 风控:观察｜跟踪=未触发" in rendered
     assert "技术面" not in rendered
+
+
+def test_fund_details_stay_on_stock_cards():
+    from src.push.templates import build_report_global_context
+
+    first = {
+        "stock_name": "第一股",
+        "institutional_holding": {"votes": {
+            "main_force": {"vote": 0, "detail": "对账源东财主力3日不可用，未完成双源复核"},
+            "shareholder": {"vote": 0, "detail": "股东户数报告期20260630（报告期级滞后111天>90天）不参与投票"},
+            "lhb": {"vote": 0, "detail": "近30日无龙虎榜记录"},
+        }},
+    }
+    second = {
+        "stock_name": "第二股",
+        "institutional_holding": {"votes": {
+            "main_force": {"vote": -1, "detail": "3日净流出"},
+            "shareholder": {"vote": -1, "detail": "股东户数增加"},
+            "lhb": {"vote": -1, "detail": "机构净卖出"},
+        }},
+    }
+    context = build_report_global_context([first, second])
+
+    assert not {item["label"] for item in context["items"]} & {"主力资金", "股东户数", "龙虎榜", "两融"}
+    assert not context["funds"]
 
 
 def test_sell_signal_uses_same_seven_question_reasoning_format():
@@ -655,10 +699,12 @@ def test_sell_signal_uses_same_seven_question_reasoning_format():
 
     _, rendered = render_exit_signal(data)
 
-    assert "七问" in rendered
-    assert "①方向:MA空头排列" in rendered
-    assert "④资金:" in rendered and "资金偏空" in rendered
-    assert "⑥风控:类型:技术走弱｜理由:" in rendered
+    assert "1 判读:" in rendered
+    assert "2 方向:MA排列=MA空头排列" in rendered
+    assert "MACD状态=MACD死叉延续+绿柱扩大" in rendered
+    assert "5 资金:两融=N/A" in rendered
+    assert "覆盖N/A/4｜票值-1" in rendered
+    assert "7 风控:卖出｜跟踪=触发｜收盘确认价369.02｜止损:317.54" in rendered
     assert "技术面" not in rendered
     assert "退出逻辑" not in rendered
 
@@ -681,12 +727,10 @@ def test_timing_line_shows_threshold_gaps_and_discrete_hits():
 
     _, rendered = render_exit_signal(data)
 
-    assert (
-        "时机: RSI6=29.5(超卖线25,还差4.5) "
-        "| RSI14=36.7(弱于40,此条件已满足) "
-        "| BIAS6=-5.1%(乖离佐证,不投票) "
-        "| 离散信号3/4(金叉|底背驰|缩量止跌|放量下破)"
-    ) in rendered
+    assert "3 时机:RSI6=29.5(超卖线25,还差4.5)" in rendered
+    assert "RSI14=36.7 触线(弱于40)" in rendered
+    assert "BIAS6=-5.1%(乖离佐证,不投票)" in rendered
+    assert "离散=3/4(金叉|底背驰|缩量止跌|放量下破)" in rendered
 
 
 def test_watch_ladder_reason_is_rendered_in_observation_card():
@@ -700,7 +744,7 @@ def test_watch_ladder_reason_is_rendered_in_observation_card():
 
     _, rendered = render_exit_signal(data)
 
-    assert "距触发:确认追强(当前模式可评估)：缺 ADX" in rendered
+    assert "规则=观察：确认追强(当前模式可评估)：缺 ADX" in rendered
 
 
 def test_report_does_not_render_standalone_watch_ladder(monkeypatch):
@@ -708,7 +752,7 @@ def test_report_does_not_render_standalone_watch_ladder(monkeypatch):
 
     captured = {}
 
-    def _send(self, title, content, level="常规"):
+    def _send(self, title, content, level="常规", **kwargs):
         captured.update({"title": title, "content": content})
         return True
 
@@ -734,7 +778,7 @@ def test_report_does_not_render_standalone_watch_ladder(monkeypatch):
 
     assert "未触发候选" not in captured["content"]
     assert "未触发说明" not in captured["content"]
-    assert "距触发:确认追强(当前模式可评估)：缺 ADX" in captured["content"]
+    assert "确认追强(当前模式可评估)：缺 ADX" in captured["content"]
 
 
 def test_template_renders_machine_tags():

@@ -2,6 +2,7 @@
 消息模板渲染 - 完整决策卡片版
 每个信号展示完整决策链：环境->技术->形态->过滤->信号逻辑->风控
 """
+from collections import Counter
 from typing import Dict, List
 from datetime import date
 
@@ -684,7 +685,7 @@ def _rsi_note(value, threshold: float, threshold_label: str, gap_label: str) -> 
         return f"{value}(条件不可评)"
     met = number <= threshold
     if met:
-        return f"{number:.1f}({threshold_label},此条件已满足)"
+        return f"{number:.1f} 触线({threshold_label})"
     gap = abs(number - threshold)
     return f"{number:.1f}({threshold_label},{gap_label}{gap:.1f})"
 
@@ -738,11 +739,16 @@ def _fixed_num(value):
 
 def _fixed_vote_text(value) -> str:
     number = _fixed_num(value)
-    return f"票{number:+g}" if number is not None else "票未标注"
+    return f"{number:+g}" if number is not None else "N/A"
+
+
+def _fixed_price_text(value) -> str:
+    number = _fixed_num(value)
+    return f"{number:g}" if number is not None else "N/A"
 
 
 def _fixed_confidence(data) -> str:
-    return str(data.get("confidence") or "").strip() or "未标注"
+    return str(data.get("confidence") or "").strip() or "N/A"
 
 
 def _fixed_environment_text(data) -> str:
@@ -755,7 +761,7 @@ def _fixed_environment_text(data) -> str:
     if sector_name:
         sector_status = _sector_label(data.get("sector_status", ""))
         parts.append(f"板块:{sector_name}:{sector_status}" if sector_status else f"板块:{sector_name}")
-    return "｜".join(parts) if parts else "未标注"
+    return "｜".join(parts) if parts else "N/A"
 
 
 def _fixed_tech_vote(data):
@@ -783,7 +789,7 @@ def _fixed_tech_sources(data) -> str:
         "volume": "量能组",
     }
     labels = [label for key, label in names.items() if key in categories]
-    return "/".join(labels or ["未标注"])
+    return "/".join(labels or ["N/A"])
 
 
 def _fixed_fund_value(data):
@@ -805,7 +811,7 @@ def _fixed_clean_rule_text(text, rule_name="") -> str:
     value = value.strip(" ；\n")
     if rule_name and value.startswith(rule_name):
         value = value[len(rule_name):].lstrip("：:；; ")
-    return value or "未提供"
+    return value or "N/A"
 
 
 def _fixed_direction_rows(data) -> List[str]:
@@ -828,6 +834,134 @@ def _fixed_direction_rows(data) -> List[str]:
         f"MA排列={ma_text}",
         f"MACD状态={macd_text or 'N/A'}",
     ]
+
+
+def _volume_anchor(data) -> str:
+    result = build_volume_pattern(data)
+    pattern = str(result.get("pattern") or "")
+    if "真实抛压" in pattern:
+        return "!"
+    if "分歧" in pattern or result.get("conflict"):
+        return "⚠"
+    if "待定" in pattern:
+        return "~"
+    return ""
+
+
+def _key_levels(data) -> str:
+    """Render nearest support/resistance from existing technical anchors."""
+    current = _fixed_num(data.get("current_price"))
+    if current is None or current <= 0:
+        return "支撑:N/A｜压力:N/A"
+    tech = data.get("tech_signals") or {}
+    boll = tech.get("bollinger") or {}
+    support_candidates = [
+        ("前低", data.get("prev_low")),
+        ("MA5", data.get("ma5")),
+        ("MA10", data.get("ma10")),
+        ("MA20", data.get("ma20")),
+        ("布林下轨", boll.get("lower")),
+    ]
+    resistance_candidates = [
+        ("前高", data.get("prior_high")),
+        ("20日高", data.get("recent_high")),
+        ("布林上轨", boll.get("upper")),
+    ]
+
+    def nearest(candidates, below=True):
+        values = []
+        for name, value in candidates:
+            number = _fixed_num(value)
+            if number is None or number <= 0:
+                continue
+            if below and number < current:
+                values.append((name, number))
+            if not below and number > current:
+                values.append((name, number))
+        if not values:
+            return ""
+        if below:
+            name, value = max(values, key=lambda item: item[1])
+        else:
+            name, value = min(values, key=lambda item: item[1])
+        distance = (float(value) / current - 1.0) * 100.0
+        return f"{name} {value:g}({distance:+.1f}%)"
+
+    support = nearest(support_candidates, True)
+    if not support:
+        value = current * 0.95
+        support = f"估算现价×0.95={value:g}(-5.0%)"
+    resistance = nearest(resistance_candidates, False)
+    if not resistance:
+        value = current * 1.05
+        resistance = f"估算现价×1.05={value:g}(+5.0%)"
+    return f"支撑:{support}｜压力:{resistance}"
+
+
+def _fixed_buy_rows(data, buy_text=None) -> List[str]:
+    text = _fixed_buy_text(data, buy_text)
+    conclusion, _, event = text.partition("\n事件状态: ")
+    conclusion = conclusion.strip() or "N/A"
+    event = event.strip()
+    result = build_volume_pattern(data)
+    confirms = [str(item) for item in (result.get("confirms") or []) if str(item)]
+    confirms = _fixed_next_steps(data) if not confirms else confirms[:3]
+    return [conclusion, event or "N/A", " | ".join(confirms) or "N/A"]
+
+
+def build_report_global_context(signals) -> dict:
+    """Derive report-wide facts only when every rendered card has the same value."""
+    cards = [signal for signal in (signals or []) if isinstance(signal, dict)]
+    total = len(cards)
+    if not total:
+        return {"count": 0, "items": []}
+
+    def common(getter):
+        values = [str(getter(card) or "") for card in cards]
+        counts = Counter(value for value in values if value)
+        if not counts:
+            return None
+        value, count = counts.most_common(1)[0]
+        threshold = max(2, -(-total * 7 // 10))
+        if count < threshold:
+            return None
+        exceptions = [
+            f"{card.get('stock_name') or card.get('stock_code')}"
+            for card, item in zip(cards, values) if item != value
+        ]
+        return {"value": value, "count": count, "exceptions": exceptions}
+
+    direction = common(lambda card: "|".join(_fixed_direction_rows(card)))
+    buy = common(lambda card: _fixed_buy_text(card).split("\n事件状态: ", 1)[0])
+    rule = common(lambda card: _fixed_clean_rule_text(
+        card.get("candidate_reason") or card.get("breadth_upgrade_reason") or card.get("reason") or "",
+        card.get("exit_type") or "观察",
+    ))
+    items = []
+    if direction:
+        items.append({"label": "方向", **direction})
+    if rule:
+        items.append({"label": "规则", **rule})
+    if buy:
+        items.append({"label": "买入检查", **buy})
+    return {"count": total, "direction": direction, "funds": {}, "items": items}
+
+
+def render_report_global_context(context) -> str:
+    items = (context or {}).get("items") or []
+    count = (context or {}).get("count") or 0
+    if not items or count < 2:
+        return ""
+    rows = []
+    for item in items:
+        exceptions = item.get("exceptions") or []
+        row = f"{item['label']}（{item['count']}/{count}）: {item['value']}"
+        if exceptions:
+            row += "；例外: " + "、".join(str(value) for value in exceptions)
+        rows.append(row)
+    return "<b>全池口径</b><br/>" + "".join(
+        f"&nbsp;&nbsp;{_esc(row)}<br/>" for row in rows
+    )
 
 
 def _fixed_timing_rows(data) -> List[str]:
@@ -880,6 +1014,17 @@ def _fixed_drive_text(value) -> str:
     return f"{pct:+.1f}%({label})"
 
 
+def _fixed_turnover_gear(value) -> str:
+    number = _fixed_num(value)
+    if number is None:
+        return "N/A"
+    if number > 5:
+        return "活跃"
+    if number >= 1:
+        return "正常"
+    return "低迷"
+
+
 def _fixed_volume_rows(data) -> List[str]:
     result = build_volume_pattern(data)
     if not result or not result.get("available"):
@@ -889,18 +1034,18 @@ def _fixed_volume_rows(data) -> List[str]:
         sample_time = (
             result.get("same_period_sample_time") if result.get("early_window")
             else result.get("volume_sample_time")
-        ) or "时间未标注"
+        ) or "时间N/A"
         caliber = (
             result.get("same_period_caliber") if result.get("early_window")
             else result.get("volume_caliber")
-        ) or "口径未标注"
+        ) or "N/A"
         caliber = str(caliber).replace("接口量比", "量比").replace("(5日分钟均量)", "(5日分钟均量口径)")
         vr_text = f"{float(vr):.2f}@{sample_time}({_fixed_volume_gear(result.get('vgear'))};{caliber})"
     else:
         vr_text = "N/A"
     turnover = result.get("turnover")
     turnover_text = (
-        f"{float(turnover):.2f}%({result.get('tgear') or 'N/A'},基准:{result.get('tgear_base') or '绝对档'})"
+        f"{float(turnover):.2f}%({_fixed_turnover_gear(turnover)},基准:{result.get('tgear_base') or '绝对档'})"
         if turnover is not None else "N/A"
     )
     position_detail = result.get("position_detail") or {}
@@ -914,12 +1059,16 @@ def _fixed_volume_rows(data) -> List[str]:
     position_text = result.get("position") or "N/A"
     if detail_bits:
         position_text += "(" + "｜".join(detail_bits) + ")"
+    type_text = result.get("pattern") or "盘口数据不足"
+    conflict = result.get("conflict")
+    if conflict:
+        type_text = f"{type_text}（{conflict}）"
     return [
         f"量比={vr_text}",
         f"换手={turnover_text}",
         f"主动买卖差={_fixed_drive_text(result.get('drive'))}",
         f"位置={position_text}",
-        f"类型={result.get('pattern') or '盘口数据不足'}",
+        f"类型={type_text}",
     ]
 
 
@@ -927,7 +1076,7 @@ def _fixed_next_steps(data) -> List[str]:
     result = build_volume_pattern(data)
     confirms = list(result.get("confirms") or [])[:3]
     if not confirms:
-        return ["未提供"]
+        return ["N/A"]
     fund = data.get("institutional_holding") or {}
     votes = fund.get("votes") or {}
     filtered = []
@@ -942,7 +1091,7 @@ def _fixed_next_steps(data) -> List[str]:
         if ("换手" in text) and result.get("turnover") is None:
             continue
         filtered.append(text)
-    return filtered[:3] or ["未提供"]
+    return filtered[:3] or ["N/A"]
 
 
 def _fixed_fund_rows(data) -> List[str]:
@@ -956,11 +1105,20 @@ def _fixed_fund_rows(data) -> List[str]:
     ]
     rows = []
     for label, key in source_names:
-        detail = str((votes.get(key) or {}).get("detail") or "").strip()
-        rows.append(f"{label}={detail or '未覆盖'}")
+        source = votes.get(key) or {}
+        detail = str(source.get("detail") or "").strip()
+        if key == "main_force":
+            raw = source.get("raw") or {}
+            expected_days = int(raw.get("expected_days") or 0)
+            covered_days = int(raw.get("coverage_days") or 0)
+            if expected_days > 0:
+                partial = "" if covered_days >= expected_days else ",部分覆盖弃权"
+                detail += f"；近{covered_days}日净额覆盖{covered_days}/{expected_days}日{partial}"
+        detail_text = detail or "N/A"
+        rows.append(f"{label}={detail_text}")
     score, covered = _fixed_fund_value(data)
     if score is None:
-        value_text = "未标注"
+        value_text = "N/A"
     elif score == 0:
         value_text = "弃权"
     else:
@@ -975,7 +1133,7 @@ def _fixed_buy_text(data, buy_text=None) -> str:
         return str(buy_text)
     note = str(data.get("note") or "")
     value = note.split(" | 卖出: ", 1)[0].replace("买入: ", "", 1).strip()
-    return value or "未提供"
+    return value or "N/A"
 
 
 def _fixed_exit_text(data, exit_text=None) -> str:
@@ -983,7 +1141,7 @@ def _fixed_exit_text(data, exit_text=None) -> str:
         return str(exit_text)
     note = str(data.get("note") or "")
     parts = note.split(" | 卖出: ", 1)
-    return parts[1].strip() if len(parts) == 2 else "未提供"
+    return parts[1].strip() if len(parts) == 2 else "N/A"
 
 
 def _fixed_risk_rows(data, action, rule_name, reason_text, trigger_price=None, stop_loss_price=None) -> List[str]:
@@ -993,22 +1151,17 @@ def _fixed_risk_rows(data, action, rule_name, reason_text, trigger_price=None, s
         tracking = "触发"
         instruction = "卖出"
     else:
-        tracking = "未触发" if "未触发" in _fixed_exit_text(data) else "未提供"
+        tracking = "未触发" if "未触发" in _fixed_exit_text(data) else "N/A"
         instruction = "观察"
     if trigger is not None and current_price is not None and trigger == current_price:
-        trigger_text = f"收盘确认价{trigger:+g}"
+        trigger_text = f"收盘确认价{_fixed_price_text(trigger)}"
     elif trigger is not None:
-        trigger_text = f"触发价{trigger:+g}"
+        trigger_text = f"触发价{_fixed_price_text(trigger)}"
     else:
-        trigger_text = "收盘确认价未提供"
+        trigger_text = "确认价:N/A"
     stop = _fixed_num(stop_loss_price)
-    stop_text = f"止损{stop:+g}" if stop is not None else "止损未适用"
-    return [
-        f"条款={rule_name}：{_fixed_clean_rule_text(reason_text, rule_name)}",
-        f"跟踪状态={tracking}",
-        f"指令={instruction}",
-        f"参数={trigger_text}；{stop_text}＝无计算式",
-    ]
+    stop_text = f"止损:{_fixed_price_text(stop)}" if stop is not None else "止损:N/A"
+    return [f"{action}｜跟踪={tracking}｜{trigger_text}｜{stop_text}"]
 
 
 def _render_fixed_card(
@@ -1026,7 +1179,14 @@ def _render_fixed_card(
     current_price = data.get("current_price")
     change_pct = data.get("change_pct")
     action_suffix = "" if not rule_name or rule_name in action else rule_name
-    title = f"{action}{action_suffix} {name}({code})"
+    anchor = _volume_anchor(data)
+    plan = data.get("execution_plan") or {}
+    conf = plan.get("confidence_score")
+    appl = plan.get("applicable_score")
+    composite = ""
+    if conf is not None and appl is not None and appl > 0:
+        composite = f" {float(conf) / float(appl) * 10:.1f}"
+    title = f"{anchor}{action}{action_suffix}{composite} {name}({code})"
 
     price_text = ""
     if current_price is not None:
@@ -1036,44 +1196,42 @@ def _render_fixed_card(
                 price_text += f" {float(change_pct):+.2f}%"
             except (TypeError, ValueError):
                 pass
-    title_line = (
-        f"{action}{action_suffix}｜{name}({code})｜{_fixed_vote_text(_fixed_tech_vote(data))}"
-        f"｜置信度{_fixed_confidence(data)}"
-    )
-
     fund_score, _ = _fixed_fund_value(data)
-    fund_text = "弃权" if fund_score == 0 else f"票值{fund_score:+g}" if fund_score is not None else "未标注"
+    fund_text = "弃权" if fund_score == 0 else f"票值{fund_score:+g}" if fund_score is not None else "N/A"
     stop = _fixed_num(stop_loss_price)
-    judgment_output = (
-        f"输出={action}｜止损{stop:+g}＝无计算式｜有效期未标注"
-        if stop is not None else f"输出={action}｜止损未适用＝无计算式｜有效期未标注"
-    )
+    stop_display = _fixed_price_text(stop) if stop is not None else "N/A"
+    judgment_output = f"输出={action}｜止损:{stop_display}｜有效期:N/A"
 
-    lines = [f"1 标题行:{title_line}"]
-    lines.append(
-        f"2 判读:输入={_fixed_environment_text(data)}｜技术票{_fixed_vote_text(_fixed_tech_vote(data))}"
+    lines = [
+        f"1 判读:输入={_fixed_environment_text(data)}｜技术票{_fixed_vote_text(_fixed_tech_vote(data))}"
         f"（{_fixed_tech_sources(data)}）｜资金{fund_text}"
-    )
+    ]
+    direction_rows = _fixed_direction_rows(data)
     lines.append(f"规则={rule_name}：{_fixed_clean_rule_text(reason_text, rule_name)}")
     lines.append(judgment_output)
-    direction_rows = _fixed_direction_rows(data)
-    lines.append(f"3 方向:{direction_rows[0]}")
+    lines.append(f"2 方向:{direction_rows[0]}")
     lines.extend(direction_rows[1:])
     timing_rows = _fixed_timing_rows(data)
-    lines.append(f"4 时机:{timing_rows[0]}")
+    lines.append(f"3 时机:{timing_rows[0]}")
     lines.extend(timing_rows[1:])
-    volume_rows = _fixed_volume_rows(data) + [f"下一步={' | '.join(_fixed_next_steps(data))}"]
-    lines.append(f"5 量能:{volume_rows[0]}")
+    volume_rows = render_volume_pattern(build_volume_pattern(data)) or _fixed_volume_rows(data)
+    if volume_rows and volume_rows[0].startswith("③量能 "):
+        volume_rows[0] = volume_rows[0][len("③量能 "):]
+    lines.append(f"4 量能:{volume_rows[0]}")
     lines.extend(volume_rows[1:])
     fund_rows = _fixed_fund_rows(data)
-    lines.append(f"6 资金:{fund_rows[0]}")
+    lines.append(f"5 资金:{fund_rows[0]}")
     lines.extend(fund_rows[1:])
-    lines.append(f"7 买入:{_fixed_buy_text(data, buy_text)}")
+    buy_rows = _fixed_buy_rows(data, buy_text)
+    lines.append(f"6 买入:结论={buy_rows[0]}")
+    lines.append(f"├ 事件:{buy_rows[1]}")
+    lines.append(f"└ 缺口:{buy_rows[2]}")
     risk_rows = _fixed_risk_rows(data, action, rule_name, reason_text, trigger_price, stop_loss_price)
-    lines.append(f"8 风控:{risk_rows[0]}")
+    lines.append(f"7 风控:{risk_rows[0]}")
     lines.extend(risk_rows[1:])
+    lines.append(f"8 关键价位:{_key_levels(data)}")
     fundamental_text = _fundamental_line(data)
-    lines.append(f"9 基本面:业绩={fundamental_text or '未提供'}")
+    lines.append(f"9 基本面:业绩={fundamental_text or 'N/A'}")
     calendar_text = _event_calendar_text(data)
     if calendar_text:
         lines.append(f"未来事件={calendar_text}")
@@ -1210,6 +1368,11 @@ def _render_compact_entry_signal(data):
     hyp_block = _hypothesis_block(data)
     if hyp_block:
         content += hyp_block
+
+    content += (
+        "<b>关键价位</b><br/>&nbsp;&nbsp;"
+        f"{_esc(_key_levels(data))}<br/><br/>"
+    )
 
     confidence_details = plan.get("confidence_details") or []
     content += (
@@ -1682,156 +1845,196 @@ def _mode_gate_expectation(mode: str) -> str:
     if mode == "retreat":
         return "今日若收盘收复MA5×0.99，明日转防守"
     return ""
-def render_environment_overview(data: Dict) -> str:
-    """
-    渲染环境总览 HTML 片段（可复用于盘前/盘中推送）。
+def _env_dimension_group(dimension: Dict) -> str:
+    key = str(dimension.get("key") or dimension.get("name") or "").lower()
+    name = str(dimension.get("name") or "")
+    if key in {"index_trend", "ma_alignment"} or "趋势" in name or "均线" in name:
+        return "趋势"
+    if key == "volume" or "量价" in name:
+        return "量价"
+    if key == "breadth" or "宽度" in name:
+        return "宽度"
+    if key == "dist_days" or "派发" in name:
+        return "派发"
+    return "其他"
 
-    Args:
-        data: {
-            "market_mode": str, "market_score": float, "position_limit": float,
-            "gem_sci_tech": dict or None, "external_market": dict or None,
-            "sectors": {"main_trend":[], "rotational":[], "retreating":[]} or None,
-        }
-    """
+
+def render_environment_overview(data: Dict) -> str:
+    """渲染环境总览：模式结论 → 证据 → 辅助 → 板块影响。"""
     mode = data.get("market_mode", "defend")
     mn = {"attack": "进攻", "defend": "防守", "retreat": "撤退"}.get(mode, mode)
+    score = data.get("market_score")
+    ref_date = data.get("ref_date")
+    date_suffix = "（上一交易日）" if data.get("is_backfill") else ""
 
-    content = "<b>📊 环境总览</b><br/>"
-    content += f"&nbsp;&nbsp;规则版本:{get_rules_version()}<br/>"
+    header_parts = [f"模式:{mn}"]
+    if score is not None:
+        try:
+            header_parts.append(f"{float(score):.1f}分")
+        except (TypeError, ValueError):
+            pass
+    header_parts.append(f"口径:{get_rules_version()}")
+    if ref_date:
+        header_parts.append(f"数据:{ref_date}{date_suffix}")
+
+    content = "<b>📊 环境</b><br/>"
     if data.get("invalidation_triggered"):
         content += "&nbsp;&nbsp;<b>⚠环境判定作废重估告警</b><br/>"
-    content += f"&nbsp;&nbsp;模式:{mn}<br/>"
-    # D-修复：模式判定用昨日收盘（跌破MA5×0.99），大涨日早晨仍防守；环境栏
-    # 加一行“闸门预期”，让读者知道闸门何时可能打开（踏空台账4笔的直接来源）。
-    _gate_hint = _mode_gate_expectation(mode)
-    if _gate_hint:
-        content += f"&nbsp;&nbsp;闸门预期:{_gate_hint}<br/>"
-    mode_matrix = data.get("mode_transition_matrix") or []
-    if mode_matrix:
-        matrix_parts = []
-        for row in mode_matrix:
-            mark = "→" if row.get("is_current") else ""
-            matrix_parts.append(f"{mark}{row.get('label')}:{row.get('entry')}")
-        content += (
-            f"&nbsp;&nbsp;模式矩阵: "
-            f"{' | '.join(_esc(item) for item in matrix_parts)}<br/>"
+    content += f"&nbsp;&nbsp;{'｜'.join(_esc(item) for item in header_parts)}<br/>"
+
+    reason = str(data.get("mode_reason") or "").strip()
+    if data.get("shock_downgraded"):
+        before_cn = {"attack": "进攻", "defend": "防守", "retreat": "撤退"}.get(
+            data.get("mode_before_shock", ""), ""
         )
-    from ..decision.mode_rules import render_market_panic_line
-    content += f"&nbsp;&nbsp;{_esc(render_market_panic_line(data.get('market_panic')))}<br/>"
+        downgrade = f"外盘降级:{before_cn}→{mn}" if before_cn else f"外盘降级→{mn}"
+        reason = "；".join(item for item in (reason, downgrade) if item)
+    if reason:
+        content += f"&nbsp;&nbsp;原因:{_esc(reason)}<br/>"
 
-    # P2-13 审计（2026-08-22）：非交易日复盘时标注数据参考日（上一交易日）
-    ref_date = data.get("ref_date")
-    if ref_date:
-        suffix = "（上一交易日）" if data.get("is_backfill") else ""
-        content += f"&nbsp;&nbsp;数据:{ref_date}{suffix}<br/>"
+    gate_hint = _mode_gate_expectation(mode)
+    if gate_hint:
+        content += f"&nbsp;&nbsp;转档:{_esc(gate_hint)}<br/>"
 
-    # 大盘环境推导链（真实数据，不虚构评分）
-    dimensions = data.get("dimensions") or []
-    if dimensions:
-        dim_parts = []
-        for d in dimensions:
-            icon_map = {"bullish": "✅", "neutral": "➖", "bearish": "❌"}
-            icon = icon_map.get(d.get("status"), "➖")
-            condition = d.get("condition", "")
-            dim_parts.append(f"{icon}{d['name']}:{_esc(condition)}")
-        content += f"&nbsp;&nbsp;环境: {' | '.join(dim_parts)}<br/>"
-        score_detail = data.get("score_detail", "")
-        if score_detail:
-            content += f"&nbsp;&nbsp;{_esc(score_detail)}<br/>"
-        # 模式判定原因
-        mode_reason = data.get("mode_reason", "")
-        if mode_reason:
-            content += f"&nbsp;&nbsp;判定: {_esc(mode_reason)} → {mn}<br/>"
-        # 外盘降级提示
-        if data.get("shock_downgraded"):
-            before_cn = {"attack": "进攻", "defend": "防守", "retreat": "撤退"}.get(
-                data.get("mode_before_shock", ""), "")
-            content += f"&nbsp;&nbsp;外盘降级: {before_cn}→{mn}<br/>"
+    panic = data.get("market_panic")
+    if isinstance(panic, dict):
+        panic_label = "已触发" if panic.get("triggered") else "未触发"
+        reasons = "；".join(str(item) for item in panic.get("reasons") or [])
+        missing = "；".join(str(item) for item in panic.get("missing") or [])
+        panic_detail = reasons or (f"数据未取到:{missing}" if missing else "均未达阈值")
+        content += f"&nbsp;&nbsp;恐慌抄底:{_esc(panic_label)}({_esc(panic_detail)})<br/>"
+    else:
+        content += "&nbsp;&nbsp;恐慌抄底:数据未取到<br/>"
 
-    # 双创技术位
+    # 证据层：同类维度合并，过程字段不再平铺。
+    dimension_groups: Dict[str, List[str]] = {}
+    for dimension in data.get("dimensions") or []:
+        group = _env_dimension_group(dimension)
+        condition = str(dimension.get("condition") or "").strip()
+        if condition:
+            dimension_groups.setdefault(group, []).append(condition)
+    evidence_lines = []
+    for group, values in dimension_groups.items():
+        evidence_lines.append(f"{group}:{_esc(' | '.join(values))}")
+    score_detail = str(data.get("score_detail") or "").strip()
+    if score_detail:
+        evidence_lines.append(f"评分:{_esc(score_detail)}")
+
+    # 双创是趋势证据的补充，不是模式结论本体。
     gem_sci_tech = data.get("gem_sci_tech") or {}
     if gem_sci_tech:
         trend = gem_sci_tech.get("trend_judgment", "")
         risk = gem_sci_tech.get("risk_flag", "")
+        risk_icon = {"danger": "🔴", "warning": "🟡", "none": "🟢"}.get(risk, "")
         gem = gem_sci_tech.get("gem") or {}
         star = gem_sci_tech.get("star") or {}
-        risk_icon = {"danger": "🔴", "warning": "🟡", "none": "🟢"}.get(risk, "")
-        content += f"&nbsp;&nbsp;双创:{risk_icon} {trend}"
         gem_label = gem.get("label", "") if gem else ""
         star_label = star.get("label", "") if star else ""
-        if gem_label:
-            content += f"<br/>&nbsp;&nbsp;&nbsp;&nbsp;创业板: {gem_label}"
-        if star_label:
-            content += f"<br/>&nbsp;&nbsp;&nbsp;&nbsp;科创50: {star_label}"
-        content += "<br/>"
+        gem_detail = "；".join(item for item in (
+            trend,
+            f"创业板 {gem_label}" if gem_label else "",
+            f"科创50 {star_label}" if star_label else "",
+        ) if item)
+        evidence_lines.append(f"双创:{risk_icon} {_esc(gem_detail)}")
+    if evidence_lines:
+        content += "<b>证据</b><br/>"
+        for item in evidence_lines:
+            content += f"&nbsp;&nbsp;{item}<br/>"
 
-    # 外围市场扰动
+    # 辅助层：只观察、不投票。
+    auxiliary = []
     ext_market = data.get("external_market") or {}
     if ext_market:
         disturbance = ext_market.get("disturbance") or {}
-        dist_summary = disturbance.get("summary", "")
-        dist_level = disturbance.get("level", "")
-        if dist_summary:
-            level_icon = {"严重扰动": "🔴", "中度扰动": "🟡", "轻度扰动": "🟢", "无影响": "🟢"}.get(dist_level, "")
-            content += f"&nbsp;&nbsp;外围:{level_icon} {_esc(dist_summary)}<br/>"
-
-    # 风格轮动
+        summary = disturbance.get("summary", "")
+        if summary:
+            level_icon = {
+                "严重扰动": "🔴", "中度扰动": "🟡",
+                "轻度扰动": "🟢", "无影响": "🟢",
+            }.get(disturbance.get("level", ""), "")
+            auxiliary.append(f"外围{level_icon} {_esc(summary)}")
     style_spread = data.get("style_spread") or {}
-    if style_spread:
-        style = style_spread.get("style", "")
-        spread = style_spread.get("spread", 0)
-        if style:
-            content += f"&nbsp;&nbsp;风格:{style}(差值{spread:+.1f}%)<br/>"
-
-    # 板块态势
-    sectors = data.get("sectors") or {}
-    if sectors:
-        sector_risk = data.get("sector_snapshot_risk") or {}
-        if sector_risk:
-            content += f"&nbsp;&nbsp;⚠{_esc(str(sector_risk.get('line') or '板块快照风险'))}<br/>"
-        mt = sectors.get("main_trend", [])
-        rs = sectors.get("rotational", [])
-        rt = sectors.get("retreating", [])
-        if mt or rs or rt:
-            content += "<br/><b>板块态势</b><br/>"
-            if mt:
-                content += f"&nbsp;&nbsp;主线:{','.join(mt)}<br/>"
-            if rs:
-                content += f"&nbsp;&nbsp;支线:{','.join(rs)}<br/>"
-            if rt:
-                content += f"&nbsp;&nbsp;退潮:{','.join(rt)}<br/>"
-
+    if style_spread.get("style"):
+        auxiliary.append(
+            f"风格 {_esc(str(style_spread['style']))}（差值{style_spread.get('spread', 0):+.1f}%）"
+        )
     resonance = data.get("sector_resonance")
-    if isinstance(resonance, dict) and resonance.get("line"):
-        content += f"&nbsp;&nbsp;共振:{_esc(str(resonance['line']))}<br/>"
+    if isinstance(resonance, dict) and resonance.get("counts"):
+        counts = resonance.get("counts") or {}
+        total = int(resonance.get("total") or 0)
+        if total > 0:
+            resonance_parts = [
+                f"主线{counts.get('main_trend', 0)}",
+                f"支线{counts.get('rotational', 0)}",
+                f"退潮{counts.get('retreating', 0)}",
+            ]
+            if counts.get("unknown"):
+                resonance_parts.append(f"未知{counts['unknown']}")
+            status_labels = {
+                "bullish_resonance": "同向共振",
+                "bearish_resonance": "同向弱势",
+                "bullish_divergence": "底背离观测",
+                "bearish_divergence": "顶背离观测",
+                "mixed": "混合观测",
+            }
+            status = str(resonance.get("status") or "")
+            if status in status_labels:
+                resonance_parts.append(status_labels[status])
+            lag_days = int(resonance.get("lag_days") or 0)
+            if lag_days > 0:
+                resonance_parts.append(f"快照滞后{lag_days}天，仅观测不投票")
+            elif resonance.get("snapshot_date"):
+                resonance_parts.append("当日快照，仅观测不投票")
+            auxiliary.append("共振 " + "｜".join(_esc(item) for item in resonance_parts))
+    elif isinstance(resonance, dict) and resonance.get("line"):
+        auxiliary.append("共振 " + _esc(str(resonance["line"])))
+    if auxiliary:
+        content += "<b>辅助</b><br/>"
+        for item in auxiliary:
+            content += f"&nbsp;&nbsp;{item}<br/>"
 
+    # 板块影响层：态势看数量，变更看具体迁移；映射影响按同迁移聚合。
+    sectors = data.get("sectors") or {}
+    sector_risk = data.get("sector_snapshot_risk") or {}
     sector_changes = data.get("sector_changes") or {}
-    if sector_changes:
-        change_items = []
-        for item in sector_changes.get("status_changes") or []:
-            change_items.append(
-                f"状态:{item.get('sector')} "
-                f"{item.get('from_label')}→{item.get('to_label')}"
-            )
-        for item in sector_changes.get("mapping_changes") or []:
-            from_label = str(item.get('from_label') or '')
-            to_label = str(item.get('to_label') or '')
-            change = f"{item.get('from_sector')}→{item.get('to_sector')}"
-            if from_label != to_label:
-                change += f"｜状态{from_label}→{to_label}"
-            change_items.append(
-                f"映射:{item.get('stock_name')}({item.get('stock_code')}) {change}"
-            )
-        if change_items:
-            content += "<br/><b>板块变更</b><br/>"
-            content += (
-                f"&nbsp;&nbsp;{' | '.join(_esc(item) for item in change_items)}<br/>"
-            )
-        elif sector_changes.get("baseline"):
-            content += (
-                "<br/><b>板块变更</b><br/>"
-                "&nbsp;&nbsp;基线已建立，次日输出变更<br/>"
-            )
+    if sectors or sector_risk or sector_changes:
+        content += "<b>板块</b><br/>"
+        if sector_risk:
+            content += f"&nbsp;&nbsp;风险:{_esc(str(sector_risk.get('line') or '板块快照风险'))}<br/>"
+        if sectors:
+            mt = sectors.get("main_trend", [])
+            rs = sectors.get("rotational", [])
+            rt = sectors.get("retreating", [])
+            sector_parts = []
+            if mt:
+                sector_parts.append(f"主线{len(mt)}只")
+            if rs:
+                sector_parts.append(f"支线{len(rs)}只")
+            if rt:
+                sector_parts.append(f"退潮{len(rt)}只")
+            if sector_parts:
+                content += f"&nbsp;&nbsp;态势:{_esc('｜'.join(sector_parts))}<br/>"
+        if sector_changes:
+            change_items = [
+                f"状态:{item.get('sector')} {item.get('from_label')}→{item.get('to_label')}"
+                for item in sector_changes.get("status_changes") or []
+            ]
+            label_groups: Dict[str, List[str]] = {}
+            for item in sector_changes.get("mapping_changes") or []:
+                from_label = str(item.get("from_label") or "")
+                to_label = str(item.get("to_label") or "")
+                if from_label == to_label:
+                    continue
+                key = f"{from_label}→{to_label}"
+                name = str(item.get("stock_name") or "")
+                code = str(item.get("stock_code") or "")
+                label_groups.setdefault(key, []).append(f"{name}({code})")
+            for label_change, stocks in label_groups.items():
+                change_items.append(f"映射:{'、'.join(stocks)}（{label_change}）")
+            if change_items:
+                content += f"&nbsp;&nbsp;变更:{_esc('；'.join(change_items))}<br/>"
+            elif sector_changes.get("baseline"):
+                content += "&nbsp;&nbsp;变更:基线已建立，次日输出变更<br/>"
 
     content += "<br/>"
     return content

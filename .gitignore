@@ -33,3 +33,11 @@ scripts/pairs_detail.json
 # 构建产物
 dist/
 build/
+
+# Parquet 缓存
+data/*.parquet
+
+# 测试临时目录
+.ab_tmp/
+.tmp-pytest/
+pytest-basetemp/

@@ -49,6 +49,7 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 from ..data_layer.akshare_safe import call_ak_with_retry  # P2-5: akshare 调用带超时+重试
+from ..utils.trading_calendar import is_trading_day as _is_trading_day
 
 
 # ---------------------------------------------------------------------------
@@ -769,7 +770,7 @@ def _find_recent_trading_day(target_date: str, max_lookback: int = 10, skip_toda
     start_offset = 1 if skip_today else 0
     for i in range(start_offset, max_lookback):
         d = dt - timedelta(days=i)
-        if d.weekday() < 5:  # 周一到周五
+        if _is_trading_day(d):  # 周一到周五
             return d.strftime("%Y%m%d")
     return target_date
 

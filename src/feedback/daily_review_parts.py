@@ -4,12 +4,13 @@ from datetime import date, timedelta
 from typing import Dict, Iterable, List, Optional
 
 from .observation_tracker import get_observation_intercepts
+from ..utils.trading_calendar import is_trading_day as _is_trading_day
 
 
 def previous_weekday(as_of: Optional[date] = None) -> str:
     current = as_of or date.today()
     current -= timedelta(days=1)
-    while current.weekday() >= 5:
+    while not _is_trading_day(current):
         current -= timedelta(days=1)
     return current.isoformat()
 

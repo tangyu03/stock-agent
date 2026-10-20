@@ -26,15 +26,22 @@ src/
 │   └── data_cache.py        # 本地数据缓存
 ├── analyzers/               # 分析层（纯计算，不持有状态）
 │   ├── sector_scanner.py    # SectorScanner: 板块三级分类 (主线/支线/退潮) + 轮动检测 + 交叉诊断
-│   ├── market_scorer.py     # MarketScorer: 市场评分 → attack/defend/retreat
-│   ├── timing_engine.py     # TimingEngine: 技术面进场/出场信号、仓位建议
+│   ├── market_scorer.py     # MarketScorer: DB缓存读取（MarketModeAdaptive是唯一评分入口）
+│   ├── timing_engine.py     # TimingEngine: 技术面进场/出场信号（待拆分为包，见 TIMING_REFACTOR_README.md）
+│   ├── signal_plan.py       # signal_plan: 信号过滤评分（权重从 config/scoring_weights.yaml 读取）
+│   ├── hypothesis.py        # TradeHypothesis: 可证伪假说 X/Y/Z/W
+│   ├── volume_pattern.py    # 量能分型引擎
+│   ├── institutional_scorer.py  # 机构持仓4源投票
+│   ├── portfolio_budget.py  # 组合预算（按板块计数）
 │   ├── stock_filter.py      # StockFilter: 个股筛选
 │   ├── external_market.py   # 外盘 (美股/港股) 环境评分
 │   └── gem_sci_tech_scorer.py  # 创业板/科创板评分
 ├── decision/                # 决策聚合层
-│   ├── aggregator.py        # Aggregator: 四层决策 → _collect_relevant_sectors + 信号汇总 + 风控守卫
+│   ├── aggregator.py        # Aggregator: 已弃用（信号聚合已迁移至 unified_engine.py UnifiedSignalBatch）
 │   ├── position_builder.py  # 仓位构建器
 │   └── insight_miner.py     # 文章/观点挖掘
+├── utils/
+│   └── trading_calendar.py  # A股交易日历（节假日JSON + is_trading_day）
 ├── loop/                    # 离线/回测
 │   ├── market_mode_adaptive.py  # 市场模式自适应（自适应仓位上限）
 │   ├── stockagent_tuned_v3_signals.py  # 策略调优 v3：动态板块+事件驱动
@@ -48,7 +55,11 @@ src/
     ├── weekly_report.py     # 周报
     └── trade_logger.py      # 交易日志
 
-config/                       # YAML 配置文件
+config/
+  ├── timing.yaml             # 78个阈值（回测=实盘共用）
+  ├── scoring_weights.yaml    # 评分权重（8项，signal_plan读取）
+  ├── trading_days.json       # 法定假日（每年手动更新）
+  └── push.yaml               # 推送配置（⚠️含token，待迁移环境变量）
 skills/                       # 22 个外部分析技能 (K线形态、缠论、聪明钱等)
 data/logs/                    # 运行日志
 ```
@@ -64,9 +75,13 @@ weekly:                 weekly_report.generate → 推送周报
 ## 关键模块依赖方向
 
 ```
-data_layer (只读) → analyzers (纯计算) → decision (聚合) → orchestrator (调度+推送)
+data_layer (只读) → analyzers (纯计算) → decision (执行调度) → orchestrator (调度+推送)
                                               ↑
                                           loop (回测，只读决策层)
+
+信号唯一链路: engine.py → unified_engine.py(UnifiedSignalBatch)
+  → timing_engine(信号生成) → signal_plan(评分过滤) → live_scheduler(执行)
+  禁止反向调用。
 ```
 
 

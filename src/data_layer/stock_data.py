@@ -13,6 +13,7 @@
 import logging
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
+from ..utils.trading_calendar import is_trading_day as _is_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def _is_a_share_trading_time(timestamp: str = "") -> bool:
         except ValueError:
             pass
 
-    if now.weekday() >= 5:
+    if not _is_trading_day(now):
         return False
     minute_of_day = now.hour * 60 + now.minute
     return (9 * 60 + 30) <= minute_of_day <= (11 * 60 + 30) or (

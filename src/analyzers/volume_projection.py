@@ -30,6 +30,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time as dtime
 from typing import Dict, List, Optional
+from ..utils.trading_calendar import is_trading_day as _is_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,7 @@ def u_fraction_at(now: Optional[datetime] = None, config: Optional[Dict] = None)
     午休（11:30~13:00）按上午收盘分位（≈0.52）处理。
     """
     now = now or datetime.now()
-    if now.weekday() >= 5:
+    if not _is_trading_day(now):
         return 1.0
     minutes = now.hour * 60 + now.minute
     curve = _u_curve(config)
@@ -119,7 +120,7 @@ def u_fraction_at(now: Optional[datetime] = None, config: Optional[Dict] = None)
 def trading_minute_fraction_at(now: Optional[datetime] = None) -> Optional[float]:
     """当前累计交易分钟占全天 240 分钟的比例（线性，不含 U 型假设）。"""
     now = now or datetime.now()
-    if now.weekday() >= 5:
+    if not _is_trading_day(now):
         return 1.0
     current = now.hour * 60 + now.minute
     if current < 9 * 60 + 30:

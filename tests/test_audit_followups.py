@@ -94,9 +94,9 @@ def test_sector_changes_snapshot_and_render(sqlite_db):
     assert changed["mapping_changes"][0]["to_sector"] == "半导体"
 
     text = render_environment_overview({"sector_changes": changed})
-    assert "板块变更" in text
+    assert "<b>板块</b>" in text
     assert "状态:算力 主线→轮动" in text
-    assert "映射:中际旭创(300308) 算力→半导体｜状态主线→轮动" in text
+    assert "映射:中际旭创(300308)（主线→轮动）" in text
 
 
 def test_sector_changes_ignores_equivalent_chinese_status_self_change():

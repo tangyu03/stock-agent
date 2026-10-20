@@ -1,16 +1,18 @@
-import shutil
-import uuid
-from pathlib import Path
-
+﻿"""Global test fixtures for isolation."""
 import pytest
 
 
-@pytest.fixture
-def tmp_path():
-    """Use workspace-owned temp roots; the Windows sandbox cannot scan system roots."""
-    base = Path(__file__).resolve().parent / ".tmp-workspaces"
-    base.mkdir(parents=True, exist_ok=True)
-    path = base / f"test-{uuid.uuid4().hex}"
-    path.mkdir()
-    yield path
-    shutil.rmtree(path, ignore_errors=True)
+@pytest.fixture(autouse=True)
+def clean_institutional_cache():
+    """Clear institutional scorer global cache before and after each test."""
+    try:
+        import src.analyzers.institutional_scorer as inst
+        inst._institutional_session_cache.clear()
+    except Exception:
+        pass
+    yield
+    try:
+        import src.analyzers.institutional_scorer as inst
+        inst._institutional_session_cache.clear()
+    except Exception:
+        pass

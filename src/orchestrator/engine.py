@@ -13,7 +13,6 @@ from datetime import datetime
 from ..config_models import load_config
 from ..analyzers.market_scorer import get_market_scorer
 from ..analyzers.volume_pattern import _BULLISH_PATTERNS, build_volume_pattern, kline_position_inputs
-from ..decision.aggregator import get_aggregator
 from ..push.pushplus import get_pushplus
 # templates 渲染已移至 pushplus.send_intraday_report 内部调用
 from ..push.templates import stock_identity
@@ -176,8 +175,9 @@ def _resolve_run_context() -> Tuple[bool, str, str]:
     now = datetime.now()
     today = now.strftime("%Y-%m-%d")
     ref_date = find_recent_trading_day(today)  # 今天非交易日时回退到上一交易日
-    if now.weekday() >= 5:
-        return True, f"非交易日（{_WEEKDAY_CN[now.weekday()]}），按上一交易日 {ref_date} 收盘数据执行", ref_date
+    from ..utils.trading_calendar import is_trading_day
+    if not is_trading_day(now):
+        return True, f"非交易日，按上一交易日 {ref_date} 收盘数据执行", ref_date
     hhmm = now.hour * 60 + now.minute
     if 7 * 60 <= hhmm <= 16 * 60:
         return True, "", ref_date
@@ -189,7 +189,6 @@ class Orchestrator:
 
     def __init__(self):
         self._market_scorer = get_market_scorer()
-        self._aggregator = get_aggregator()
         self._pushplus = get_pushplus()
         self._trade_logger = get_trade_logger()
         self._daily_review = get_daily_review()
@@ -288,6 +287,8 @@ class Orchestrator:
             )
         except Exception as e:
             logger.warning("自适应环境评估失败，回退到缓存模式: %s", e)
+            # MarketScorer 仅作 DB 缓存回退（MarketModeAdaptive 评分入口唯一，
+            # MarketScorer 无独立评分逻辑，仅读 market_score_history 表）
             ms = self._market_scorer.get_current_mode()
             env.update({
                 "market_mode": ms.get("mode", "defend"),
@@ -345,13 +346,13 @@ class Orchestrator:
         try:
             from ..cache import get_sector_map_service
             sector_snapshot_risk = get_sector_map_service().audit_status()
-            if not sector_snapshot_risk.get("available") or sector_snapshot_risk.get("lag_days", 0) > 0:
+            if not sector_snapshot_risk.get("available"):
                 env["sector_snapshot_risk"] = sector_snapshot_risk
         except Exception as e:
             logger.warning("板块快照审计失败: %s", e)
             env["sector_snapshot_risk"] = {
                 "available": False, "snapshot_date": "", "lag_days": 0,
-                "line": "板块快照审计失败，板块状态降权",
+                "line": "板块快照审计失败，板块状态不可靠",
             }
         try:
             from ..cache import get_sector_map_service
@@ -402,6 +403,7 @@ class Orchestrator:
                 "kline_pattern": td.get("kline_pattern", []),
                 "tech_signals": td.get("tech_signals", {}),
                 "ma5": td.get("ma5"), "ma10": td.get("ma10"), "ma20": td.get("ma20"),
+                "prev_low": td.get("prev_low"),
                 "rsi": (td.get("tech_signals") or {}).get("rsi"),
                 "adx": (td.get("tech_signals") or {}).get("adx"),
                 "volume_ratio": td.get("volume_ratio", 0),

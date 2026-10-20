@@ -9,6 +9,19 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+
+def _scoring_weights() -> dict:
+    try:
+        import yaml
+        from pathlib import Path
+        p = Path(__file__).parent.parent.parent / "config" / "scoring_weights.yaml"
+        if p.exists():
+            with open(p, encoding="utf-8") as f:
+                return yaml.safe_load(f).get("confidence", {})
+    except Exception:
+        pass
+    return {}
+
 # ============================================================
 # 【二】数据层一致性守卫默认值（口径统一：全链路成交量统一为“股”）
 # 科创板“股被当手”两类拦截：
@@ -1183,10 +1196,19 @@ def build_execution_plan(
         valuation_verdict and valuation_verdict.get("verdict") == "veto"
     )
 
+    _sw = _scoring_weights()
+    _w_tech = int(_sw.get("tech_alignment_bonus", 1))
+    _w_inst = int(_sw.get("institutional_alignment_bonus", 1))
+    _w_main = int(_sw.get("main_trend_bonus", 1))
+    _w_no_conflict = int(_sw.get("no_conflict_bonus", 1))
+    _w_strong_conflict = int(_sw.get("strong_conflict_penalty", -1))
+    _w_market = int(_sw.get("market_score_bonus", 1))
+    _w_market_threshold = int(_sw.get("market_score_threshold", 6))
+
     technical_votes = _net_technical_votes(tech_data)
     if technical_votes is not None and technical_votes * 1 >= 2:
-        score += 1
-        details.append("技术同向+1(①②③合成)")
+        score += _w_tech
+        details.append(f"技术同向+{_w_tech}(①②③合成)")
     elif technical_votes is not None:
         details.append(f"技术票{technical_votes:+.1f}(①②③合成)")
     else:
@@ -1194,14 +1216,14 @@ def build_execution_plan(
 
     institutional_score = fund.institutional_score + fund.institutional_adjustment
     if institutional_score >= 2:
-        score += 1
-        details.append("机构同向+1")
+        score += _w_inst
+        details.append(f"机构同向+{_w_inst}")
     else:
         details.append(f"机构票{institutional_score:+d}")
 
     if sector_status == "main_trend":
-        score += 1
-        details.append("主线+1")
+        score += _w_main
+        details.append(f"主线+{_w_main}")
     else:
         details.append("非主线")
 
@@ -1209,19 +1231,19 @@ def build_execution_plan(
     conflict_labels = [str(item["label"]) for item in conflicts]
     strong_conflicts = [item for item in conflicts if int(item["severity"]) >= 2]
     if not conflicts:
-        score += 1
-        details.append("无矛盾+1")
+        score += _w_no_conflict
+        details.append(f"无矛盾+{_w_no_conflict}")
     elif strong_conflicts or len(conflicts) >= 2:
-        score -= 1
-        details.append("矛盾-1:" + "/".join(conflict_labels))
+        score += _w_strong_conflict
+        details.append(f"矛盾{_w_strong_conflict:+d}:" + "/".join(conflict_labels))
     else:
         details.append("矛盾0:" + "/".join(conflict_labels))
 
     market_score = _number(tech_data.get("market_score"))
     if market_score is not None:
-        if market_score >= 6:
-            score += 1
-            details.append(f"环境{market_score:.1f}+1")
+        if market_score >= _w_market_threshold:
+            score += _w_market
+            details.append(f"环境{market_score:.1f}+{_w_market}")
         else:
             details.append(f"环境{market_score:.1f}")
 
@@ -1233,14 +1255,17 @@ def build_execution_plan(
     # 日振幅 8.16% 的十分之一就能打穿——坏数据不配给好评）。
     # 阈值可配：confidence.rrr_quality_threshold / rrr_quality_cap。
     rrr_quality_threshold = float(
-        _config_get(gate_config, "confidence", "rrr_quality_threshold", default=2.5)
+        _config_get(gate_config, "confidence", "rrr_quality_threshold",
+                    default=_sw.get("rrr_quality_threshold", 2.5))
     )
     rrr_quality_cap = float(
-        _config_get(gate_config, "confidence", "rrr_quality_cap", default=5.0)
+        _config_get(gate_config, "confidence", "rrr_quality_cap",
+                    default=_sw.get("rrr_quality_cap", 5.0))
     )
+    _w_rrr = int(_sw.get("rrr_quality_bonus", 1))
     if rrr_low is not None and rrr_quality_threshold <= rrr_low <= rrr_quality_cap:
-        score += 1
-        details.append(f"RRR{rrr_low:.2f}∈[{rrr_quality_threshold:.1f},{rrr_quality_cap:.1f}]+1")
+        score += _w_rrr
+        details.append(f"RRR{rrr_low:.2f}∈[{rrr_quality_threshold:.1f},{rrr_quality_cap:.1f}]+{_w_rrr}")
     elif rrr_low is not None and rrr_low > rrr_quality_cap:
         details.append(
             f"RRR{rrr_low:.2f}>{rrr_quality_cap:.1f}不加分(止损距离过窄，神话数字嫌疑)"

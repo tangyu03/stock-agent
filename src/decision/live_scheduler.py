@@ -409,8 +409,8 @@ def schedule_live_signals(
                 _z = float((hypothesis or {}).get('z') or sig.get('stop_loss') or 0)
                 _dc_config = None
                 try:
-                    from ..analyzers.timing_engine import get_timing_engine
-                    _dc_config = {'defensive_chase': get_timing_engine()._cfg('defensive_chase') or {}}
+                    from ..config_models import load_config
+                    _dc_config = {'defensive_chase': (load_config('timing.yaml') or {}).get('defensive_chase') or {}}
                 except Exception:
                     _dc_config = None
                 budget = compute_risk_budget_position(position_price, _z, config=_dc_config)

@@ -196,7 +196,7 @@ def test_missing_price_report_has_explicit_section(monkeypatch):
 
     captured = {}
 
-    def _send(self, title, content, level="常规"):
+    def _send(self, title, content, level="常规", page_header=None):
         captured.update({"title": title, "content": content, "level": level})
         return True
 

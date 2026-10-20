@@ -57,8 +57,8 @@ def test_send_intraday_report_prepends_data_time(monkeypatch):
 
     captured = {}
 
-    def _send(self, title, content, level="常规"):
-        captured.update({"title": title, "content": content})
+    def _send(self, title, content, level="常规", **kwargs):
+        captured.update({"title": title, "content": content, **kwargs})
         return True
 
     monkeypatch.setattr(PushPlus, "send", _send)
@@ -79,6 +79,7 @@ def test_send_intraday_report_prepends_data_time(monkeypatch):
     assert "数据时点 09-17 14:07｜交易日进度 78%" in captured["content"]
     # 行动摘要仍在页首
     assert "今日行动摘要" in captured["content"]
+    assert captured["page_header"] == "防守 5.0｜09-17 14:07｜交易日进度 78%"
 
 
 def test_send_intraday_report_uses_four_layer_order(monkeypatch):
@@ -87,7 +88,7 @@ def test_send_intraday_report_uses_four_layer_order(monkeypatch):
 
     captured = {}
 
-    def _send(self, title, content, level="常规"):
+    def _send(self, title, content, level="常规", **kwargs):
         captured.update({"title": title, "content": content})
         return True
 
@@ -228,7 +229,7 @@ def test_failed_send_does_not_replace_last_snapshot(monkeypatch):
     from src.push.pushplus import PushPlus
 
     saved = []
-    monkeypatch.setattr(PushPlus, "send", lambda self, title, content, level="常规": False)
+    monkeypatch.setattr(PushPlus, "send", lambda self, title, content, level="常规", **kwargs: False)
     monkeypatch.setattr(PushPlus, "_load_report_snapshot", staticmethod(lambda: None))
     monkeypatch.setattr(
         PushPlus,
@@ -243,7 +244,7 @@ def test_failed_send_does_not_replace_last_snapshot(monkeypatch):
 
 
 def _capture_send(captured):
-    def _send(self, title, content, level="常规"):
+    def _send(self, title, content, level="常规", **kwargs):
         captured.update({"title": title, "content": content, "level": level})
         return True
     return _send

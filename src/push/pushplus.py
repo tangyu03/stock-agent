@@ -73,6 +73,7 @@ class PushPlus:
         content: str,
         template: str = "html",
         level: str = "常规",
+        page_header: str = "",
     ) -> bool:
         """
         发送消息（超长内容自动分批推送）
@@ -103,7 +104,7 @@ class PushPlus:
 
         # P-修复（2026-08-31）：单条内容超过服务端 2 万字上限会被拒（999 发送内容过大），
         # 按安全边界分块、分批推送；每批标题追加 (i/N) 后缀便于用户串起来读
-        chunks = self._chunk_content(content)
+        chunks = self._chunk_content(content, page_header=page_header)
         if len(chunks) > 1:
             logger.warning("PushPlus 内容过长(%d字>%d)，拆分为 %d 条推送",
                            len(content), self.MAX_CONTENT_LEN, len(chunks))
@@ -111,12 +112,24 @@ class PushPlus:
         all_ok = True
         for i, chunk in enumerate(chunks):
             chunk_title = title if len(chunks) == 1 else f"{title} ({i + 1}/{len(chunks)})"
+            if i and page_header:
+                codes = PushPlus._page_stock_codes(chunk)
+                stock_text = "、".join(codes[:12])
+                if len(codes) > 12:
+                    stock_text += "等"
+                chunk = f"<b>{page_header}｜本页含: {stock_text or '附录'}</b><br/>{chunk}"
             if not self._send_one(chunk_title, chunk, template, level):
                 all_ok = False
         return all_ok
 
     @staticmethod
-    def _chunk_content(content: str, max_len: int = None) -> List[str]:
+    @staticmethod
+    def _page_stock_codes(content: str) -> List[str]:
+        import re
+        return list(dict.fromkeys(re.findall(r"\(([0-9]{6})\)", content)))
+
+    @staticmethod
+    def _chunk_content(content: str, max_len: int = None, page_header: str = "") -> List[str]:
         """按安全边界将超长内容分块，避免切断 HTML 标签触发服务端校验。
 
         P2-18：分页以个股卡片为原子——先按 <hr/> 边界切分为卡片单元，
@@ -124,6 +137,8 @@ class PushPlus:
         卡内 <br/> 等安全边界兜底切分。
         """
         max_len = max_len or PushPlus.MAX_CONTENT_LEN
+        if page_header:
+            max_len = max_len - min(200, len(page_header) + 80)
         if len(content) <= max_len:
             return [content]
         units = PushPlus._split_card_units(content)
@@ -350,7 +365,9 @@ class PushPlus:
 
         from .templates import (
             _esc,
+            build_report_global_context,
             pattern_summary_line,
+            render_report_global_context,
             render_action_summary,
             render_environment_overview,
             render_entry_signal,
@@ -373,6 +390,12 @@ class PushPlus:
         if data_missing:
             title_parts.append(f"数据缺失{len(data_missing)}")
         title = " | ".join(title_parts)
+
+        report_signals = [*entries, *exits, *observations]
+        global_context = build_report_global_context(report_signals)
+        for signal in report_signals:
+            signal["_report_global_context"] = global_context
+        global_header = render_report_global_context(global_context)
 
         # 四层阅读顺序：结论/行动 → 现役事件 → DIFF → 附录全文。
         overview = render_environment_overview(environment)
@@ -417,9 +440,35 @@ class PushPlus:
             active_events = "<b>现役事件 0</b><br/>&nbsp;&nbsp;今日无合格事件；空仓是合法输出<br/>"
             event_rows = []
 
+        page_header = f"{mn} {score:.1f}"
+        if stamp_content:
+            stamp_start = stamp_content.find("数据时点 ")
+            stamp_end = stamp_content.find("</b>", stamp_start)
+            if stamp_start >= 0 and stamp_end > stamp_start:
+                page_header += "｜" + stamp_content[stamp_start:stamp_end].replace("数据时点 ", "")
+
+        pattern_rows = []
+        seen_pattern_codes = set()
+        for signal in report_signals:
+            code = str(signal.get("stock_code") or "")
+            if code and code in seen_pattern_codes:
+                continue
+            seen_pattern_codes.add(code)
+            row = pattern_summary_line(signal)
+            if row:
+                pattern_rows.append(row)
+        pattern_index = ""
+        if pattern_rows:
+            pattern_index = (
+                "<b>🔎 量能分诊索引</b><br/>&nbsp;&nbsp;"
+                + _esc(" ".join(pattern_rows))
+                + "<br/>"
+            )
+
         content = (
-            f"{stamp_content}<b>① 结论与今日行动</b><br/>"
+            f"{stamp_content}{global_header}<b>① 结论与今日行动</b><br/>"
             f"{action_summary or '&nbsp;&nbsp;今日无新执行动作；空仓/等待确认'}"
+            f"{('<br/>' + pattern_index) if pattern_index else ''}"
             f"<br/><b>② 现役事件</b><br/>{active_events}"
             "<br/><b>③ 相对上一推送 DIFF</b><br/>"
         )
@@ -530,32 +579,13 @@ class PushPlus:
                     content += "<br/><hr/>"
             content += "<br/>"
 
-        # 【分型引擎】报告级收尾：一屏扫完所有在推标的的盘口定性
-        # （老手收盘后翻自选的那一眼）。同一标的买卖卡并存时只报一次。
-        pattern_rows = []
-        seen_pattern_codes = set()
-        for s in [*entries, *exits, *observations]:
-            code = str(s.get("stock_code") or "")
-            if code and code in seen_pattern_codes:
-                continue
-            seen_pattern_codes.add(code)
-            row = pattern_summary_line(s)
-            if row:
-                pattern_rows.append(row)
-        if pattern_rows:
-            content += (
-                "<b>量能判定一览</b><br/>&nbsp;&nbsp;"
-                + _esc(" ".join(pattern_rows))
-                + "<br/><br/>"
-            )
-
         # 级别
         has_urgent = any(s.get("urgency") == "紧急" for s in exits)
         level = "紧急" if has_urgent else (
             "重要" if (entries or exits or data_missing) else "常规"
         )
 
-        sent = self.send(title, content, level=level)
+        sent = self.send(title, content, level=level, page_header=page_header)
         if sent:
             self._save_report_snapshot(current_snapshot)
         return sent

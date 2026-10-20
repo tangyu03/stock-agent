@@ -11,12 +11,18 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import os
 os.environ["TQDM_DISABLE"] = "1"
 
-# 跳过 akshare 依赖
-import src.analyzers.institutional_scorer as _inst
-_inst.score_institutional_holding = lambda c, *args, **kwargs: {
-    "vote_score": 0, "vote_label": "skip", "votes": {},
-    "bullish_count": 0, "bearish_count": 0, "neutral_count": 4, "stale": False
-}
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _skip_institutional_scorer(monkeypatch):
+    """跳过 akshare 依赖：_timing_engine 测试不调真实机构评分。"""
+    import src.analyzers.institutional_scorer as _inst
+    monkeypatch.setattr(_inst, "score_institutional_holding", lambda c, *a, **kw: {
+        "vote_score": 0, "vote_label": "skip", "votes": {},
+        "bullish_count": 0, "bearish_count": 0, "neutral_count": 4, "stale": False
+    })
+
 
 from src.analyzers.timing_engine import get_backtest_timing_engine
 from src.utils.numbers import safe_float, safe_int

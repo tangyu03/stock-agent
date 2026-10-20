@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from ..config_models import load_config
-from ..analyzers.market_scorer import get_market_scorer
 # P1-17: sector_scanner 已废弃，统一用 sector_ranker
 from ..analyzers.timing_engine import EntrySignal, ExitSignal
 from .holding_health import HoldingHealth, WatchlistAnalysisResult
@@ -75,11 +74,12 @@ class SignalSummary:
 
 
 class Aggregator:
-    """四层决策聚合器（P0 修复版）"""
+    """已弃用：信号聚合已迁移至 orchestrator/unified_engine.py 的 UnifiedSignalBatch。
+    保留此类仅供历史测试兼容，生产链路不再调用。
+    """
 
     def __init__(self):
         self._portfolio_config = load_config("portfolio.yaml")
-        self._market_scorer = get_market_scorer()
         # P0 修复：初始化 _position_analyzer
         self._position_analyzer = get_position_analyzer()
 

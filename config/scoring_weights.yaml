@@ -1,0 +1,30 @@
+﻿# 评分权重配置 — 每项注明当前值和来源
+# 修改权重后无需改代码，重启生效
+confidence:
+  # 技术票同向(①②③合成≥2) → +1
+  # 来源: 人工设定 v2.10
+  tech_alignment_bonus: 1
+
+  # 机构票(≥2票同向) → +1
+  # 来源: 人工设定 v2.10
+  institutional_alignment_bonus: 1
+
+  # 板块主线 → +1
+  # 来源: 人工设定 v2.10
+  main_trend_bonus: 1
+
+  # 无矛盾 → +1 / 强矛盾 → -1
+  # 来源: 人工设定 v2.10
+  no_conflict_bonus: 1
+  strong_conflict_penalty: -1
+
+  # 环境分≥6 → +1
+  # 来源: 人工设定 v2.10
+  market_score_threshold: 6
+  market_score_bonus: 1
+
+  # RRR质量票: threshold ≤ RRR ≤ cap → +1
+  # 来源: 博杰9/7实测校准 (RRR≥2.5隐含胜率28.6%)
+  rrr_quality_threshold: 2.5
+  rrr_quality_cap: 5.0
+  rrr_quality_bonus: 1

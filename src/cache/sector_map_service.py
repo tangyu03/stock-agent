@@ -300,16 +300,15 @@ class SectorMapService:
                 "available": False,
                 "snapshot_date": "",
                 "lag_days": 0,
-                "line": "板块快照不可用，板块状态降权",
+                "line": "板块快照不可用，板块状态不可靠",
             }
+        weight = max(0.3, 1.0 - int(lag) / 120.0)
         return {
             "available": True,
             "snapshot_date": snap.snapshot_date,
             "lag_days": int(lag),
-            "line": (
-                f"板块快照{snap.snapshot_date}滞后{int(lag)}天，"
-                "板块状态降权"
-            ) if lag > 0 else "",
+            "sector_weight": round(weight, 2),
+            "line": f"板块快照{snap.snapshot_date}滞后{int(lag)}天(权重{weight:.2f})" if lag > 0 else "",
         }
 
     # ---------------- 跨进程构建标记 ----------------
