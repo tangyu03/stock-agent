@@ -91,7 +91,7 @@ class TimingStopLossMixin:
         # C1 v3整改: fallback路径用 ATR 自适应止损价（而非固定5%）
         # fallback时 chosen_support = current_price × 0.95（距5%），但V型转折急跌段收盘往往拉回
         # 改为: stop_loss = current_price - ATR×1.0（约1.5-3%，随波动率自适应）
-        stop_loss_multiplier = self._cfg("stop_loss", "multiplier", default=0.97)
+        stop_loss_multiplier = self._cfg("stop_loss", "multiplier", default=1.0)
         if is_fallback:
             # C1 v3: fallback 用 ATR 自适应
             kline_for_atr = tech_data.get('kline', [])

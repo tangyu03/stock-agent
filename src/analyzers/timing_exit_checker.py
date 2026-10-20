@@ -113,6 +113,16 @@ class TimingExitMixin:
                     paired_strategy=paired_strategy,
                 ))
 
+        # 指标走弱信息提前计算（供破位定性参考，不再独立产出卖出信号）
+        weakness_labels = []
+        _tech_sig = tech_data.get("tech_signals") or {}
+        _vote = _tech_sig.get("vote_score")
+        if _vote is not None and int(_vote) <= -1:
+            weakness_labels.append(f"技术票{_vote:+d}")
+        _boll = _tech_sig.get("bollinger") or {}
+        if _boll.get("lower") and current_price and float(current_price) < float(_boll["lower"]):
+            weakness_labels.append("跌破布林下轨")
+        
         # 1. 破位止损 — C1 整改（2026-07-22）：硬触发
         # ----------------------------------------------------------------
         # 原逻辑：三重确认（收盘价+量比>0.8+技术偏空）才触发，过严导致514笔0触发
@@ -133,45 +143,84 @@ class TimingExitMixin:
                 except (TypeError, ValueError):
                     vol_ratio = None
             heavy_vol_thresh = self._cfg("exit", "breakdown", "heavy_volume_ratio", default=1.3)
-
-            # C1: 硬触发，不再要求三重确认
+            
+            # 三问定性：放量/缩量 × 主动/被动 × 有无反抽
+            vol_label = "缩量"
+            if vol_ratio is not None and vol_ratio > heavy_vol_thresh:
+                vol_label = "放量"
+            elif vol_ratio is not None and vol_ratio > 0.8:
+                vol_label = "正常量能"
+            
+            # 主动/被动：个股跌幅 vs 板块跌幅
+            sector_change = tech_data.get("sector_change_pct")
+            stock_change = tech_data.get("change_pct")
+            is_active_break = True
+            passive_note = ""
+            if sector_change is not None and stock_change is not None:
+                try:
+                    if abs(float(stock_change)) < abs(float(sector_change)) * 0.8:
+                        is_active_break = False
+                        passive_note = "被动破位(被板块带崩)"
+                except (TypeError, ValueError):
+                    pass
+            active_label = "主动" if is_active_break else "被动"
+            
+            # 组装三问标签
+            qual_label = f"{vol_label}+{active_label}"
+            if passive_note:
+                qual_label += f"({passive_note})"
+            
             if paired_position:
                 reason = (f'跌破配对止损Z={stop_loss_calc.stop_loss_price:.2f}'
-                          f'（[{paired_strategy}]买入理由的直接否定，X 被证伪），硬触发')
+                          f'（[{paired_strategy}]买入理由的直接否定，X 被证伪）')
             else:
-                reason = f'跌破{stop_loss_calc.chosen_support:.2f}(止损{stop_loss_calc.stop_loss_price:.2f})，硬触发'
+                reason = f'跌破{stop_loss_calc.chosen_support:.2f}(止损{stop_loss_calc.stop_loss_price:.2f})'
+            
+            # 三档分流：
+            # 档1: 放量+主动 → 紧急，立即触发
+            # 档2: 正常量能+主动 或 放量+被动 → 紧急，立即触发
+            # 档3: 缩量 或 被动+正常量能 → 重要，标注"待收盘确认"
+            is_high_confidence_break = (
+                (vol_label in ("放量", "正常量能") and is_active_break)
+                or (vol_label == "放量" and not is_active_break)
+            )
+            
+            reason += f'【{qual_label}】'
+            
             if current_price > 0 and stop_loss_calc.stop_loss_price > 0:
                 stop_gap_pct = (
                     (current_price - stop_loss_calc.stop_loss_price) / current_price * 100
                 )
-                reason += f'，止损距现价{stop_gap_pct:.1f}%'
-            # 量能/投票作为附加信息（不影响触发，只影响推送级别描述）
-            if vol_ratio is None:
-                reason += f'，{self._volume_context(tech_data)}'
-                urgency = '重要'
-            elif vol_ratio > heavy_vol_thresh:
-                reason += f'，放量破位(量比{vol_ratio:.2f})'
+                reason += f'，距止损{stop_gap_pct:.1f}%'
+            
+            if is_high_confidence_break:
                 urgency = '紧急'
-            elif vol_ratio > 0.8:
-                reason += f'，正常量能(量比{vol_ratio:.2f})'
-                urgency = '紧急'
+                exit_label = '破位止损'
+                reason += '，立即执行'
             else:
-                reason += f'，缩量(量比{vol_ratio:.2f})但硬触发'
-                urgency = '重要'  # 缩量破位降一级但仍执行
+                urgency = '重要'
+                exit_label = '破位预警'
+                reason += '，待收盘确认'
+            
+            if vol_ratio is not None:
+                reason += f'(量比{vol_ratio:.2f})'
+            reason += f'，{self._volume_context(tech_data)}'
+            if weakness_labels:
+                reason += '；指标佐证:' + '/'.join(weakness_labels)
             if is_bearish:
                 reason += f'；{tech_vote}(score={tech_score:+.1f})共振'
             bpats = [p.get('pattern','') for p in kline_patterns if '看跌' in p.get('signal','') or '压力' in p.get('signal','')]
             if bpats:
                 reason += '; K线:' + ','.join(bpats)
             signals.append(ExitSignal(
-                stock_code=stock_code, stock_name=stock_name, exit_type='破位止损',
+                stock_code=stock_code, stock_name=stock_name, exit_type=exit_label,
                 trigger_price=current_price, stop_loss_price=stop_loss_calc.stop_loss_price,
                 reason=reason, urgency=urgency, mode_constrained=False,
                 sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
             ))
             logger.info(
-                '破位止损(硬触发) %s: %.2f≤止损%.2f，量比%.2f %s',
-                stock_code, current_price, stop_loss_calc.stop_loss_price,
+                '破位(%s) %s: %.2f≤止损%.2f，量比%.2f %s',
+                qual_label, stock_code, current_price, stop_loss_calc.stop_loss_price,
                 vol_ratio, urgency)
 
         # 2. 上涨衰竭预警
@@ -576,57 +625,12 @@ class TimingExitMixin:
                     sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
                 ))
 
-        # 3. 技术走弱（投票强烈看空/偏空/布林下轨）
-        # 【P0-3】卖出条件分级 OR：止损类（价格破Z线、技术走弱）任一即出，
-        # 不容商量；止盈类（冲高止盈、MA5压制）保持原有计票。
-        # 原阈值 strong≥1 或 medium≥3 近乎永不开启（两天 30+ 次检查零触发，
-        # 汇成真空 -6% 无响应）→ 分级 OR 下技术走弱 medium≥2 即出（默认）。
+        # 3. 技术走弱 — 降级为附加信息，不再独立产出卖出信号
+        # （重塑：出场只看价格级别+量能定性，指标信号作为破位 reason 的补充）
+        # 指标走弱信息存储在 weakness_labels 供破位信号引用
+        weakness_labels = []
         if weakness:
-            strong = sum(1 for s in weakness if s[0] == 'strong')
-            medium = sum(1 for s in weakness if s[0] == 'medium')
-            graded_or_enabled = bool(
-                self._cfg("exit", "graded_or", "enabled", default=True)
-            )
-            graded_medium_min = int(
-                self._cfg("exit", "graded_or", "weakness_medium_min", default=2)
-            )
-            if graded_or_enabled:
-                weak_trigger = strong >= 1 or medium >= graded_medium_min
-            else:
-                weak_trigger = strong >= 1 or medium >= 3  # 旧 AND 计票行为
-            if weak_trigger and oversold_resonance:
-                labels = [f'[{lvl}]{lbl}' for lvl, lbl in weakness]
-                reason = '[超卖观察·非执行级]'
-                reason += '\n触发条件: ' + '；'.join(labels)
-                if oversold_tags:
-                    reason += '\n背景证据: ' + '；'.join(oversold_tags)
-                reason += f'\n{self._volume_context(tech_data)}'
-                reason += '\n反弹确认:放量站上MA5'
-                reason += '\n反弹失效:跌破布林下轨且MACD绿柱扩大'
-                signals.append(ExitSignal(
-                    stock_code=stock_code, stock_name=stock_name,
-                    exit_type='技术走弱', trigger_price=current_price,
-                    stop_loss_price=stop_loss_calc.stop_loss_price,
-                    reason=reason, urgency='观察', mode_constrained=True,
-                    sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
-                ))
-            elif weak_trigger:
-                labels = [f'[{lvl}]{lbl}' for lvl, lbl in weakness]
-                reason = '；'.join(labels)
-                reason += f'；{self._volume_context(tech_data)}'
-                if graded_or_enabled and strong == 0 and medium >= graded_medium_min:
-                    reason += (
-                        f'——【分级OR·止损类】技术走弱 medium{medium}/{graded_medium_min}'
-                        '任一即出，不容商量'
-                    )
-                urgency = '重要' if strong >= 1 else '重要'
-                signals.append(ExitSignal(
-                    stock_code=stock_code, stock_name=stock_name,
-                    exit_type='技术走弱', trigger_price=current_price,
-                    stop_loss_price=stop_loss_calc.stop_loss_price,
-                    reason=reason, urgency=urgency, mode_constrained=False,
-                    sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
-                ))
+            weakness_labels = [f'{lbl}({lvl})' for lvl, lbl in weakness]
 
 
         # ============================================================

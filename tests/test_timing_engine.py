@@ -83,7 +83,7 @@ class TestStopLossCalc:
         assert "量能口径冲突" in te._tech_data_full["688008"]["entry_blocked_reason"]
 
     def test_stop_loss_with_below_support(self):
-        """有下方支撑时，止损价=支撑×0.97"""
+        """有下方支撑时，止损价=支撑×1.0（重塑：MA级别=触发线）"""
         te = get_backtest_timing_engine()
         # 构造 tech_data
         tech_data = {
@@ -96,8 +96,8 @@ class TestStopLossCalc:
         slc = te.calculate_stop_loss('688008', tech_data)
         # chosen_support 应为 ma5=98（最高下方支撑）
         assert slc.chosen_support == 98.0
-        # stop_loss_price = 98 × 0.97 = 95.06
-        assert abs(slc.stop_loss_price - 95.06) < 0.1
+        # stop_loss_price = 98 × 1.0 = 98.0（重塑：均线级别=触发线，无折扣）
+        assert abs(slc.stop_loss_price - 98.0) < 0.1
 
     def test_stop_loss_fallback(self):
         """无下方支撑时，fallback用现价×0.95"""
