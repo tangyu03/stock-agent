@@ -30,27 +30,6 @@ class PushPlus:
     _CHUNK_BOUNDARIES = ("<br/>", "<br>", "<hr/>", "<hr>", "</table>", "</div>", "\n")
     _REPORT_SNAPSHOT_KEY = "last_intraday_report_snapshot"
 
-    @staticmethod
-    def _compact_gate_reason(reason: str, item: Optional[Dict] = None) -> str:
-        text = str(reason or "")
-        item = item or {}
-        parts = []
-        confidence = None
-        score = item.get("score")
-        applicable = item.get("applicable_score")
-        if score is not None:
-            parts.append(f"评分{int(score)}/{int(applicable or 6)}")
-        else:
-            confidence = re.search(r"(?:置信度评分|置信度|综合评分)(\d+/\d+)", text)
-            if confidence:
-                parts.append(f"评分{confidence.group(1)}")
-        rrr = re.search(r"RRR\s*(-?\d+(?:\.\d+)?)", text)
-        if confidence:
-            parts.append(f"评分{confidence.group(1)}")
-        if rrr:
-            parts.append(f"RRR{rrr.group(1)}")
-        return "｜".join(parts) if parts else text[:120]
-
     def __init__(self, config_path: Optional[str] = None):
         config_file = config_path or str(CONFIG_DIR / "push.yaml")
         with open(config_file, "r", encoding="utf-8") as f:
@@ -362,11 +341,7 @@ class PushPlus:
 
         from .templates import (
             _esc,
-            build_report_global_context,
-            pattern_summary_line,
-            render_report_global_context,
             render_action_summary,
-            render_environment_overview,
             render_entry_signal,
             render_exit_signal,
             stock_identity,
@@ -388,17 +363,7 @@ class PushPlus:
             title_parts.append(f"数据缺失{len(data_missing)}")
         title = " | ".join(title_parts)
 
-        report_signals = [*entries, *exits, *observations]
-        global_context = build_report_global_context(report_signals)
-        for signal in report_signals:
-            signal["_report_global_context"] = global_context
-        global_header = render_report_global_context(global_context)
 
-        # 四层阅读顺序：结论/行动 → 现役事件 → DIFF → 附录全文。
-        overview = render_environment_overview(environment)
-
-        # 【P2-17】页首今日行动摘要：一行一人（触发事件｜待验证条件｜需盯价格），
-        # 首屏即可回答"今天动不动"（27 票终点原为"防守"二字）。
         action_summary = render_action_summary(entries, exits, observations)
 
         # 【P2-18】报告头数据时点：全信号最大量比采样时间 + 交易日进度，
@@ -444,28 +409,9 @@ class PushPlus:
             if stamp_start >= 0 and stamp_end > stamp_start:
                 page_header += "｜" + stamp_content[stamp_start:stamp_end].replace("数据时点 ", "")
 
-        pattern_rows = []
-        seen_pattern_codes = set()
-        for signal in report_signals:
-            code = str(signal.get("stock_code") or "")
-            if code and code in seen_pattern_codes:
-                continue
-            seen_pattern_codes.add(code)
-            row = pattern_summary_line(signal)
-            if row:
-                pattern_rows.append(row)
-        pattern_index = ""
-        if pattern_rows:
-            pattern_index = (
-                "<b>🔎 量能分诊索引</b><br/>&nbsp;&nbsp;"
-                + _esc(" ".join(pattern_rows))
-                + "<br/>"
-            )
-
         content = (
-            f"{stamp_content}{global_header}<b>① 结论与今日行动</b><br/>"
+            f"{stamp_content}<b>① 结论与今日行动</b><br/>"
             f"{action_summary or '&nbsp;&nbsp;今日无新执行动作；空仓/等待确认'}"
-            f"{('<br/>' + pattern_index) if pattern_index else ''}"
             f"<br/><b>② 现役事件</b><br/>{active_events}"
             "<br/><b>③ 相对上一推送 DIFF</b><br/>"
         )
@@ -481,66 +427,8 @@ class PushPlus:
         else:
             content += "&nbsp;&nbsp;相对上一推送无结构变化<br/>"
 
-        # 【P1-3】评分闸门摘要：已触发但被输出端闸门拦截，不能静默消失。
-        score_gate = environment.get("score_gate") or {}
-        if score_gate:
-            gate_items = score_gate.get("items") or []
-            content += f"<b>买入提示｜{score_gate.get('count', 0)}条，已调度</b><br/>"
-            content += (
-                "&nbsp;&nbsp;口径: 技术同向｜机构同向｜主线板块｜无冲突｜"
-                "环境≥6；每项1分，放行线≥2<br/>"
-            )
-            if gate_items:
-                for item in gate_items:
-                    identity = (
-                        f"{item.get('stock_name') or item.get('stock_code')}"
-                        f"({item.get('stock_code')})"
-                    )
-                    reason = self._compact_gate_reason(item.get("reason"), item)
-                    details = [
-                        str(detail) for detail in (item.get("confidence_details") or [])
-                        if str(detail)
-                    ]
-                    if details:
-                        reason += "｜依据:" + "；".join(details[:5])
-                    content += f"&nbsp;&nbsp;{_esc(identity)}｜{_esc(reason)}<br/>"
-            else:
-                content += f"&nbsp;&nbsp;{_esc(score_gate.get('detail', ''))}<br/>"
-
-        concentration = environment.get("sector_concentration") or {}
-        position_no_add = environment.get("position_no_add") or []
-        # 【P2-8】板块提示不单开“持仓不加仓”版块，只作为板块行补充。
-        if concentration or position_no_add:
-            content += "<b>板块提示</b><br/>"
-            if concentration:
-                content += f"&nbsp;&nbsp;{_esc(concentration.get('line', ''))}<br/>"
-            for item in position_no_add[:10]:
-                content += (
-                    f"&nbsp;&nbsp;持仓不加仓: {_esc(stock_identity(item))} | "
-                    f"{_esc(item.get('reason', ''))}<br/>"
-                )
-            content += "<br/>"
-
-        virtual_counts = environment.get("virtual_fill_counts")
-        if virtual_counts:
-            content += (
-                f"<b>撮合计数</b><br/>&nbsp;&nbsp;{_esc(str(virtual_counts))}<br/>"
-            )
-
-        point_decisions = environment.get("point_decisions") or []
-        if point_decisions:
-            action_names = {"BUY": "买入", "SELL": "卖出", "WATCH": "观察"}
-            content += "<b>📐 独立点位决策</b><br/>"
-            for item in point_decisions[:30]:
-                action = action_names.get(str(item.get("action")), str(item.get("action")))
-                content += (
-                    f"&nbsp;&nbsp;{_esc(stock_identity(item))}｜{_esc(action)}｜"
-                    f"{_esc(str(item.get('reason') or ''))}<br/>"
-                )
-            content += "<br/>"
-
         if data_missing:
-            content += f"<b>数据未取到 ({len(data_missing)}条)</b><br/>"
+            content += f"<br/><b>④ 数据未取到 ({len(data_missing)}条)</b><br/>"
             for item in data_missing:
                 holding_hint = " | 持仓" if item.get("actual_holding") else ""
                 reason = item.get("reason") or "现价未取到"
@@ -550,19 +438,10 @@ class PushPlus:
                 )
             content += "<br/>"
 
-        content += f"<br/><b>④ 附录：环境与信号全文</b><br/>{overview}"
-
         if entries:
             content += f"<b>📥 买入信号 ({len(entries)}条)</b><br/><br/>"
-            quality_by_strategy = {
-                item.get("strategy", ""): item.get("card", "")
-                for item in (environment.get("signal_quality_cards") or [])
-            }
             for i, s in enumerate(entries):
                 _, card = render_entry_signal(s)
-                quality_card = quality_by_strategy.get(s.get("entry_type", ""), "")
-                if quality_card:
-                    card += f"<br/>&nbsp;&nbsp;{_esc(quality_card)}"
                 content += card
                 if i < len(entries) - 1:
                     content += "<br/><hr/>"
@@ -664,36 +543,11 @@ class PushPlus:
         observations: List[Dict],
         event_rows: List[Dict],
     ) -> Dict:
-        score_gate = environment.get("score_gate") or {}
-        gate_detail = str(score_gate.get("detail") or "")
-        gate_matches = re.findall(
-            r"[A-Za-z0-9\u4e00-\u9fff]+\((\d{6})\)", gate_detail,
-        )
-        gate_identity: Dict[str, str] = {}
-        for item in score_gate.get("items") or []:
-            code = str(item.get("stock_code") or "")
-            name = str(item.get("stock_name") or "")
-            if code:
-                gate_identity[code] = f"{name}({code})" if name else code
-        if not gate_identity:
-            for name, code in re.findall(
-                r"([A-Za-z0-9\u4e00-\u9fff]+)\((\d{6})\)", gate_detail,
-            ):
-                gate_identity[code] = f"{name}({code})"
-
         data_missing_by_code = {}
         for item in environment.get("data_missing") or []:
             code = str(item.get("stock_code") or "")
             if code:
                 data_missing_by_code[code] = (
-                    f"{item.get('stock_name') or code}({code})"
-                )
-
-        no_add_by_code = {}
-        for item in environment.get("position_no_add") or []:
-            code = str(item.get("stock_code") or "")
-            if code:
-                no_add_by_code[code] = (
                     f"{item.get('stock_name') or code}({code})"
                 )
 
@@ -704,15 +558,6 @@ class PushPlus:
             "stocks": PushPlus._report_stock_states(
                 entries, exits, observations, event_rows,
             ),
-            "gate_codes": list(dict.fromkeys(gate_matches)),
-            "gate_identity": gate_identity,
-            "gate_detail": gate_detail,
-            "sector_concentration": str(
-                (environment.get("sector_concentration") or {}).get("line") or ""
-            ),
-            "no_add_codes": list(no_add_by_code),
-            "no_add": no_add_by_code,
-            "virtual_fill_counts": environment.get("virtual_fill_counts") or {},
             "missing_codes": list(data_missing_by_code),
             "missing": data_missing_by_code,
         }
@@ -782,38 +627,6 @@ class PushPlus:
             if code not in current_stocks:
                 lines.append(f"退出: {state.get('identity') or code}")
 
-        previous_gate = set(previous.get("gate_codes") or [])
-        current_gate = set(current.get("gate_codes") or [])
-        current_gate_identity = current.get("gate_identity") or {}
-        previous_gate_identity = previous.get("gate_identity") or {}
-        if not previous_gate_identity:
-            for name, code in re.findall(
-                r"([A-Za-z0-9\u4e00-\u9fff]+)\((\d{6})\)",
-                str(previous.get("gate_detail") or ""),
-            ):
-                previous_gate_identity[code] = f"{name}({code})"
-        for code in current_gate - previous_gate:
-            identity = (
-                current_gate_identity.get(code)
-                or (current_stocks.get(code) or {}).get("identity")
-                or code
-            )
-            lines.append(f"买入提示新增: {identity}")
-        for code in previous_gate - current_gate:
-            identity = (
-                previous_gate_identity.get(code)
-                or (previous_stocks.get(code) or {}).get("identity")
-                or code
-            )
-            lines.append(f"买入提示解除: {identity}")
-
-        previous_no_add = set(previous.get("no_add_codes") or [])
-        current_no_add = set(current.get("no_add_codes") or [])
-        for code in current_no_add - previous_no_add:
-            lines.append(f"不加仓新增: {code}")
-        for code in previous_no_add - current_no_add:
-            lines.append(f"不加仓消失: {code}")
-
         previous_missing = set(previous.get("missing_codes") or [])
         current_missing = set(current.get("missing_codes") or [])
         for code in current_missing - previous_missing:
@@ -821,10 +634,6 @@ class PushPlus:
         for code in previous_missing - current_missing:
             lines.append(f"数据缺失恢复: {code}")
 
-        previous_sector = str(previous.get("sector_concentration") or "")
-        current_sector = str(current.get("sector_concentration") or "")
-        if previous_sector != current_sector:
-            lines.append(f"板块提示变化: {current_sector or '无'}")
         return lines
 
     @staticmethod

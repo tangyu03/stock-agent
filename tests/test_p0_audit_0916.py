@@ -238,8 +238,8 @@ def test_observation_card_displays_partial_flow_coverage():
     }
 
     _, content = _render_compact_observation_signal(data)
-    assert "近1日净额覆盖1/3日" in content
-    assert "部分覆盖弃权" in content
+    assert "近1日净额覆盖1/3日" not in content
+    assert "部分覆盖弃权" not in content
 
 
 def test_projection_recheck_downgrades_then_invalidates_low_volume():

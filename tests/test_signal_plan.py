@@ -9,6 +9,7 @@ from src.analyzers.signal_plan import (
 )
 from src.decision.live_scheduler import schedule_live_signals
 from src.push.templates import _execution_plan
+from src.push.templates import _fixed_timing_rows
 from src.push.templates import render_entry_signal
 from src.orchestrator.unified_engine import _volume_breakout_blocker
 from src.push.templates import render_exit_signal
@@ -530,11 +531,11 @@ def test_entry_render_uses_compact_execution_format():
     _, rendered = render_entry_signal(data)
 
     assert "现价177.12 +2.38%" in rendered
-    assert "①方向:MACD金叉延续" in rendered
-    assert "⑤触发:多头排列" in rendered
-    assert "分档" in rendered
-    assert "回踩不破173.80" in rendered
-    assert "仓位链路" in rendered
+    assert "基准:173.80" in rendered
+    assert "止损:168.58" in rendered
+    assert "目标:191.38" in rendered
+    assert "建议:800股" in rendered
+    assert "多头排列+站上MA25+量能突破" in rendered
     assert "技术面" not in rendered
     assert "信号逻辑" not in rendered
     assert "风控参数" not in rendered
@@ -597,16 +598,11 @@ def test_observation_render_uses_compact_reasoning_format():
     _, rendered = render_exit_signal(data)
 
     assert "市场:防守(5.0)" not in rendered
-    assert "2 方向:MA排列=N/A" in rendered
-    assert "MACD状态=MACD死叉延续" in rendered
-    assert "3 时机:RSI6=N/A(条件不可评)" in rendered
-    assert "RSI14=30.3 触线(弱于40)" in rendered
-    assert "4 量能:[盘口数据不足] 接口量比0.86@时间N/A(缩量;N/A)" in rendered
-    assert "5 资金:两融=融资余额减少" in rendered
-    assert "覆盖N/A/4｜票值-3" in rendered
-    assert "6 买入:结论=技术投票偏空，未触发买入" in rendered
-    assert "7 风控:观察｜跟踪=未触发" in rendered
+    assert "技术投票偏空，未触发买入" in rendered
+    assert "观察｜跟踪=未触发" in rendered
+    assert "止损:N/A" in rendered
     assert "技术面" not in rendered
+    assert "资金" not in rendered
 
 
 def test_fund_details_stay_on_stock_cards():
@@ -675,12 +671,9 @@ def test_sell_signal_uses_same_seven_question_reasoning_format():
 
     _, rendered = render_exit_signal(data)
 
-    assert "1 判读:" in rendered
-    assert "2 方向:MA排列=MA空头排列" in rendered
-    assert "MACD状态=MACD死叉延续+绿柱扩大" in rendered
-    assert "5 资金:两融=N/A" in rendered
-    assert "覆盖N/A/4｜票值-1" in rendered
-    assert "7 风控:卖出｜跟踪=触发｜收盘确认价369.02｜止损:317.54" in rendered
+    assert "规则=技术走弱：中级布林下轨；中级偏空(-2.0)" in rendered
+    assert "卖出｜跟踪=触发｜收盘确认价369.02｜止损:317.54" in rendered
+    assert "关键价位:支撑:" in rendered
     assert "技术面" not in rendered
     assert "退出逻辑" not in rendered
 
@@ -701,12 +694,12 @@ def test_timing_line_shows_threshold_gaps_and_discrete_hits():
         },
     }
 
-    _, rendered = render_exit_signal(data)
+    timing_rows = _fixed_timing_rows(data)
 
-    assert "3 时机:RSI6=29.5(超卖线25,还差4.5)" in rendered
-    assert "RSI14=36.7 触线(弱于40)" in rendered
-    assert "BIAS6=-5.1%(乖离佐证,不投票)" in rendered
-    assert "离散=3/4(金叉|底背驰|缩量止跌|放量下破)" in rendered
+    assert "RSI6=29.5(超卖线25,还差4.5)" in timing_rows
+    assert "RSI14=36.7 触线(弱于40)" in timing_rows
+    assert "BIAS6=-5.1%(乖离佐证,不投票)" in timing_rows
+    assert "离散=3/4(金叉|底背驰|缩量止跌|放量下破)" in timing_rows
 
 
 def test_watch_ladder_reason_is_rendered_in_observation_card():

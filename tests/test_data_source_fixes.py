@@ -324,12 +324,12 @@ class TestBJMainForceSource:
 
 
 # ============================================================
-# 4. 观察卡七问：基本面行（含数据口径）
+# 4. 观察卡瘦身：基本面长块不再渲染
 # ============================================================
 
 class TestObservationFundamental:
 
-    def test_observation_card_renders_seventh_question(self):
+    def test_observation_card_does_not_render_fundamental_block(self):
         from src.push.templates import _render_compact_observation_signal
         data = {
             "stock_name": "汇成真空", "stock_code": "301392",
@@ -346,7 +346,8 @@ class TestObservationFundamental:
             "note": "买入: 无 | 卖出: 无",
         }
         title, content = _render_compact_observation_signal(data)
-        assert "9 基本面:业绩=N/A" in content
+        assert "9 基本面" not in content
+        assert "基本面" not in content
         assert "预亏" not in content
         assert "业绩雷" not in content
         assert "报告期2026-06" not in content

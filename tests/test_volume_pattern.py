@@ -462,22 +462,20 @@ class TestStarsAndRender:
 # ============================================================
 
 class TestTemplateIntegration:
-    def test_observation_card_renders_pattern_block(self):
+    def test_observation_card_does_not_render_pattern_block(self):
         from src.push.templates import _render_compact_observation_signal
         title, content = _render_compact_observation_signal(_feirongda_data())
-        assert "4 量能:[抛压衰竭型] ★★★" in content
-        assert "③·推论" in content
-        assert "量价资金背离" in content
-        assert "③·待验" in content
-        # 旧陈列文案不再出现
+        assert "4 量能" not in content
+        assert "③·推论" not in content
+        assert "③·待验" not in content
         assert "(展示)" not in content
 
     def test_observation_card_degrades_without_flow(self):
         from src.push.templates import _render_compact_observation_signal
         data = _feirongda_data(tech_signals={})
         _, content = _render_compact_observation_signal(data)
-        assert "盘口数据不足" in content
-        assert "5 资金:" in content
+        assert "4 量能" not in content
+        assert "5 资金:" not in content
 
     def test_entry_card_lines_include_pattern_block(self):
         from src.push.templates import _entry_decision_lines

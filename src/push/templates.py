@@ -1066,13 +1066,7 @@ def _render_fixed_card(
     change_pct = data.get("change_pct")
     action_suffix = "" if not rule_name or rule_name in action else rule_name
     anchor = _volume_anchor(data)
-    plan = data.get("execution_plan") or {}
-    conf = plan.get("confidence_score")
-    appl = plan.get("applicable_score")
-    composite = ""
-    if conf is not None and appl is not None and appl > 0:
-        composite = f" {float(conf) / float(appl) * 10:.1f}"
-    title = f"{anchor}{action}{action_suffix}{composite} {name}({code})"
+    title = f"{anchor}{action}{action_suffix} {name}({code})"
 
     price_text = ""
     if current_price is not None:
@@ -1082,45 +1076,25 @@ def _render_fixed_card(
                 price_text += f" {float(change_pct):+.2f}%"
             except (TypeError, ValueError):
                 pass
-    fund_score, _ = _fixed_fund_value(data)
-    fund_text = "弃权" if fund_score == 0 else f"票值{fund_score:+g}" if fund_score is not None else "N/A"
     stop = _fixed_num(stop_loss_price)
     stop_display = _fixed_price_text(stop) if stop is not None else "N/A"
-    judgment_output = f"输出={action}｜止损:{stop_display}｜有效期:N/A"
-
+    holding_shares = data.get("holding_shares")
+    pnl_ratio = data.get("pnl_ratio")
+    holding_bits = []
+    if holding_shares:
+        holding_bits.append(f"持仓{int(holding_shares):,}股")
+    if pnl_ratio is not None:
+        try:
+            holding_bits.append(f"盈亏{float(pnl_ratio) * 100:+.2f}%")
+        except (TypeError, ValueError):
+            pass
     lines = [
-        f"1 判读:输入={_fixed_environment_text(data)}｜技术票{_fixed_vote_text(_fixed_tech_vote(data))}"
-        f"（{_fixed_tech_sources(data)}）｜资金{fund_text}"
+        f"规则={rule_name}：{_fixed_clean_rule_text(reason_text, rule_name)}",
+        *_fixed_risk_rows(data, action, rule_name, reason_text, trigger_price, stop_loss_price),
+        f"关键价位:{_key_levels(data)}",
     ]
-    direction_rows = _fixed_direction_rows(data)
-    lines.append(f"规则={rule_name}：{_fixed_clean_rule_text(reason_text, rule_name)}")
-    lines.append(judgment_output)
-    lines.append(f"2 方向:{direction_rows[0]}")
-    lines.extend(direction_rows[1:])
-    timing_rows = _fixed_timing_rows(data)
-    lines.append(f"3 时机:{timing_rows[0]}")
-    lines.extend(timing_rows[1:])
-    volume_rows = render_volume_pattern(build_volume_pattern(data)) or _fixed_volume_rows(data)
-    if volume_rows and volume_rows[0].startswith("③量能 "):
-        volume_rows[0] = volume_rows[0][len("③量能 "):]
-    lines.append(f"4 量能:{volume_rows[0]}")
-    lines.extend(volume_rows[1:])
-    fund_rows = _fixed_fund_rows(data)
-    lines.append(f"5 资金:{fund_rows[0]}")
-    lines.extend(fund_rows[1:])
-    buy_rows = _fixed_buy_rows(data, buy_text)
-    lines.append(f"6 买入:结论={buy_rows[0]}")
-    lines.append(f"├ 事件:{buy_rows[1]}")
-    lines.append(f"└ 缺口:{buy_rows[2]}")
-    risk_rows = _fixed_risk_rows(data, action, rule_name, reason_text, trigger_price, stop_loss_price)
-    lines.append(f"7 风控:{risk_rows[0]}")
-    lines.extend(risk_rows[1:])
-    lines.append(f"8 关键价位:{_key_levels(data)}")
-    fundamental_text = _fundamental_line(data)
-    lines.append(f"9 基本面:业绩={fundamental_text or 'N/A'}")
-    calendar_text = _event_calendar_text(data)
-    if calendar_text:
-        lines.append(f"未来事件={calendar_text}")
+    if holding_bits:
+        lines.insert(1, "｜".join(holding_bits))
 
     content = f"<b>{_esc(title)}</b>"
     if price_text:
@@ -1183,7 +1157,12 @@ def _render_seven_questions(data, buy_text=None, exit_text=None):
 
 
 def _render_compact_observation_signal(data):
-    reason = str(data.get("candidate_reason") or data.get("breadth_upgrade_reason") or "")
+    reason = str(
+        data.get("candidate_reason")
+        or data.get("breadth_upgrade_reason")
+        or data.get("note")
+        or ""
+    )
     return _render_fixed_card(
         data,
         action="观察",
@@ -1230,88 +1209,33 @@ def _render_compact_entry_signal(data):
         content += f" {price_line}"
     content += "<br/><br/>"
 
-    env_parts = []
-    mode = data.get("market_mode", "")
-    if mode:
-        env_parts.append(f"市场:{'进攻' if mode == 'attack' else '防守' if mode == 'defend' else '撤退'}")
-    market_score = data.get("market_score") or plan.get("market_score")
-    if market_score is not None:
-        env_parts[0] += f"({float(market_score):.1f})"
     sector_name = data.get("sector_name", "") or data.get("sw_level2", "")
+    reason = str(data.get("trigger_reason") or data.get("note") or "").split(" | 调度:", 1)[0]
+    trigger = plan.get("benchmark_price", data.get("trigger_price"))
+    stop = plan.get("stop_loss", data.get("stop_loss"))
+    targets = plan.get("target_range") or data.get("target_range") or []
+    shares = data.get("shares") or plan.get("suggested_shares")
+    lines = [f"基准:{_val(trigger)}", f"止损:{_val(stop)}"]
+    if len(targets) >= 2:
+        lines.append(f"目标:{_val(targets[0])}-{_val(targets[1])}")
+    elif targets:
+        lines.append(f"目标:{_val(targets[0])}")
+    if shares:
+        lines.append(f"建议:{int(shares):,}股")
     if sector_name:
-        env_parts.append(f"板块:{sector_name}({_sector_label(data.get('sector_status', ''))})")
-    env_parts.append("闸门:" + {"attack": "全策略可用", "defend": "低吸可用", "retreat": "只减不加"}.get(mode, "常规"))
-    content += f"<b>环境</b><br/>&nbsp;&nbsp;{_esc(' | '.join(env_parts))}<br/><br/>"
-
-    content += "<b>决策</b><br/>"
-    for line in _entry_decision_lines(data):
-        content += f"&nbsp;&nbsp;{_esc(line)}<br/>"
-    content += "<br/>"
-
-    content += (
-        "<b>关键价位</b><br/>&nbsp;&nbsp;"
-        f"{_esc(_key_levels(data))}<br/><br/>"
-    )
-
-    confidence_details = plan.get("confidence_details") or []
-    content += (
-        f"<b>置信度</b><br/>&nbsp;&nbsp;"
-        f"{plan.get('confidence_score', 0)}/{plan.get('applicable_score', 0)} "
-        f"{plan.get('confidence', '低')}"
-        f"{_esc('【' + ' | '.join(confidence_details) + '】') if confidence_details else ''}<br/><br/>"
-    )
-
-    rrr = plan.get("rrr_low")
-    rrr_text = f"RRR1:{float(rrr):.2f}" if rrr else "RRR:N/A"
-    content += (
-        f"<b>RRR</b><br/>&nbsp;&nbsp;{rrr_text}"
-        f"【基准{_val(plan.get('benchmark_price'))},非现价口径】<br/><br/>"
-    )
-
-    current = data.get("current_price")
-    content += f"<b>分档</b>{f'(现态{_val(current)})' if current else ''}<br/>"
-    tiers = plan.get("execution_tiers") or []
-    for index, tier in enumerate(tiers):
-        prefix = "└" if index == len(tiers) - 1 else "├"
-        role_labels = {"main": "主仓位", "probe": "试探仓", "stop": "禁入线"}
-        role_label = role_labels.get(str(tier.get("role", "")), "")
-        distance = str(tier.get("distance") or tier.get("state", ""))
-        conditions = str(tier.get("conditions") or "")
-        shares = tier.get("base_shares")
-        shares_text = f"→{int(shares):,}股" if shares else ""
-        content += (
-            f"&nbsp;&nbsp;{prefix}{_esc(str(tier.get('name', '')))} {_val(tier.get('price'))}"
-            f"【{_esc(distance)}{('·' + role_label) if role_label else ''}】"
-            f"{_esc(str(tier.get('trigger', '')))}"
-            f"{('+' + _esc(conditions)) if conditions else ''}{_esc(shares_text)}<br/>"
+        lines.insert(
+            0,
+            f"板块:{sector_name}({_sector_label(data.get('sector_status', ''))})",
         )
-    content += "<br/>"
-
-    shares = data.get("shares")
-    base_shares = plan.get("base_shares")
-    if shares and base_shares:
-        content += (
-            f"<b>仓位链路</b><br/>&nbsp;&nbsp;{int(base_shares):,}股"
-            f" × 产业{float(plan.get('industry_multiplier', 1.0)):.2f}"
-            f" × 风险{float(plan.get('combined_risk_multiplier', 1.0)):.2f}"
-            f" = {int(shares):,}股<br/>"
-        )
-    elif shares:
-        content += f"<b>建议仓位</b><br/>&nbsp;&nbsp;{int(shares):,}股<br/>"
-
-    # 【仓位层→账户层】预算披露透出：调度 note 的预算披露（预算基数/
-    # 单笔风险敞口/账户口径/反推隐含账户）此前被 ⑤触发 按" | 调度: "
-    # 切掉，买入推送看不到绝对值（蘅东光 9/8 验收：300股×88.56=26,568
-    # 敞口→隐含 265 万账户——公式对了，参数是黑箱）
-    note_text = str(data.get("note") or "")
-    budget_marker = "预算基数"
-    if budget_marker in note_text:
-        budget_idx = note_text.find(budget_marker)
-        start = note_text.rfind(" | ", 0, budget_idx)
-        budget_block = note_text[start + 3:] if start >= 0 else note_text
-        content += (
-            f"<b>预算披露</b><br/>&nbsp;&nbsp;{_esc(budget_block)}<br/><br/>"
-        )
+    content += (
+        "<b>执行</b><br/>&nbsp;&nbsp;"
+        + "｜".join(_esc(line) for line in lines)
+        + "<br/><b>关键价位</b><br/>&nbsp;&nbsp;"
+        + _esc(_key_levels(data))
+        + "<br/><b>理由</b><br/>&nbsp;&nbsp;"
+        + _esc(reason or "N/A")
+        + "<br/><br/>"
+    )
     return title, content
 
 def _tech(data):
@@ -1488,52 +1412,21 @@ def render_entry_signal(data):
             except (ValueError, TypeError):
                 pass
         content += f"{price_line}<br/><br/>"
-    env_parts = []
-    if market_mode: env_parts.append(f"市场:{'进攻' if market_mode=='attack' else '防守' if market_mode=='defend' else '撤退'}")
-
-    # 板块显示：名称(状态)
     sector_name = data.get("sector_name","") or data.get("sw_level2","")
-    sw2 = data.get("sw_level2","")
-
+    lines = [f"触发:{_val(trigger)}", f"止损:{_val(stop_loss)}"]
+    if len(target)>=2 and target[0]>0:
+        lines.append(f"目标:{_val(target[0])}-{_val(target[1])}")
+    if position:
+        lines.append(f"仓位:{position}")
     if sector_name:
-        # 区分显示：如果 sw_level2 与 sector_name 不同，说明 sector_name 是 Level1，补充显示 Level2
-        if sw2 and sw2 != sector_name:
-            sector_display = f"{sector_name}→{sw2}({_sector_label(sector_status)})"
-        else:
-            sector_display = f"{sector_name}({_sector_label(sector_status)})"
-    else:
-        sector_display = f"{_sector_label(sector_status)}"
-
-    env_parts.append(f"板块:{sector_display}")
-    content += f"<b>环境</b><br/>&nbsp;&nbsp;{' | '.join(env_parts)}<br/><br/>"
-    content += f"<b>技术面</b><br/>&nbsp;&nbsp;{_tech(data)}<br/><br/>"
-    plan_display = _execution_plan(data)
-    if plan_display:
-        content += f"<b>执行计划</b><br/>&nbsp;&nbsp;{plan_display}<br/><br/>"
-    # 机构持仓打分（4 数据源投票 + 具体数值）
-    inst_display = _institutional(data)
-    if inst_display:
-        content += f"<b>资金投票</b><br/>&nbsp;&nbsp;{inst_display}<br/><br/>"
-    content += f"<b>K线形态</b><br/>&nbsp;&nbsp;{_kline(data)}<br/><br/>"
-    fc = data.get("filter_checks",{})
-    if fc:
-        total, passed = len(fc), sum(1 for c in fc.values() if c.get("passed",True))
-        content += f"<b>前置过滤({passed}/{total})</b><br/>{_filter(data)}<br/><br/>"
-    content += f"<b>信号逻辑</b><br/>&nbsp;&nbsp;类型:{et}<br/>"
-    ssum = data.get("strategy_summary","")
-    if ssum: content += f"&nbsp;&nbsp;策略:{_esc(ssum)}<br/>"
-    if note: content += f"&nbsp;&nbsp;理由:{_esc(note).replace(chr(10), '<br/>&nbsp;&nbsp;')}<br/>"
-    content += f"&nbsp;&nbsp;置信度:{confidence}<br/>"
-    tc = {"冲高止盈":"冲高即走","持有观察":"持有观察","主升持有":"中线持有"}.get(target_type,target_type)
-    content += f"&nbsp;&nbsp;策略:{tc}<br/><br/>"
-    content += f"<b>风控参数</b><br/>&nbsp;&nbsp;触发价:{_val(trigger)}<br/>"
-    slr = data.get("stop_loss_reason","")
-    content += f"&nbsp;&nbsp;止损:{_val(stop_loss)}" + (f"({_esc(slr)})" if slr else "") + "<br/>"
-    if len(target)>=2 and target[0]>0: content += f"&nbsp;&nbsp;止盈:{_val(target[0])}-{_val(target[1])}<br/>"
-    content += f"&nbsp;&nbsp;仓位等级:{position}<br/>"
-    if et=="套利低吸": content += "<br/><b>冲高即走不恋战</b>"
-    elif et=="恐慌抄底": content += "<br/><b>中线持有仓位可偏重</b>"
-    elif et=="确认追强": content += "<br/><b>去弱留强</b>"
+        lines.insert(0, f"板块:{sector_name}")
+    content += (
+        "<b>执行</b><br/>&nbsp;&nbsp;"
+        + "｜".join(_esc(line) for line in lines)
+        + "<br/><b>理由</b><br/>&nbsp;&nbsp;"
+        + _esc(note or "N/A")
+        + "<br/><br/>"
+    )
     return title, content
 
 def render_entry_signals_batch(signals):

@@ -82,7 +82,7 @@ def test_send_intraday_report_prepends_data_time(monkeypatch):
     assert captured["page_header"] == "防守 5.0｜09-17 14:07｜交易日进度 78%"
 
 
-def test_send_intraday_report_uses_four_layer_order(monkeypatch):
+def test_send_intraday_report_uses_compact_layer_order(monkeypatch):
     from src.push.pushplus import PushPlus
     import src.feedback.event_tracker as event_tracker
 
@@ -115,15 +115,15 @@ def test_send_intraday_report_uses_four_layer_order(monkeypatch):
 
     content = captured["content"]
     positions = [content.index(label) for label in (
-        "① 结论与今日行动", "② 现役事件", "③ 相对上一推送 DIFF", "④ 附录：环境与信号全文",
+        "① 结论与今日行动", "② 现役事件", "③ 相对上一推送 DIFF",
     )]
     assert positions == sorted(positions)
     assert content.index("#t-300394") < content.index("③ 相对上一推送 DIFF")
-    assert "综合评分1/6≤1" in content
-    assert "口径: 技术同向｜机构同向｜主线板块｜无冲突｜环境≥6" in content
+    assert "综合评分1/6≤1" not in content
+    assert "口径: 技术同向｜机构同向｜主线板块｜无冲突｜环境≥6" not in content
 
 
-def test_gate_items_preserve_score_and_evidence(monkeypatch):
+def test_gate_items_are_not_rendered(monkeypatch):
     from src.push.pushplus import PushPlus
     import src.feedback.event_tracker as event_tracker
 
@@ -151,8 +151,8 @@ def test_gate_items_preserve_score_and_evidence(monkeypatch):
         },
     )
 
-    content = captured["content"]
-    assert "创世纪(300083)｜评分0/6｜RRR0.37｜依据:技术票+0.5；机构票0" in content
+    assert "评分0/6" not in captured["content"]
+    assert "RRR0.37" not in captured["content"]
 
 
 def test_send_intraday_report_diffs_against_last_snapshot(monkeypatch):
@@ -214,12 +214,12 @@ def test_send_intraday_report_diffs_against_last_snapshot(monkeypatch):
     )
 
     diff = captured["content"][captured["content"].index("③ 相对上一推送 DIFF"):
-        captured["content"].index("④ 附录：环境与信号全文")]
+        captured["content"].index("④ 数据未取到")]
     assert "模式变化: 进攻 → 防守" in diff
     assert "新触发: 芯原股份(688008) 回踩MA5" in diff
     assert "状态变化: 澜起科技(688008) 挂单中 → 无" not in diff
-    assert "买入提示新增: 天孚通信(300394)" in diff
-    assert "买入提示解除: 金海通(603061)" in diff
+    assert "买入提示新增" not in diff
+    assert "买入提示解除" not in diff
     assert "数据缺失新增: 300394" in diff
     assert "退出: 大普微(301666)" in diff
     assert saved and saved[0]["stocks"]["688008"]["event_id"] == "evt-new"
