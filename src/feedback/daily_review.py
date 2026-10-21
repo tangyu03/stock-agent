@@ -194,6 +194,20 @@ class DailyReview:
         except Exception as e:
             lines.append(f"昨日复核/失效条款生成失败: {str(e)[:80]}")
 
+        # 5.3 影子点位表：只生成和推送，不参与信号调度。
+        # 破线问题先用“当晚固定台账”暴露出来，第二阶段再引入人工签字和盘中触发。
+        lines.append("")
+        lines.append("🌙 影子点位表:")
+        try:
+            from ..plan.point_table import (
+                generate_shadow_point_table,
+                render_shadow_point_table,
+            )
+            point_rows = generate_shadow_point_table()
+            lines.append(render_shadow_point_table(point_rows))
+        except Exception as e:
+            lines.append(f"影子点位表生成失败: {str(e)[:120]}")
+
         # 6.【P3-3】参数附录：每个参数的出处与验证状态
         # （RRR 1.5 隐含 40% 胜率假设七天未验证——参数没有验证状态
         #   就是拍脑袋的数字；附录机制永不作废）

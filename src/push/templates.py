@@ -260,107 +260,10 @@ def _execution_plan(data) -> str:
     return "<br/>&nbsp;&nbsp;".join(parts)
 
 
-# 【Phase3】估值透镜标签（高增长≠便宜：同增速背后质量天差地别）
-_LENS_TAG_LABELS = {
-    "valuation_bubble": "估值泡沫",
-    "valuation_elevated": "估值偏高",
-    "value_growth": "低估真增长",
-    "low_base_reversal": "低基数反转",
-    "strategic_loss": "战略性亏损(订单加速)",
-    "model_loss": "商业模式亏损",
-    "analyst_flow_conflict": "资金-研报冲突",
-}
-
-
-def _lens_text(lens) -> str:
-    """估值透镜摘要：PE/PB + 分档标签（净利双口径在基本面行主段拼接）。"""
-    if not lens or not isinstance(lens, dict):
-        return ""
-    parts = []
-    val = lens.get("valuation") or {}
-    pe = _num_or_none(val.get("pe_ttm"))
-    pb = _num_or_none(val.get("pb"))
-    if pe is not None:
-        seg = f"PE(TTM){pe:.1f}倍"
-        if pb is not None:
-            seg += f"/PB{pb:.1f}"
-        source = str(val.get("pe_source") or "")
-        if source and source != "TTM":
-            seg += f"[{source}]"
-        parts.append(seg)
-    verdict = lens.get("verdict") or {}
-    tags = verdict.get("tags") or []
-    hits = [_LENS_TAG_LABELS.get(t, t) for t in tags if t in _LENS_TAG_LABELS]
-    if hits:
-        parts.append("⚠" + "/".join(hits))
-    return " | ".join(parts)
-
-
 def _fundamental_line(data) -> str:
-    """
-    【二】基本面行（七问第⑦问）：业绩快报/预告 + 盈利质量 + 财报窗口。
-    【Phase3】估值透镜合并展示：净利双口径（增速+绝对值——长光华芯
-    +238%但仅 0.30 亿的低基数反转必须现形）+ PE/PB + 估值分档 +
-    亏损分型。报告期级数据强制带口径（报告期），防止把过去报告期的
-    变化当当下变化。
-    """
-    fund = data.get("fundamental")
-    lens = data.get("valuation_lens") if isinstance(data.get("valuation_lens"), dict) else None
+    """Render only the future calendar; the heavy fundamental gate is removed."""
     calendar_text = _event_calendar_text(data)
-    if not fund or not isinstance(fund, dict):
-        # 允许信号侧直接携带 fundamental_note（拒绝/降级摘要）
-        note = str(data.get("fundamental_note") or "").strip()
-        lens_text = _lens_text(lens)
-        return " | ".join(x for x in (note, lens_text, calendar_text) if x)
-    parts = []
-    profit = _num_or_none(fund.get("profit_yoy"))
-    deducted = _num_or_none(fund.get("deducted_yoy"))
-    # 【Phase3】净利双口径：增速 + 绝对值（亿元）
-    profit_abs = _num_or_none(fund.get("profit_abs"))
-    if profit_abs is None and lens:
-        profit_abs = _num_or_none((lens.get("verdict") or {}).get("profit_abs"))
-    forecast = str(fund.get("forecast_type") or "")
-    if profit is not None:
-        seg = f"净利{profit:+.1f}%"
-        if profit_abs is not None:
-            seg += f"({profit_abs:.2f}亿)"
-        if deducted is not None:
-            seg += f"/扣非{deducted:+.1f}%"
-        parts.append(seg)
-    elif deducted is not None:
-        parts.append(f"扣非{deducted:+.1f}%")
-    if forecast:
-        seg = f"预告:{forecast}"
-        if fund.get("forecast_change_pct") is not None:
-            try:
-                seg += f"{float(fund['forecast_change_pct'])}%"
-            except (TypeError, ValueError):
-                pass
-        parts.append(seg)
-    verdict = (fund.get("verdict") or {}) if isinstance(fund.get("verdict"), dict) else {}
-    tags = verdict.get("tags") or []
-    if tags:
-        label_map = {
-            "earnings_bomb": "业绩雷",
-            "low_quality_growth": "盈利质量低",
-            "report_window": "财报窗口",
-        }
-        hits = [label_map.get(t, t) for t in tags if t in label_map]
-        if hits:
-            parts.append("⚠" + "/".join(hits))
-    period = str(fund.get("report_period") or "")
-    if period:
-        parts.append(f"报告期{period[:4]}-{period[4:6] if len(period) >= 6 else ''}")
-    # 【Phase3】估值透镜段：PE/PB + 估值分档/低基数反转/亏损分型/冲突标签
-    lens_text = _lens_text(lens)
-    if lens_text:
-        parts.append(lens_text)
-    if calendar_text:
-        parts.append(calendar_text)
-    reason_note = str(verdict.get("note") or "")
-    if reason_note and not parts:
-        parts.append(reason_note)
-    return " | ".join(parts)
+    return calendar_text
 
 
 def _event_calendar_text(data) -> str:
@@ -402,15 +305,9 @@ def _institutional(data) -> str:
     """
     渲染资金流投票（4 数据源投票 + 具体数值）。
 
-    【Phase3】语义修正：原"机构资金"标签易误导——4 票源全是短周期
-    资金流/筹码数据（主力/股东/两融/龙虎榜），不测度研报共识。
-    兆易创新（PE 33.9 倍+研报一致买入）曾被标"机构看空(-2票)"。
-    现改为双标签：资金投票 + 研报共识（冲突时显式标记，禁止单标签定性）。
-
     数据来自 tech_data['institutional_holding']，包含：
-    - vote_score / vote_label: 资金看多/看空/中性
+    - vote_score / vote_label: 机构看多/看空/中性
     - votes: 各数据源详情 (north_bound/lhb/main_force/shareholder)
-    - analyst_consensus: 研报共识（valuation_lens 旁路注入，不参与资金票计分）
     """
     inst = data.get("institutional_holding")
     if not inst or not isinstance(inst, dict):
@@ -418,7 +315,7 @@ def _institutional(data) -> str:
 
     parts = []
     score = inst.get("vote_score", 0)
-    label = inst.get("vote_label", "资金中性")
+    label = inst.get("vote_label", "机构中性")
     bull = inst.get("bullish_count", 0)
     bear = inst.get("bearish_count", 0)
 
@@ -551,19 +448,6 @@ def _institutional(data) -> str:
         parts.append(
             f"慢变量计票:{'/'.join(slow_bits)}({layering.get('score', 0):+d}，拆层不投票)"
         )
-
-    # 【Phase3】研报共识旁路（资金是节奏、研报是方向，不混票）
-    analyst = inst.get("analyst_consensus")
-    if isinstance(analyst, dict) and analyst.get("total"):
-        seg = (
-            f"研报共识{analyst.get('consensus_label', '无数据')}"
-            f"(买入{analyst.get('buy', 0)}/增持{analyst.get('outperform', 0)}"
-            f"/中性{analyst.get('neutral', 0)}/减持{analyst.get('reduce', 0)}，"
-            f"近90天{analyst.get('total', 0)}份)"
-        )
-        parts.append(seg)
-        if inst.get("flow_analyst_conflict"):
-            parts.append("⚠资金与研报反向(双标签呈现，禁止单标签定性)")
 
     # 【P0-6】大宗交易第五资金源（笔数/折溢价/连续性/营业部）：
     # 近20日折价大宗超阈值强制挂派发确认候选；北交所无两融/龙虎榜时补位。
@@ -1314,9 +1198,7 @@ def _driver_line(data) -> str:
     """【P3-2】第八问驱动源行：业绩/板块/资金/价格驱动（买入卡与观察卡共用）。"""
     driver = None
     if isinstance(data, dict):
-        driver = (data.get("hypothesis") or {}).get("driver")
-        if not driver:
-            driver = ((data.get("execution_plan") or {}).get("hypothesis") or {}).get("driver")
+        driver = data.get("driver")
     if not isinstance(driver, dict):
         return ""
     try:
@@ -1358,18 +1240,13 @@ def _render_compact_entry_signal(data):
     sector_name = data.get("sector_name", "") or data.get("sw_level2", "")
     if sector_name:
         env_parts.append(f"板块:{sector_name}({_sector_label(data.get('sector_status', ''))})")
-    env_parts.append("闸门:" + {"attack": "全策略可用", "defend": "追强降仓可用(三重门),低吸可用", "retreat": "只减不加"}.get(mode, "常规"))
+    env_parts.append("闸门:" + {"attack": "全策略可用", "defend": "低吸可用", "retreat": "只减不加"}.get(mode, "常规"))
     content += f"<b>环境</b><br/>&nbsp;&nbsp;{_esc(' | '.join(env_parts))}<br/><br/>"
 
     content += "<b>决策</b><br/>"
     for line in _entry_decision_lines(data):
         content += f"&nbsp;&nbsp;{_esc(line)}<br/>"
     content += "<br/>"
-
-    # 【一】可证伪假说：因为X，所以在Y买入；若Z认错；若W兑现
-    hyp_block = _hypothesis_block(data)
-    if hyp_block:
-        content += hyp_block
 
     content += (
         "<b>关键价位</b><br/>&nbsp;&nbsp;"
@@ -1436,41 +1313,6 @@ def _render_compact_entry_signal(data):
             f"<b>预算披露</b><br/>&nbsp;&nbsp;{_esc(budget_block)}<br/><br/>"
         )
     return title, content
-
-def _hypothesis_block(data):
-    """【一】可证伪假说渲染：X/Y/Z/W 四要素 + 事件有效期说明"""
-    hyp = data.get("hypothesis") or (data.get("execution_plan") or {}).get("hypothesis") or {}
-    if not hyp or not hyp.get("sentence"):
-        return ""
-    lines = []
-    x = hyp.get("x", "")
-    y = hyp.get("y", 0)
-    y_note = hyp.get("y_note", "")
-    z = hyp.get("z", 0)
-    z_note = hyp.get("z_note", "")
-    w = hyp.get("w") or []
-    w_note = hyp.get("w_note", "")
-    z_ref = hyp.get("z_reference", 0)
-    if x:
-        lines.append(f"X·因为: {_esc(str(x))[:120]}")
-    if y:
-        lines.append(f"Y·在{_val(y)}买入({_esc(y_note)})")
-    # P1-12：结构位(突破失败判定基准)与跟踪止损(风险出口)分开标注，事件面板两行分列。
-    if z_ref:
-        lines.append(f"结构位: {_val(z_ref)}（突破失败判定基准，收盘跌回即撤单）")
-    if z:
-        z_suffix = f"，若{_esc(z_note)}出现" if z_note else ""
-        lines.append(f"Z·跟踪止损(风险出口){_val(z)}{z_suffix}→认错离场")
-    if w:
-        w_text = f"{_val(w[0])}" + (f"~{_val(w[-1])}" if len(w) > 1 and w[-1] > w[0] else "")
-        lines.append(f"W·若{_esc(w_note)}出现({w_text})→兑现离场")
-    event_id = data.get("event_id") or ""
-    if event_id:
-        lines.append(_esc(f"事件: {event_id}（N日内回踩买点有效，收盘跌回结构位立即撤单）"))
-    if not lines:
-        return ""
-    return "<b>可证伪假说</b><br/>" + "<br/>".join(f"&nbsp;&nbsp;{l}" for l in lines) + "<br/><br/>"
-
 
 def _tech(data):
     parts = []
@@ -1897,6 +1739,17 @@ def render_environment_overview(data: Dict) -> str:
     gate_hint = _mode_gate_expectation(mode)
     if gate_hint:
         content += f"&nbsp;&nbsp;转档:{_esc(gate_hint)}<br/>"
+
+    point_overlay = data.get("point_overlay")
+    if isinstance(point_overlay, dict) and point_overlay.get("available"):
+        overlay_text = (
+            f"行数{point_overlay.get('rows', 0)}｜"
+            f"一致{point_overlay.get('matched', 0)}｜"
+            f"冲突{point_overlay.get('conflicts', 0)}｜"
+            f"参考{point_overlay.get('references', 0)}｜"
+            f"过期{point_overlay.get('stale', 0)}"
+        )
+        content += f"&nbsp;&nbsp;点表覆盖:{_esc(overlay_text)}<br/>"
 
     panic = data.get("market_panic")
     if isinstance(panic, dict):

@@ -265,19 +265,13 @@ def init_db():
         stop_loss REAL,
         target_low REAL,
         target_high REAL,
-        hypothesis_x TEXT,
-        hypothesis_y TEXT,
-        hypothesis_z TEXT,
-        hypothesis_w TEXT,
         status TEXT DEFAULT 'valid',
         invalid_reason TEXT,
-        rule_version TEXT DEFAULT '',
         rules_version TEXT DEFAULT '',
         frozen_prev_status TEXT DEFAULT '',
         entry_snapshot TEXT DEFAULT '{}',
         maintenance_check TEXT DEFAULT '{}',
-        y_formula TEXT DEFAULT '',
-        y_inputs TEXT DEFAULT '',
+        driver_json TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
@@ -308,22 +302,6 @@ def init_db():
     from .feedback.signal_ledger import ensure_signal_ledger_schema
     ensure_signal_ledger_schema(cursor)
 
-    # 【一】出厂拒绝留痕表（可证伪性检查拦下的信号：不进调度不推送，但可审计）
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS signal_rejections (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL,
-        time TEXT,
-        stock_code TEXT,
-        stock_name TEXT,
-        entry_type TEXT,
-        missing_fields TEXT,
-        reason TEXT,
-        detail TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
     # 【六】策略状态表（记录闭环 → 自动下线）
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS strategy_status (
@@ -336,6 +314,49 @@ def init_db():
     )
     """)
 
+    # 影子点位表：第一阶段只落库与推送，不进入盘中调度。
+    # locked/human_signed 保留目标形态，当前恒为 0。
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS point_entry (
+        id TEXT PRIMARY KEY,
+        plan_date TEXT NOT NULL,
+        trade_date TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        stock_name TEXT,
+        mode TEXT NOT NULL,
+        zone_low REAL NOT NULL,
+        zone_high REAL NOT NULL,
+        action TEXT NOT NULL,
+        action_size REAL NOT NULL,
+        verify_volume TEXT,
+        verify_market_mode TEXT,
+        verify_emotion TEXT,
+        verify_time TEXT,
+        reverse_action TEXT,
+        invalid_if TEXT,
+        source TEXT,
+        source_id TEXT,
+        status TEXT DEFAULT 'DRAFT',
+        locked INTEGER DEFAULT 0,
+        human_signed INTEGER DEFAULT 0,
+        market_mode TEXT,
+        generated_by TEXT,
+        sector_name TEXT,
+        sector_state TEXT,
+        sector_rank INTEGER,
+        sector_percentile REAL,
+        rotation_direction TEXT,
+        stock_role TEXT,
+        scenario_id TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(plan_date, symbol, source, generated_by)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_point_entry_plan_symbol "
+                   "ON point_entry(plan_date, symbol)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_point_entry_trade "
+                   "ON point_entry(trade_date, status)")
+
     conn.commit()
     _migrate()
     logger.info("Database initialized successfully at %s", DB_PATH)
@@ -345,18 +366,16 @@ def _migrate():
     """增量迁移：为已存在的表补充新增列（SQLite 不支持 ADD COLUMN IF NOT EXISTS）"""
     conn = get_connection()
     cursor = conn.cursor()
-    # signal_events 审计列：Y 的公式版本与输入必须随事件持久化。
+    # signal_events 审计列：驱动源必须随事件持久化。
     try:
         cols = {r[1] for r in cursor.execute("PRAGMA table_info(signal_events)")}
         if cols:
             additions = {
-                "rule_version": "TEXT DEFAULT ''",
                 "rules_version": "TEXT DEFAULT ''",
                 "frozen_prev_status": "TEXT DEFAULT ''",
                 "entry_snapshot": "TEXT DEFAULT '{}'",
                 "maintenance_check": "TEXT DEFAULT '{}'",
-                "y_formula": "TEXT DEFAULT ''",
-                "y_inputs": "TEXT DEFAULT ''",
+                "driver_json": "TEXT DEFAULT ''",
             }
             for column, col_type in additions.items():
                 if column not in cols:
@@ -375,21 +394,14 @@ def _migrate():
     except Exception as e:
         logger.error("迁移 trade_logs.shares 失败: %s", e)
 
-    # 【六】记录闭环：假说四要素 / 配对 Z/W / 事件链接 / 归因四行日志
+    # 【六】记录闭环：驱动源 / 事件链接 / 离场与归因日志
     try:
         cols = {r[1] for r in cursor.execute("PRAGMA table_info(trade_logs)")}
         additions = {
-            "hypothesis_x": "TEXT",
-            "hypothesis_y": "TEXT",
-            "hypothesis_z": "TEXT",
-            "hypothesis_w": "TEXT",
-            "hypothesis_sentence": "TEXT",
-            "paired_z": "REAL",
-            "paired_w_low": "REAL",
-            "paired_w_high": "REAL",
-            "z_reference": "REAL",
             "event_id": "TEXT",
-            "zw_triggered": "TEXT",
+            "driver_json": "TEXT",
+            "sector_version": "TEXT",
+            "exit_reason": "TEXT",
             "exit_price": "REAL",
             "exit_date": "TEXT",
             "pnl_pct": "REAL",
@@ -402,7 +414,27 @@ def _migrate():
                 conn.commit()
                 logger.info("迁移: trade_logs 新增 %s 列", column)
     except Exception as e:
-        logger.error("迁移 trade_logs 假说列失败: %s", e)
+        logger.error("迁移 trade_logs 通用审计列失败: %s", e)
+
+    # point_entry：状态化剧本字段。旧影子表迁移后可继续使用。
+    try:
+        cols = {r[1] for r in cursor.execute("PRAGMA table_info(point_entry)")}
+        if cols:
+            additions = {
+                "sector_name": "TEXT",
+                "sector_state": "TEXT",
+                "sector_rank": "INTEGER",
+                "sector_percentile": "REAL",
+                "rotation_direction": "TEXT",
+                "stock_role": "TEXT",
+                "scenario_id": "TEXT",
+            }
+            for column, col_type in additions.items():
+                if column not in cols:
+                    cursor.execute(f"ALTER TABLE point_entry ADD COLUMN {column} {col_type}")
+            conn.commit()
+    except Exception as e:
+        logger.error("迁移 point_entry 剧本列失败: %s", e)
 
 
 if __name__ == "__main__":

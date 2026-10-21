@@ -28,38 +28,6 @@ def _base_tech(**overrides):
     return tech
 
 
-def test_shareholder_dispersion_display_uses_raw_fraction():
-    from src.analyzers.timing_engine import TimingEngine
-
-    gate = TimingEngine(backtest_mode=True)._defensive_chase_gates(
-        _base_tech(institutional_holding={
-            "votes": {"shareholder": {"raw": {"change_pct": 0.332}}},
-        }),
-        "main_trend",
-    )
-    evidence = "\n".join(gate["evidence"])
-    assert "筹码分散 33.2%/20.0% 超66%" in evidence
-    assert any(
-        item["item"] == "筹码分散" and pytest.approx(item["gap"], abs=0.5) == 66
-        for item in gate["gap_items"]
-    )
-
-
-def test_shareholder_dispersion_compliant_shows_check():
-    from src.analyzers.timing_engine import TimingEngine
-
-    gate = TimingEngine(backtest_mode=True)._defensive_chase_gates(
-        _base_tech(
-            fundamental={"profit_yoy": 8.0, "profit_abs": 3.05},
-            institutional_holding={
-                "votes": {"shareholder": {"raw": {"change_pct": -0.193}}},
-            },
-        ),
-        "main_trend",
-    )
-    evidence = "\n".join(gate["evidence"])
-    assert "筹码分散 -19.3%/20.0% ✓" in evidence
-    assert "余0%" not in evidence
 
 
 def test_lhb_missing_date_column_is_honest(monkeypatch):

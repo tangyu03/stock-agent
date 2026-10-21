@@ -1,7 +1,7 @@
 """
 THS 板块历史缓存读写层（S系列 A2 落盘 + B1/B2/B3/B5 消费统一入口）
 
-落盘规范（scripts/s2_history_init.py 写入）：
+落盘规范：
   data/ths_cache/industry/<name>.parquet    # 行业指数历史（90）
   data/ths_cache/concept/<name>.parquet     # 概念指数历史（跟踪子集）
   data/ths_cache/manifest.json              # {name: {type, rows, first_date, last_date,
@@ -44,12 +44,7 @@ _COL_MAP = {
 
 
 def min_history_days() -> int:
-    try:
-        from src.config_models import load_config
-        cfg = load_config("sector_pool.yaml").get("sector_pool", {})
-        return int(cfg.get("data", {}).get("min_history_days", 120))
-    except Exception:
-        return 120
+    return 120
 
 
 def cache_path(kind: str, name: str) -> Path:

@@ -1,0 +1,15 @@
+*** Begin Patch
+*** Update File: src/push/pushplus.py
+@@
+         from .templates import (
+             _esc,
+-            render_action_summary,
+-            render_entry_signal,
++            build_report_global_context,
++            pattern_summary_line,
++            render_report_global_context,
++            render_action_summary,
++            render_environment_overview,
++            render_entry_signal,
+             render_exit_signal,
+*** End Patch

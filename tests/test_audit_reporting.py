@@ -30,28 +30,6 @@ def test_environment_score_detail_is_reproducible(monkeypatch):
     assert result["raw_score"] == pytest.approx(5 + weighted * 5, abs=0.05)
 
 
-def test_defensive_gate_discloses_values_and_gap():
-    from src.analyzers.timing_engine import TimingEngine
-
-    tech = {
-        "current_price": 100.0,
-        "prior_high": 105.0,
-        "recent_high": 105.0,
-        "volume_ratio": 0.82,
-        "volume_ma60": 100.0,
-        "today_volume": 82.0,
-        "adx": 18.0,
-        "rsi": 60.0,
-        "outer_volume": 100,
-        "inner_volume": 120,
-        "kline": [{"close": 100.0, "volume": 100.0}] * 61,
-    }
-    gate = TimingEngine(backtest_mode=True)._defensive_chase_gates(tech, "rotational")
-    assert "量比 0.82/1.20 缺32%" in gate["evidence"][0]
-    assert "ADX 18.0/25.0 缺28%" in gate["evidence"][0]
-    adx_gap = next(x["gap"] for x in gate["gap_items"] if x["item"] == "ADX")
-    assert adx_gap == pytest.approx(28.0, abs=0.5)
-
 
 def test_freshness_annotation_marks_stale_source():
     from src.push.templates import _institutional

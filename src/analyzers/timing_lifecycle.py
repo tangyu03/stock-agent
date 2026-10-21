@@ -81,18 +81,9 @@ class TimingLifecycleMixin:
             return []
 
     def lifecycle_status_note(self, stock_code: str, current_price: float = 0) -> str:
-        """【三】观察卡用：活跃事件状态（回踩买点是否有效/第几天）。
-
-        【Phase5 回炉】传入当前 z_line_mode：存量事件与新规则双轨
-        在状态行可见（“Z按bare_structure(旧版)”），审计者不再误判。
-        """
+        """【三】观察卡用：活跃事件状态（回踩买点是否有效/第几天）。"""
         try:
-            current_mode = str(
-                self._cfg("hypothesis_gate", "z_line_mode", default="buffered_structure")
-            )
-            return self._lifecycle.event_status_note(
-                stock_code, current_price, current_rule_version=current_mode
-            )
+            return self._lifecycle.event_status_note(stock_code, current_price)
         except Exception:
             return ""
 

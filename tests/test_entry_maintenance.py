@@ -12,7 +12,6 @@ def test_entry_snapshot_and_maintenance_check_render_separately():
         "002975", "博杰股份", "价量突破",
         breakout_level=99.39, entry_price=102.77, stop_loss=85.54,
         target_low=112.89, target_high=120.21,
-        hypothesis={"x": "突破MA25", "y": 102.77, "z": 85.54},
         born=date(2026, 9, 8),
         entry_snapshot={
             "volume_ratio": 1.3,

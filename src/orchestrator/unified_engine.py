@@ -30,8 +30,6 @@ class UnifiedSignalBatch:
     entries: List[EntrySignal] = field(default_factory=list)
     exits: List[ExitSignal] = field(default_factory=list)
 
-    # 【一】出厂拒绝留痕（假说四要素不完整的信号，不推送但可审计）
-    rejected: List[Dict] = field(default_factory=list)
     # 【三】信号事件状态迁移通知（失效撤单/过期）
     event_notices: List[Dict] = field(default_factory=list)
     # 【二】主题归属修正记录（行业数据库映射 ≠ 市场主题交易，Phase2-B）
@@ -40,9 +38,6 @@ class UnifiedSignalBatch:
     # 【Phase4 P1-2】再入场待命队列（创新高/收复Z线的头部标的）
     standby_queue: List[Dict] = field(default_factory=list)
     # 【Phase4 P1-1】防守模式追强踏空成本台账（回退禁用后继续留档）
-    chase_missed: List[Dict] = field(default_factory=list)
-    # 【Phase4 P2-3】组合预算拦截留痕
-    budget_blocked: List[Dict] = field(default_factory=list)
     # 【Phase4 P2-1】板块分类版本
     theme_version: str = ""
     # F2-2 审计：板块状态/归属相对前一报告日的变化
@@ -145,32 +140,7 @@ def _strategy_blockers(
         blockers.append("套利低吸: 未出现低吸形态")
 
     if market_mode != "attack":
-        # 【P1-1】防守模式确认追强：降仓可用（三重门）而非禁用。
-        # 防守的定义是压缩敞口而非对全市场最强动量失明
-        # （蘅东光 9/7 +14.81%/量比2.01/ADX48 却零提示）。
-        # 未过三重门时披露具体卡在哪一关，踏空成本入台账。
-        chase_blocker = "确认追强: 防守模式降仓放行需过三重门(四确认+基本面+板块联动)"
-        gate_detail = _defensive_gate_blocker_text(tech_data, sector_status)
-        if gate_detail:
-            chase_blocker += f"——未过: {gate_detail}"
-        # 【Phase3】闸门冲突披露：防守模式拦下追强，但个股基本面强
-        lens = tech_data.get("valuation_lens") or {}
-        if isinstance(lens, dict) and lens:
-            tags = ((lens.get("verdict") or {}).get("tags")) or []
-            strong_fund = "value_growth" in tags or "strategic_loss" in tags
-            analyst = lens.get("analyst") or {}
-            analyst_bull = isinstance(analyst, dict) and str(analyst.get("consensus_label")) == "看多"
-            if strong_fund or analyst_bull:
-                hints = []
-                if strong_fund:
-                    hints.append("估值透镜基本面强")
-                if analyst_bull:
-                    hints.append("研报共识看多")
-                chase_blocker += (
-                    f" ⚠基本面冲突({'、'.join(hints)}；降仓不等于无条件放行，"
-                    "三重门纪律优先）"
-                )
-        blockers.append(chase_blocker)
+        blockers.append("确认追强: 防守模式禁用")
     else:
         chase_reason = _momentum_chase_blocker(tech_data)
         if chase_reason:
@@ -193,32 +163,6 @@ def _strategy_blockers(
 
     return blockers
 
-
-def _defensive_gate_blocker_text(tech_data: Dict, sector_status: str) -> str:
-    """【P1-1】防守追强三重门未过的具体关卡（观察卡展示 + 踏空留档共用）。"""
-    try:
-        from ..analyzers.timing_engine import get_timing_engine
-        engine = get_timing_engine()
-        gate = engine._defensive_chase_gates(tech_data, sector_status)
-        if gate["passed"]:
-            return ""  # 三重门已过 → 实际信号应已生成（此处不展示拦截）
-        failed = sorted(
-            (item for item in gate.get("gap_items", []) if item.get("gap", 0) > 0),
-            key=lambda item: item["gap"],
-        )[:3]
-        summary = "|".join(
-            f"{item['item']}{'超' if item.get('direction') == 'lt' else '缺'}{item['gap']:.0f}%"
-            for item in failed
-        )
-        passed = int(gate.get("checks_passed", 0))
-        total = int(gate.get("check_total", 0))
-        return (
-            f"确认追强{passed}/{total}达标"
-            + (f" | 缺口前三: {summary}" if summary else "")
-            + "；全量清单入审计字段"
-        )
-    except Exception:
-        return "三重门评估不可用"
 
 
 def _panic_bottom_blocker(tech_data: Dict) -> str:
@@ -445,7 +389,6 @@ def run_unified_analysis(
 
     entry_codes = set()
     # 【P1-1】防守模式追强踏空成本台账（数据本身是“防守模式是否值得存在”的证据）
-    chase_missed_enabled = market_mode == "defend"
 
     # -------- 1. 进场信号（全量扫）--------
     logger.info("--- 统一引擎：进场检查 ---")
@@ -468,10 +411,6 @@ def run_unified_analysis(
             filter_result=filter_result,
             market_score=market_score,
         )
-        # 【一】采集出厂拒绝留痕（假说不完整：缺 X/Y/Z/W、止损倒挂、缓冲不足）
-        rejection = timing._rejection_ledger.pop(code)
-        if rejection:
-            batch.rejected.append(rejection)
         if signals:
             batch.entries.extend(signals)
             entry_codes.add(code)
@@ -522,41 +461,6 @@ def run_unified_analysis(
                 logger.debug("再入场判定失败 %s: %s", code, str(e)[:60])
             # 【P1-1】防守模式追强被拦 → 踏空成本入台账（四确认里至少创新高+放量
             # 才登记：不是每只下跌股都算磨空，只有“本可放行却被纪律拦下”的才算）
-            if chase_missed_enabled:
-                try:
-                    current_price = float((entry_tech or {}).get("current_price") or 0)
-                    # 【Phase5 回炉】锄 prior_high（剔除当日）：踏空台账的
-                    # “创新高”口径与门一/再入场对齐，蘅东光式盘中新高
-                    # 收盘回落 1% 不再漏登记。
-                    prior_high = float((entry_tech or {}).get("prior_high") or 0)
-                    high_anchor = prior_high or float((entry_tech or {}).get("recent_high") or 0)
-                    volume_ratio = float((entry_tech or {}).get("volume_ratio") or 0)
-                    if (
-                        not active_events
-                        and current_price and high_anchor
-                        and current_price >= high_anchor * 0.99
-                        and volume_ratio >= 1.2
-                    ):
-                        reason = (
-                            "策略未触发(动量条件未满足)" if "确认追强" not in diagnostics
-                            else "三重门未过(纪律拦截)"
-                        )
-                        batch.chase_missed.append({
-                            "stock_code": code, "stock_name": name,
-                            "event_id": active_event_id,
-                            "price": current_price,
-                            "date": entry_tech.get("trade_date") or "",
-                            "volume_ratio": volume_ratio,
-                            "blocked_reason": reason,
-                            "note": (
-                                f"{name}({code}) 现价{current_price:.2f}创近段新高、"
-                                f"量比{volume_ratio:.1f}——防守模式未放行；"
-                                "踏空成本留档（回退禁用后继续记录，"
-                                "这份数据是防守模式是否值得存在的证据）"
-                            ),
-                        })
-                except Exception as e:
-                    logger.debug("踏空台账登记失败 %s: %s", code, str(e)[:60])
             batch.entry_diagnostics[code] = diagnostics
 
     # -------- 2. 出场信号（全量扫）--------
@@ -637,8 +541,21 @@ def run_unified_analysis(
         info["sw_level2"] = stock_sector.get(code, "")
         return info
 
+    def _attach_sector_regime(signal, code: str) -> None:
+        info = ranker_result.get(code) or {}
+        sector = info.get("best_sector") or {}
+        if not sector and info.get("sectors"):
+            sector = (info.get("sectors") or [{}])[0]
+        if not getattr(signal, "sector_change_pct", None):
+            signal.sector_change_pct = sector.get("change_pct")
+        if not getattr(signal, "sector_rank", None):
+            signal.sector_rank = sector.get("rank")
+        if not getattr(signal, "sector_total", None):
+            signal.sector_total = sector.get("total")
+
     for sig in batch.entries:
         info = _get_sector_info(sig.stock_code)
+        _attach_sector_regime(sig, sig.stock_code)
         if not getattr(sig, "sector_name", "") and info["sector_name"]:
             sig.sector_name = info["sector_name"]
         if not getattr(sig, "sw_level2", "") and info["sw_level2"]:
@@ -649,47 +566,6 @@ def run_unified_analysis(
     # 9/7 观察 23/24 主线、半导体设备 8 只同标签——超额同板块新信号
     # 降级为观察并留痕，个股纪律结论保留可审计。
     # ============================================================
-    try:
-        from ..analyzers.portfolio_budget import apply_portfolio_budget
-        holdings = []
-        try:
-            from ..feedback.trade_logger import get_trade_logger
-            holdings = get_trade_logger().get_current_holdings() or []
-        except Exception:
-            holdings = []
-        timing_cfg = timing._tc or {}
-        budget_result = apply_portfolio_budget(
-            batch.entries, holdings=holdings,
-            config=timing_cfg, sector_of_entry=lambda sig: getattr(sig, "sector_name", ""),
-        )
-        if budget_result["applied"] and budget_result.get("blocked"):
-            entry_by_code = {
-                getattr(sig, "stock_code", ""): sig for sig in batch.entries
-            }
-            for blocked in budget_result["blocked"]:
-                blocked["event_id"] = getattr(
-                    entry_by_code.get(blocked.get("stock_code", "")),
-                    "event_id", "",
-                ) or ""
-            batch.entries = [sig for sig in batch.entries
-                             if sig.stock_code not in {b["stock_code"] for b in budget_result["blocked"]}]
-            batch.budget_blocked = budget_result["blocked"]
-            batch.rejected.extend(budget_result["blocked"])
-            for blocked in budget_result["blocked"]:
-                if blocked.get("event_id"):
-                    timing._lifecycle.mark_scheduler_rejected(
-                        blocked["event_id"], blocked["stock_code"],
-                        blocked["entry_type"], blocked["reason"],
-                    )
-                batch.entry_diagnostics[blocked["stock_code"]] = blocked["reason"]
-            logger.info(
-                "组合预算拦截 %d 条同板块新信号: %s",
-                len(budget_result["blocked"]),
-                ", ".join(b["stock_name"] for b in budget_result["blocked"]),
-            )
-    except Exception as e:
-        logger.debug("组合预算应用失败: %s", str(e)[:60])
-
     # ============================================================
     # 【P3-2】第八问驱动源归因：每条入场信号带上“为什么涨”
     # （博杰真实驱动=业绩+PCB联动，系统此前只看到价格表象）
@@ -702,8 +578,7 @@ def run_unified_analysis(
                 sector_status=sig.sector_status or "",
                 sector_name=sig.sector_name or "",
             )
-            sig.hypothesis = dict(sig.hypothesis or {})
-            sig.hypothesis["driver"] = driver_info
+            sig.driver = driver_info
         except Exception as e:
             logger.debug("驱动源归因失败 %s: %s", sig.stock_code, str(e)[:60])
 
@@ -711,14 +586,14 @@ def run_unified_analysis(
         if isinstance(sig, dict):
             continue
         info = _get_sector_info(sig.stock_code)
+        _attach_sector_regime(sig, sig.stock_code)
         if not getattr(sig, "sector_name", "") and info["sector_name"]:
             sig.sector_name = info["sector_name"]
 
     logger.info(
-        "统一引擎完成: 进场=%d 出场=%d 待命=%d 踏空留档=%d 预算拦=%d",
+        "统一引擎完成: 进场=%d 出场=%d 待命=%d 踏空留档=%d",
         len(batch.entries), len(batch.exits),
-        len(batch.standby_queue), len(batch.chase_missed),
-        len(batch.budget_blocked),
+        len(batch.standby_queue),
     )
 
     # 把板块分类结果存到 batch 上，供 engine.py 构建观察列表用

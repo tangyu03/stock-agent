@@ -84,13 +84,6 @@ def can_transition_status(current: str, target: str) -> bool:
     if current == "pending_confirm":
         return target in ("valid", "filled", *TERMINAL_EVENT_STATUSES)
     return False
-_RULE_VERSION_DISPLAY = {
-    "buffered_structure": "结构位加缓冲",
-    "bare_structure": "结构位本体",
-    "atr_buffer": "ATR缓冲",
-}
-
-
 def display_status(status: str) -> str:
     normalized = normalize_status(status)
     return _STATUS_DISPLAY.get(normalized, normalized)
@@ -105,10 +98,6 @@ def completion_reason(status: str) -> str:
     if not level1:
         return display_status(normalized)
     return f"{level1}({display_status(normalized)})"
-
-
-def display_rule_version(rule_version: str) -> str:
-    return _RULE_VERSION_DISPLAY.get(str(rule_version or ""), str(rule_version or ""))
 
 
 def _snapshot_flags(snapshot: dict, maintenance: bool = False) -> List[str]:
@@ -185,8 +174,6 @@ def localize_display_enums(value) -> str:
     text = re.sub(r"\btriggered\b", _STATUS_DISPLAY["filled"], text)
     for enum, label in _STATUS_DISPLAY.items():
         text = re.sub(rf"\b{re.escape(enum)}\b", label, text)
-    for enum, label in _RULE_VERSION_DISPLAY.items():
-        text = re.sub(rf"\b{re.escape(enum)}\b", label, text)
     return text
 
 
@@ -204,22 +191,13 @@ class SignalEvent:
     stop_loss: float = 0.0          # Z: 配对认错价
     target_low: float = 0.0         # W: 兑现区间下沿
     target_high: float = 0.0        # W: 兑现区间上沿
-    hypothesis_x: str = ""
-    hypothesis_y: str = ""
-    hypothesis_z: str = ""
-    hypothesis_w: str = ""
     status: str = "valid"           # valid / filled / invalidated / expired（triggered 为旧别名）
     invalid_reason: str = ""
-    # 【Phase5 回炉】事件生成时的 Z 线规则版本（z_line_mode）。
-    # 存量事件与新规则双轨审计：旧事件（空串）渲染为“旧版规则”，
-    # 避免审计者误判“Z 线统一没做”（博杰 9/7 旧 Z=85.54 实证）。
-    rule_version: str = ""
     rules_version: str = ""
     frozen_prev_status: str = ""
     entry_snapshot: str = "{}"
     maintenance_check: str = "{}"
-    y_formula: str = ""
-    y_inputs: str = ""
+    driver_json: str = ""
 
 
 def _ensure_tables(cursor) -> None:
@@ -237,33 +215,17 @@ def _ensure_tables(cursor) -> None:
         stop_loss REAL,
         target_low REAL,
         target_high REAL,
-        hypothesis_x TEXT,
-        hypothesis_y TEXT,
-        hypothesis_z TEXT,
-        hypothesis_w TEXT,
         status TEXT DEFAULT 'valid',
         invalid_reason TEXT,
-        rule_version TEXT DEFAULT '',
         rules_version TEXT DEFAULT '',
         frozen_prev_status TEXT DEFAULT '',
         entry_snapshot TEXT DEFAULT '{}',
         maintenance_check TEXT DEFAULT '{}',
-        y_formula TEXT DEFAULT '',
-        y_inputs TEXT DEFAULT '',
+        driver_json TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
-    # 【Phase5 回炉】旧库幂等补列（存量事件 rule_version='' → 渲染为“旧版规则”）
-    try:
-        cursor.execute("ALTER TABLE signal_events ADD COLUMN rule_version TEXT DEFAULT ''")
-    except Exception:
-        pass  # 列已存在（SQLite 无 ADD COLUMN IF NOT EXISTS）
-
-    try:
-        cursor.execute("ALTER TABLE signal_events ADD COLUMN rules_version TEXT DEFAULT ''")
-    except Exception:
-        pass
 
     try:
         cursor.execute("ALTER TABLE signal_events ADD COLUMN frozen_prev_status TEXT DEFAULT ''")
@@ -275,8 +237,7 @@ def _ensure_tables(cursor) -> None:
         except Exception:
             pass
 
-    # 买点公式审计：事件出生时的 Y 定位必须可回放。
-    for column in ("y_formula", "y_inputs"):
+    for column in ("rules_version", "driver_json"):
         try:
             cursor.execute(f"ALTER TABLE signal_events ADD COLUMN {column} TEXT DEFAULT ''")
         except Exception:
@@ -477,19 +438,13 @@ class DbSignalEventStore:
             stop_loss=float(row["stop_loss"] or 0),
             target_low=float(row["target_low"] or 0),
             target_high=float(row["target_high"] or 0),
-            hypothesis_x=row["hypothesis_x"] or "",
-            hypothesis_y=row["hypothesis_y"] or "",
-            hypothesis_z=row["hypothesis_z"] or "",
-            hypothesis_w=row["hypothesis_w"] or "",
             status=normalize_status(row["status"] or "valid"),
             invalid_reason=row["invalid_reason"] or "",
-            rule_version=(row["rule_version"] or "") if "rule_version" in row.keys() else "",
             rules_version=(row["rules_version"] or "") if "rules_version" in row.keys() else "",
             frozen_prev_status=(row["frozen_prev_status"] or "") if "frozen_prev_status" in row.keys() else "",
             entry_snapshot=(row["entry_snapshot"] or "{}") if "entry_snapshot" in row.keys() else "{}",
             maintenance_check=(row["maintenance_check"] or "{}") if "maintenance_check" in row.keys() else "{}",
-            y_formula=(row["y_formula"] or "") if "y_formula" in row.keys() else "",
-            y_inputs=(row["y_inputs"] or "") if "y_inputs" in row.keys() else "",
+            driver_json=(row["driver_json"] or "") if "driver_json" in row.keys() else "",
         )
 
     def get_active_events(self, stock_code: str, entry_type: Optional[str] = None) -> List[SignalEvent]:
@@ -569,19 +524,16 @@ class DbSignalEventStore:
                     INSERT OR REPLACE INTO signal_events
                     (event_id, stock_code, stock_name, entry_type, born_date, expire_date,
                      breakout_level, entry_price, stop_loss, target_low, target_high,
-                     hypothesis_x, hypothesis_y, hypothesis_z, hypothesis_w,
-                     status, invalid_reason, rule_version, rules_version, frozen_prev_status,
-                     entry_snapshot, maintenance_check, y_formula, y_inputs, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     status, invalid_reason, rules_version, frozen_prev_status,
+                     entry_snapshot, maintenance_check, driver_json, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     event.event_id, event.stock_code, event.stock_name, event.entry_type,
                     event.born_date, event.expire_date, event.breakout_level, event.entry_price,
                     event.stop_loss, event.target_low, event.target_high,
-                    event.hypothesis_x, event.hypothesis_y, event.hypothesis_z, event.hypothesis_w,
-                    event.status, event.invalid_reason, event.rule_version, event.rules_version,
+                    event.status, event.invalid_reason, event.rules_version,
                     event.frozen_prev_status,
-                    event.entry_snapshot, event.maintenance_check,
-                    event.y_formula, event.y_inputs,
+                    event.entry_snapshot, event.maintenance_check, event.driver_json,
                     datetime.now().isoformat(timespec="seconds"),
                 ))
                 if existing is None or from_status != event.status:
@@ -737,16 +689,12 @@ class SignalLifecycle:
         stop_loss: float,
         target_low: float,
         target_high: float,
-        hypothesis: Optional[Dict] = None,
+        driver: Optional[Dict] = None,
         event_id: str = "",
         born: Optional[date] = None,
-        rule_version: str = "",
-        y_formula: str = "",
-        y_inputs: Optional[str | Dict] = None,
         rules_version: str = "",
         entry_snapshot: Optional[Dict] = None,
     ) -> SignalEvent:
-        hyp = hypothesis or {}
         born = born or date.today()
 
         # 盘中引擎会多轮运行；同一交易日、同一策略不允许反复建档。
@@ -783,22 +731,13 @@ class SignalLifecycle:
             stop_loss=float(stop_loss or 0),
             target_low=float(target_low or 0),
             target_high=float(target_high or 0),
-            hypothesis_x=str(hyp.get("x", "")),
-            hypothesis_y=str(hyp.get("y", "")) + (f"（{hyp.get('y_note', '')}）" if hyp.get("y_note") else ""),
-            hypothesis_z=f"{hyp.get('z_note', '')} Z={hyp.get('z', 0)}",
-            hypothesis_w=f"{hyp.get('w_note', '')} W={hyp.get('w', [])}",
-            rule_version=str(rule_version or ""),
             rules_version=str(rules_version or get_rules_version()),
             entry_snapshot=json.dumps(entry_snapshot or {}, ensure_ascii=False, sort_keys=True),
-            y_formula=str(y_formula or ""),
-            y_inputs=(
-                y_inputs if isinstance(y_inputs, str)
-                else json.dumps(y_inputs or {}, ensure_ascii=False, sort_keys=True)
-            ),
+            driver_json=json.dumps(driver or {}, ensure_ascii=False, sort_keys=True),
         )
         self.store.save(event)
         logger.info(
-            "信号事件诞生: %s %s %s 突破位%.2f 买点%.2f Z%.2f 有效期至%s",
+            "信号事件诞生: %s %s %s 突破位%.2f 买点%.2f 止损%.2f 有效期至%s",
             event.event_id, stock_code, entry_type,
             event.breakout_level, event.entry_price, event.stop_loss, event.expire_date,
         )
@@ -1416,9 +1355,7 @@ class SignalLifecycle:
                           current_rule_version: str = "") -> str:
         """观察卡用：活跃事件的状态描述（回踩买点是否仍有效）。
 
-        【Phase5 回炉】事件带规则版本：与当前 z_line_mode 不同的
-        存量事件标注“旧版规则”，双轨可审计；旧库事件（版本空）
-        也标“旧版规则（版本未记录）”。
+        事件状态描述；规则版本参数仅兼容旧调用签名。
         """
         events = self.get_active_events(stock_code)
         if not events:
@@ -1475,14 +1412,7 @@ class SignalLifecycle:
                 )
                 continue
             pullback_ok = "回踩买点有效" if (not current_price or current_price <= e.entry_price * 1.01) else "买点上方待回踩"
-            if e.rule_version and current_rule_version and e.rule_version != current_rule_version:
-                ver_note = f",Z按{display_rule_version(e.rule_version)}(旧版)"
-            elif not e.rule_version:
-                ver_note = ",Z按旧版规则(版本未记录)"
-            elif e.rule_version:
-                ver_note = f",Z规则:{display_rule_version(e.rule_version)}"
-            else:
-                ver_note = ""
+            ver_note = ""
             global_version = str(getattr(e, "rules_version", "") or "")
             global_ver_note = (
                 f",规则:{global_version}" if global_version else ",规则未记录"
@@ -1655,18 +1585,19 @@ def reentry_status(
                 f"{usage_note}"
             ),
         }
-    # 新事件判定二：收复 Z 线（价格重新站上上次认错位）
+    # 新事件判定二：价格高于上次认错位（只在完整触发条件后再入场）
     if current_price and last.stop_loss and current_price > last.stop_loss:
         recovered = (current_price / last.stop_loss - 1) * 100
         return {
-            "standby": True, "reason": "收复Z线", "attempts": attempts,
+            "standby": True, "reason": "高于认错位", "attempts": attempts,
             "event_id": last.event_id,
             "remaining": None,
             "note": (
                 f"【再入场待命】第{attempts}次尝试已结束("
                 f"{last.entry_type} {last.born_date}，{display_status(last.status)})；"
-                f"现价{current_price:.2f}已收复上次认错位{last.stop_loss:.2f}"
-                f"(+{recovered:.1f}%)——结构修复，待完整触发条件重新确认；"
+                f"现价{current_price:.2f}高于上次认错位{last.stop_loss:.2f}"
+                f"(+{recovered:.1f}%)，仅解除止损锚位约束；"
+                "这不代表结构已修复，新事件需完整触发条件重新确认；"
                 f"{usage_note}"
             ),
         }
@@ -1676,7 +1607,7 @@ def reentry_status(
         "remaining": None,
         "note": (
             f"上次尝试{last.born_date}已结束({display_status(last.status)})；"
-            "创新高/收复Z线均未成立，再入场条件未激活；"
+            "创新高/高于认错位均未成立，再入场条件未激活；"
             f"{usage_note}"
         ),
     }

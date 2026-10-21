@@ -23,22 +23,22 @@ _SIX_SIGNALS_9_3 = [
     # 9/3 六条信号 → 9/4 全灭（状态：了结，浮亏 -3~-8%）
     {"stock_code": "301392", "stock_name": "汇成真空", "strategy": "价量突破",
      "trigger_date": "2026-09-03", "exit_date": "2026-09-04", "pnl_pct": -5.2,
-     "zw_triggered": 1, "exit_type": "破位止损"},
+     "exit_type": "破位止损"},
     {"stock_code": "688028", "stock_name": "沃尔德", "strategy": "价量突破",
      "trigger_date": "2026-09-03", "exit_date": "2026-09-04", "pnl_pct": -3.1,
-     "zw_triggered": 1, "exit_type": "破位止损"},
+     "exit_type": "破位止损"},
     {"stock_code": "300308", "stock_name": "中际旭创", "strategy": "确认追强",
      "trigger_date": "2026-09-03", "exit_date": "2026-09-04", "pnl_pct": -4.4,
-     "zw_triggered": 0, "exit_type": "技术走弱"},
+     "exit_type": "技术走弱"},
     {"stock_code": "688409", "stock_name": "富创精密", "strategy": "套利低吸",
      "trigger_date": "2026-09-03", "exit_date": "2026-09-04", "pnl_pct": -7.9,
-     "zw_triggered": 1, "exit_type": "破位止损"},
+     "exit_type": "破位止损"},
     {"stock_code": "688041", "stock_name": "海光信息", "strategy": "价量突破",
      "trigger_date": "2026-09-03", "exit_date": "2026-09-04", "pnl_pct": -3.8,
-     "zw_triggered": 0, "exit_type": "MA5压制"},
+     "exit_type": "MA5压制"},
     {"stock_code": "300843", "stock_name": "胜蓝股份", "strategy": "价量突破",
      "trigger_date": "2026-09-03", "exit_date": "2026-09-04", "pnl_pct": -6.5,
-     "zw_triggered": 1, "exit_type": "破位止损"},
+     "exit_type": "破位止损"},
 ]
 
 
@@ -66,7 +66,6 @@ class TestClosedRecordChain:
         huicheng = next(r for r in rows if r["stock_code"] == "301392")
         assert "2026-09-03入场→2026-09-04离场" in huicheng["link"]
         assert "破位止损" in huicheng["link"]
-        assert "Z触发(认错)" in huicheng["link"]
 
     def test_outside_window_excluded(self):
         """窗口外（>2日）的了结不进表"""

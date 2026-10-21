@@ -17,10 +17,11 @@ stock-agent 策略信号生成 v4 — 回测逻辑与实盘逻辑一致
    - 网格搜索的最优参数可直接迁移到实盘
 
 【信号执行时点】
-T 日收盘生成信号 → T+1 日开盘成交（由 BacktestEngine 处理）
+T 日收盘生成信号 → T+1 日开盘成交
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
@@ -48,12 +49,22 @@ STOCK_SECTOR_MAP = {
 }
 
 
+@dataclass
+class Signal:
+    date: str
+    code: str
+    action: str
+    shares: int
+    price: float
+    reason: str = ""
+
+
 class StockAgentTunedV3Signals:
     """
     策略信号生成 v4（回测驱动器 — 委托给 TimingEngine）
 
     信号生成时机：T 日收盘
-    信号执行时机：T+1 日开盘（由 BacktestEngine 处理）
+    信号执行时机：T+1 日开盘
 
     不跟踪持仓状态，每天对所有股票生成入场和出场信号。
     回测引擎收到全部信号后自行决定执行哪些。
@@ -103,11 +114,6 @@ class StockAgentTunedV3Signals:
         不跟踪持仓状态，每天对所有股票生成入场和出场信号。
         回测引擎收到全部信号后自行决定执行哪些。
         """
-        try:
-            from src.loop.backtest_engine import Signal
-        except ImportError:
-            from .backtest_engine import Signal
-
         # 提取所有交易日
         all_dates_set = set()
         for rows in kline_data.values():

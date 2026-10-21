@@ -397,46 +397,10 @@ class TimingDataFetchMixin:
         except Exception as e:
             logger.debug("机构持仓打分失败 %s: %s", stock_code, e)
             data["institutional_holding"] = {
-                "vote_score": 0, "vote_label": "资金中性",
+                "vote_score": 0, "vote_label": "机构中性",
                 "votes": {}, "bullish_count": 0, "bearish_count": 0,
                 "neutral_count": 4, "stale": False,
             }
-
-        # 【二】基本面快照（Phase2-A）：业绩快报/预告/扣非 → 业绩雷否决、
-        # 盈利质量降级、财报窗口提示。数据源全部失败时保持缺省（闸门放行，
-        # 不产生假基本面结论）。报告期级数据，推送时必须带口径展示。
-        try:
-            from .fundamental_gate import fetch_fundamental_snapshot
-            fund_snapshot = fetch_fundamental_snapshot(stock_code, data.get("stock_name", "") or "")
-            if fund_snapshot:
-                data["fundamental"] = fund_snapshot
-        except Exception as e:
-            logger.debug("基本面快照获取失败 %s: %s", stock_code, e)
-
-        # 【Phase3】估值透镜：PE/PB/净利绝对值/合同负债/存货/研报共识。
-        # 观察卡与信号出厂共用；此处做中性口径评估（供展示），
-        # signal_plan.build_execution_plan 按 entry_type 重新评估——
-        # 追高型策略（确认追强/价量突破）对 model_loss/估值泡沫更严格。
-        # 数据源全部失败时保持缺省（透镜放行，不产生假估值结论）。
-        try:
-            from .valuation_lens import assemble_valuation_lens, attach_analyst_to_institutional
-            flow_vote = None
-            if isinstance(data.get("institutional_holding"), dict):
-                flow_vote = data["institutional_holding"].get("vote_score")
-            lens = assemble_valuation_lens(
-                stock_code,
-                data.get("stock_name", "") or "",
-                fundamental=data.get("fundamental"),
-                flow_vote=flow_vote,
-                config=self._tc,
-            )
-            if lens:
-                data["valuation_lens"] = lens
-                # 分析师共识旁路注入机构投票结果（渲染层双标签呈现，不混票）
-                if isinstance(data.get("institutional_holding"), dict):
-                    attach_analyst_to_institutional(data["institutional_holding"], lens)
-        except Exception as e:
-            logger.debug("估值透镜获取失败 %s: %s", stock_code, e)
 
         return data
 

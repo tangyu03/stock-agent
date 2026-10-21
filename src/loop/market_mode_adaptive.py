@@ -497,24 +497,6 @@ class MarketModeAdaptive:
                 reasons.append(f"外盘扰动: {mode_before}→{mode_after}")
                 mode = mode_after
 
-        # 预期背离降级（仅实时，bankuai.md B4）
-        # 盘前读取前一日盘后更新的 DivergenceCounter：连续达标则降一档（幂等，当天只降一次）
-        s3_downgraded = False
-        if date == today_str:
-            try:
-                from ..analyzers.expectation_divergence import (
-                    DivergenceCounter, downgrade_one_notch)
-                counter = DivergenceCounter.load()
-                if counter.should_downgrade(today_str):
-                    mode_after = downgrade_one_notch(mode)
-                    if mode_after != mode:
-                        counter.consume(today_str)
-                        s3_downgraded = True
-                        reasons.append(f"预期背离降级: {mode}→{mode_after}")
-                        mode = mode_after
-            except Exception as e:
-                logger.debug("预期背离降级检查跳过: %s", e)
-
         return {
             "dimensions": dimensions,
             "dist_days": dist,
@@ -522,7 +504,6 @@ class MarketModeAdaptive:
             "mode_before_shock": mode_before,
             "mode": mode,
             "shock_downgraded": shock_downgraded,
-            "s3_downgraded": s3_downgraded,
             "breadth_upgrade": breadth_upgrade,
             "mode_reason": " | ".join(reasons),
         }
@@ -896,7 +877,6 @@ class MarketModeAdaptive:
             "mode_before_shock": mode_before_shock,
             "shock_downgraded": shock_downgraded,
             # P0-3 审计：透出 S3 降级标志与模式判定依据，供 engine 可观测推导链
-            "s3_downgraded": (scoring.get("s3_downgraded", False) if scoring else False),
             "mode_reason": (scoring.get("mode_reason", "") if scoring else ""),
             "gem_sci_tech": gem_sci_tech,
             "external_market": external_market,

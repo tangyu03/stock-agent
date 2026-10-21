@@ -24,7 +24,7 @@ P1-3 + 【六】交易回执 CLI — 推送后等待回执闭环
 回执后 user_action 变 executed/ignored/modified：
   - executed 记录参与 get_current_holdings 聚合（buy/t0_buy 加仓，sell/t0_sell 减仓）
   - buy executed 且带 event_id → 信号事件转 triggered（受众分流/生命周期）
-  - sell executed → 自动回填开仓行 exit_price/pnl_pct/zw_triggered（Z/W 归类）
+  - sell executed → 自动回填开仓行 exit_price/pnl_pct/exit_reason
   - 持仓来源从此闭环，替代 add_plans 占位口径
 """
 import argparse
@@ -56,9 +56,6 @@ def cmd_list(tl, date_str):
         print(f"  #{r['id']:<4} {r['date']} {r['time']} {r['signal_type']:<5} "
               f"{r['stock_code']} {r['stock_name']} {et} @ {_fmt_price(r['trigger_price'])} "
               f"股数={int(r['shares'] or 0)}")
-        hyp = r.get("hypothesis_sentence") or ""
-        if hyp:
-            print(f"        假说: {hyp[:90]}")
         note = (r["note"] or "").replace("\n", " ")[:60]
         if note:
             print(f"        {note}")
@@ -67,7 +64,7 @@ def cmd_list(tl, date_str):
 def cmd_execute(tl, log_id, price, position):
     if tl.update_action(log_id, "executed", price or 0, position or 0):
         print(f"#{log_id} → 已执行" + (f"（成交价 {_fmt_price(price)}）" if price else ""))
-        print("  回执联动：买入→事件转triggered；卖出→自动回填盈亏与Z/W归类")
+        print("  回执联动：买入→事件转triggered；卖出→自动回填盈亏与离场原因")
     else:
         print(f"#{log_id} 更新失败（id 不存在？）")
 
@@ -127,18 +124,6 @@ def cmd_strategies():
         print(f"  {strategy} [{flag}] {row.get('reason') or ''}")
 
 
-def cmd_zmode():
-    """【P0-2】Z 线双模式对照（作废条件判定材料：30笔起步）"""
-    from src.feedback.strategy_stats import z_mode_comparison
-    comparison = z_mode_comparison()
-    if not comparison:
-        print("暂无携带 z_line_mode 的闭合样本")
-        return
-    print("Z线模式对照（裸结构位 vs ATR缓冲——作废条件：缓冲版期望显著更高时切换）：")
-    for mode, info in comparison.items():
-        print(f"  {mode}: {info.get('note', '')}")
-
-
 def cmd_sensitivity():
     """【P0-3】分级 OR 过敏感统计（周触发>5次 → 回调结构位距离参数而非回退AND）"""
     from src.feedback.strategy_stats import graded_exit_sensitivity
@@ -184,7 +169,6 @@ if __name__ == "__main__":
     g.add_argument("--stats", action="store_true", help="策略分层统计（胜率/盈亏比/期望）")
     g.add_argument("--strategies", action="store_true", help="策略在线状态")
     # 【Phase4】决策记录作废条件的审计入口（每周复盘逐条对照）
-    g.add_argument("--zmode", action="store_true", help="Z线双模式对照（P0-2 作废条件）")
     g.add_argument("--sensitivity", action="store_true", help="分级OR过敏感统计（P0-3 作废条件）")
     g.add_argument("--sector-versions", action="store_true", help="板块版本分布（P2-1）")
     g.add_argument("--projection-errors", action="store_true", help="外推误差记录表（P0-1 作废条件）")
@@ -215,8 +199,6 @@ if __name__ == "__main__":
         cmd_stats()
     elif a.strategies:
         cmd_strategies()
-    elif a.zmode:
-        cmd_zmode()
     elif a.sensitivity:
         cmd_sensitivity()
     elif a.sector_versions:

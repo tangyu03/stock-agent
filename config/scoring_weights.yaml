@@ -22,9 +22,3 @@ confidence:
   # 来源: 人工设定 v2.10
   market_score_threshold: 6
   market_score_bonus: 1
-
-  # RRR质量票: threshold ≤ RRR ≤ cap → +1
-  # 来源: 博杰9/7实测校准 (RRR≥2.5隐含胜率28.6%)
-  rrr_quality_threshold: 2.5
-  rrr_quality_cap: 5.0
-  rrr_quality_bonus: 1

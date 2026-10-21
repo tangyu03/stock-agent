@@ -144,11 +144,9 @@ def build_event_tracking_table(
             else f"浮亏{float(pnl):+.1f}%" if pnl is not None
             else "未回填"
         )
-        zw = []
-        if t.get("zw_triggered"):
-            zw.append("Z触发(认错)")
+        labels = []
         if t.get("exit_type"):
-            zw.append(str(t.get("exit_type")))
+            labels.append(str(t.get("exit_type")))
         rows.append({
             "date": (exit_day or born_day).isoformat(),
             "stock_code": t.get("stock_code", ""),
@@ -158,7 +156,7 @@ def build_event_tracking_table(
             "outcome": outcome,
             "link": (
                 f"{(born_day or exit_day).isoformat()}入场→{exit_day.isoformat() if exit_day else '?'}离场"
-                + (f"，{'，'.join(zw)}" if zw else "")
+                + (f"，{'，'.join(labels)}" if labels else "")
             ),
             "detail": str(t.get("review_note") or t.get("note") or ""),
         })

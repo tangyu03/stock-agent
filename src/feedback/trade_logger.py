@@ -3,9 +3,9 @@
 记录所有信号和用户操作
 
 【六】记录闭环：每笔交易四行日志——
-  1. 假说原文（hypothesis_x/y/z/w + sentence，推送时落库）
+  1. 信号价位与驱动源（推送时落库）
   2. 实际出入场（actual_price + exit_price/exit_date，回执联动）
-  3. Z/W 是否触发（zw_triggered，卖出回执时自动归类）
+  3. 离场原因（exit_price/exit_date，卖出回执时自动回填）
   4. 事后归因（review_outcome: logic_right/luck/logic_wrong，用户回执）
 """
 import json
@@ -54,17 +54,14 @@ class TradeLogger:
             with get_conn() as conn:
                 cursor = conn.cursor()
                 now = datetime.now()
-                hyp = signal_data.get("hypothesis") or {}
                 cursor.execute(
                     """INSERT INTO trade_logs
                     (date, time, stock_code, stock_name, signal_type, entry_type, exit_type,
                      trigger_price, shares, stop_loss, target_price, suggested_position,
                      mode_at_signal, sector_status, market_score,
                      user_action, actual_price, actual_position, note,
-                     hypothesis_x, hypothesis_y, hypothesis_z, hypothesis_w,
-                     hypothesis_sentence, paired_z, paired_w_low, paired_w_high,
-                     z_reference, event_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     driver_json, sector_version, event_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         now.strftime("%Y-%m-%d"),
                         now.strftime("%H:%M:%S"),
@@ -85,15 +82,8 @@ class TradeLogger:
                         actual_price,
                         actual_position,
                         note,
-                        str(hyp.get("x", "") or signal_data.get("hypothesis_x", "") or ""),
-                        str(hyp.get("y", "") or signal_data.get("hypothesis_y", "") or ""),
-                        str(hyp.get("z", "") or signal_data.get("hypothesis_z", "") or ""),
-                        str(hyp.get("w", "") or signal_data.get("hypothesis_w", "") or ""),
-                        str(hyp.get("sentence", "") or signal_data.get("hypothesis_sentence", "") or ""),
-                        signal_data.get("paired_z", 0) or hyp.get("z", 0) or 0,
-                        signal_data.get("paired_w_low", 0) or (hyp.get("w") or [0])[0] or 0,
-                        signal_data.get("paired_w_high", 0) or (hyp.get("w") or [0])[-1] or 0,
-                        signal_data.get("z_reference", 0) or hyp.get("z_reference", 0) or 0,
+                        json.dumps(signal_data.get("driver") or {}, ensure_ascii=False, sort_keys=True),
+                        str(signal_data.get("sector_version") or "v0-unversioned"),
                         signal_data.get("event_id", "") or "",
                     ),
                 )
@@ -103,37 +93,12 @@ class TradeLogger:
             logger.error("记录交易日志失败: %s", e)
             return None
 
-    def log_rejection(
-        self,
-        stock_code: str,
-        stock_name: str,
-        entry_type: str,
-        reasons: List[str],
-        detail: Dict,
-    ) -> Optional[int]:
-        """【一】出厂拒绝留痕：委托 signal_rejection 模块统一落库。
-
-        reasons: 拒绝原因列表（缺 X/Y/Z/W、倒挂、缓冲不足…）
-        detail:  {benchmark_price, stop_loss, target_range, hypothesis, fundamental, valuation}
-        """
-        from ..analyzers.signal_rejection import persist_rejection
-
-        rejection = {
-            "stock_code": stock_code,
-            "stock_name": stock_name,
-            "entry_type": entry_type,
-            "reasons": list(reasons or []),
-        }
-        rejection.update(detail or {})
-        return persist_rejection(rejection)
-
-
     def update_action(self, log_id: int, user_action: str, actual_price: float = 0, actual_position: float = 0) -> bool:
         """更新用户操作（回执脚本调用）。
 
         【六】回执联动：
           - buy executed 且带 event_id → 信号事件转 filled/已成交（受众分流/生命周期）
-          - sell executed → 自动回填开仓行的 exit_price/exit_date/pnl_pct/zw_triggered
+          - sell executed → 自动回填开仓行的 exit_price/exit_date/pnl_pct/exit_reason
             （四行日志的第二、三行自动闭环）
         """
         row = self._get_log(log_id)
@@ -177,18 +142,18 @@ class TradeLogger:
             return None
 
     def _mark_event_filled(self, row: Dict) -> None:
-        """买入回执 → 信号事件转 filled/已成交（后续按配对出场跟踪）"""
+        """买入回执 → 信号事件转 filled/已成交。"""
         event_id = row.get("event_id") or ""
         if not event_id:
             return
         try:
             from ..analyzers.signal_lifecycle import DbSignalEventStore, SignalLifecycle
-            SignalLifecycle(DbSignalEventStore()).mark_filled(event_id, "回执成交，转入持仓配对出场")
+            SignalLifecycle(DbSignalEventStore()).mark_filled(event_id, "回执成交，转入持仓跟踪")
         except Exception as e:
             logger.debug("事件转 filled 失败 %s: %s", event_id, e)
 
     def _link_exit_to_position(self, sell_row: Dict, exit_price: float, position: Optional[Dict] = None) -> None:
-        """卖出回执 → 回填开仓行的离场四行日志（实际出入场/ZW触发/盈亏）。"""
+        """卖出回执 → 回填开仓行的离场日志（实际出入场/离场原因/盈亏）。"""
         code = sell_row.get("stock_code") or ""
         if not code:
             return
@@ -201,24 +166,18 @@ class TradeLogger:
         if not buy_id or entry_price <= 0 or exit_price <= 0:
             return
         exit_type = str(sell_row.get("exit_type") or "")
-        if "策略兑现" in exit_type:
-            zw = "W"
-        elif "破位止损" in exit_type or "策略认错" in exit_type or "信号作废" in exit_type:
-            zw = "Z"
-        else:
-            zw = "系统"
         pnl_pct = round((exit_price - entry_price) / entry_price * 100, 2)
         try:
             with get_conn() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    """UPDATE trade_logs SET zw_triggered = ?, exit_price = ?,
+                    """UPDATE trade_logs SET exit_reason = ?, exit_price = ?,
                        exit_date = ?, pnl_pct = ? WHERE id = ?""",
-                    (zw, exit_price, sell_row.get("date") or date.today().isoformat(),
+                    (exit_type, exit_price, sell_row.get("date") or date.today().isoformat(),
                      pnl_pct, buy_id),
                 )
                 conn.commit()
-                logger.info("回执联动: 买入#%d 已回填 ZW=%s pnl=%.2f%%", buy_id, zw, pnl_pct)
+                logger.info("回执联动: 买入#%d 已回填 pnl=%.2f%%", buy_id, pnl_pct)
         except Exception as e:
             logger.error("回填离场信息失败 #%s: %s", buy_id, e)
 
@@ -313,9 +272,8 @@ class TradeLogger:
     def get_open_position(self, code: str) -> Optional[Dict]:
         """读取该股当前开仓行（最后一次 executed 买入，且其后无 executed 卖出平掉）。
 
-        返回含：log_id, entry_type, paired_z, paired_w_low, paired_w_high,
-        z_reference, entry_price(actual), trigger_price, hypothesis_sentence,
-        date, shares —— 供 check_exit_signals 的策略配对出场（Z/W）消费。
+        返回含：log_id, entry_type, entry_price(actual), trigger_price,
+        date, shares —— 供通用持仓与生命周期消费。
         无开仓返回 None。
         """
         try:
@@ -362,9 +320,9 @@ class TradeLogger:
             return None
 
     def get_closed_trades(self) -> List[Dict]:
-        """【六】已平仓交易列表（回执联动的配对结果，供分层统计/下线判定）。
+        """【六】已平仓交易列表（回执联动结果，供分层统计/下线判定）。
 
-        每条: {stock_code, strategy(entry_type), pnl_pct, zw_triggered,
+        每条: {stock_code, strategy(entry_type), pnl_pct, exit_reason,
               review_outcome, entry_date, exit_date}
         """
         try:
@@ -372,7 +330,7 @@ class TradeLogger:
                 cursor = conn.cursor()
                 cursor.execute(
                     """SELECT stock_code, stock_name, entry_type, date, exit_date,
-                              pnl_pct, zw_triggered, review_outcome
+                              pnl_pct, exit_reason, review_outcome
                        FROM trade_logs
                        WHERE user_action='executed'
                        AND signal_type IN ('buy','t0_buy')

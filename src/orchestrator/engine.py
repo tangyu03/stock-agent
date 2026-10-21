@@ -20,7 +20,6 @@ from ..push.templates import stock_identity
 from ..analyzers.signal_lifecycle import localize_display_enums
 # templates 渲染已移至 pushplus.send_intraday_report 内部调用
 from ..feedback.trade_logger import get_trade_logger
-from ..analyzers.signal_rejection import persist_rejection
 from ..feedback.daily_review import get_daily_review
 from ..feedback.weekly_report import get_weekly_report
 # P0 修复：引入结构化日志 + trace_id
@@ -328,12 +327,11 @@ class Orchestrator:
         _pl = env.get("position_limit", 0.5)
         _canonical_pl = {"attack": 0.8, "defend": 0.5, "retreat": 0.1}.get(market_mode, 0.5)
         logger.info(
-            "环境推导: 模式=%s 评分=%.1f position_limit=%.2f 外盘降级=%s 预期背离降级=%s 降级前模式=%s",
+            "环境推导: 模式=%s 评分=%.1f position_limit=%.2f 外盘降级=%s 降级前模式=%s",
             market_mode,
             float(env.get("market_score", 0) or 0),
             _pl,
             env.get("shock_downgraded", False),
-            env.get("s3_downgraded", False),
             env.get("mode_before_shock", market_mode),
         )
         if abs(_pl - _canonical_pl) > 1e-9:
@@ -409,6 +407,9 @@ class Orchestrator:
                 "sector_status": sig.sector_status,
                 "sector_name": getattr(sig, "sector_name", "") or "",
                 "sw_level2": getattr(sig, "sw_level2", "") or "",
+                "sector_change_pct": getattr(sig, "sector_change_pct", None),
+                "sector_rank": getattr(sig, "sector_rank", None),
+                "sector_total": getattr(sig, "sector_total", None),
                 "note": sig.trigger_reason or "",
                 "confidence": getattr(sig, "confidence", "中"),
                 "market_mode": market_mode,
@@ -429,18 +430,12 @@ class Orchestrator:
                 "rrr_low": getattr(sig, "rrr_low", None),
                 "rrr_high": getattr(sig, "rrr_high", None),
                 "execution_plan": getattr(sig, "execution_plan", {}),
-                # 【一】可证伪假说透传（模板渲染 + 落库）
-                "hypothesis": getattr(sig, "hypothesis", {}) or {},
+                # 驱动源归因（模板渲染 + 落库）
+                "driver": getattr(sig, "driver", {}) or {},
                 "event_id": getattr(sig, "event_id", "") or "",
                 "audience": getattr(sig, "audience", "empty") or "empty",
                 # 机构持仓打分（4 数据源投票 + 具体数值，透出到 push）
                 "institutional_holding": td.get("institutional_holding", {}),
-                # 【二】基本面透传（业绩雷/盈利质量/财报窗口，七问第⑦问）
-                "fundamental": td.get("fundamental", {}),
-                "fundamental_note": getattr(sig, "fundamental_note", ""),
-                # 【Phase3】估值透镜透传（PE/PB/低基数/亏损分型/研报共识）
-                "valuation_lens": td.get("valuation_lens", {}),
-                "valuation_note": getattr(sig, "valuation_note", ""),
             })
 
         exit_batch = []
@@ -459,6 +454,9 @@ class Orchestrator:
                     "sector_status": getattr(sig, "sector_status", ""),
                     "sector_name": getattr(sig, "sector_name", ""),
                     "sw_level2": getattr(sig, "sw_level2", "") or "",
+                    "sector_change_pct": getattr(sig, "sector_change_pct", None),
+                    "sector_rank": getattr(sig, "sector_rank", None),
+                    "sector_total": getattr(sig, "sector_total", None),
                     "sector_rank": (sector_ranks.get(getattr(sig, "sector_name", ""), {}).get("rank") if sector_ranks else None),
                     "sector_rank_total": (sector_ranks.get(getattr(sig, "sector_name", ""), {}).get("total") if sector_ranks else None),
                     "current_price": td.get("current_price", getattr(sig, "trigger_price", 0)),
@@ -544,12 +542,6 @@ class Orchestrator:
                 "market_score": td.get("market_score"),
                 "rsi": (td.get("tech_signals") or {}).get("rsi"),
                 "adx": (td.get("tech_signals") or {}).get("adx"),
-                # 【二】基本面透传：持仓观察卡展示业绩雷/盈利质量风险
-                # （汇成真空式暴雷在观察卡可见，不再只看 K 线和资金流）
-                "fundamental": td.get("fundamental", {}),
-                # 【Phase3】估值透镜透传：观察卡展示 PE/PB/低基数/亏损分型
-                # （长光华芯式泡沫、中科飞测式战略亏损在观察卡可见）
-                "valuation_lens": td.get("valuation_lens", {}),
                 "note": (position_hint + " | " if position_hint else "")
                         + "买入: "
                         + batch.entry_diagnostics.get(
@@ -582,6 +574,31 @@ class Orchestrator:
                     len(entry_batch), len(exit_batch), len(observation_batch),
                     len(data_missing_batch), len(all_holdings), len(signaled_codes))
 
+        # 点表覆盖：把昨夜影子点位与当前买卖信号做一致性校验。
+        # 现阶段只透出 MATCH/CONFLICT/REFERENCE，不覆盖假说门和硬止损。
+        try:
+            from ..plan.point_overlay import apply_point_table_overlay
+            env["point_overlay"] = apply_point_table_overlay(
+                entry_batch, exit_batch, ref_date,
+            )
+        except Exception as e:
+            logger.warning("影子点表覆盖失败: %s", e)
+            env["point_overlay"] = {
+                "trade_date": ref_date, "rows": 0, "available": False,
+                "matched": 0, "conflicts": 0, "references": 0,
+                "stale": 0,
+            }
+
+        # 独立点位决策：只看个股自身点位，不融合板块/技术投票。
+        try:
+            from ..plan.point_decision import build_point_decisions
+            env["point_decisions"] = build_point_decisions(
+                entry_batch, exit_batch, observation_batch, ref_date,
+            )
+        except Exception as e:
+            logger.warning("独立点位决策失败: %s", e)
+            env["point_decisions"] = []
+
         # ---- 4.5 P3: 实盘信号调度器（信号服务模式 + 受众分流 + 假说门 + 策略下线）----
         # 【三】受众：holdings 已在上文回执闭环聚合；
         # 买入事件只对空仓者成立，持仓者输出四选一。
@@ -605,6 +622,7 @@ class Orchestrator:
             market_mode=market_mode,
             holdings=holdings,
             offline_strategies=offline_strategies,
+            point_decisions=env.get('point_decisions') or [],
         )
 
         # 用调度后的信号替换原始信号推送
@@ -662,7 +680,7 @@ class Orchestrator:
         # 【P1-3/P1-5/P2-8】输出端摘要：拦截的信号要有名字，候梯要能排序，
         # 板块集中只做一行提醒。这里只组装展示数据，不做资金管理。
         score_gate_items = []
-        for bucket in ('buy_score_gate', 'buy_ev_gate'):
+        for bucket in ('buy_score_gate',):
             for item in (scheduled.get('warnings') or {}).get(bucket, []):
                 score_gate_items.append({
                     'stock_code': str(item.get('stock_code') or ''),
@@ -673,8 +691,6 @@ class Orchestrator:
                     'applicable_score': item.get('applicable_score'),
                     'min_confidence_score': item.get('min_confidence_score'),
                     'rrr_low': item.get('rrr_low'),
-                    'breakeven_win_rate': item.get('breakeven_win_rate'),
-                    'ev': item.get('ev'),
                 })
         if score_gate_items:
             env['score_gate'] = {
@@ -759,14 +775,6 @@ class Orchestrator:
         # 记录调度日志
         schedule_summary = format_scheduled_summary(scheduled)
         logger.info("信号调度完成:\n%s", schedule_summary)
-
-        # 【一】出厂拒绝留痕：假说不完整的信号写入 signal_rejections 表
-        # （不进调度不推送，但可审计——可证伪性是信号出厂前的完整性检查）
-        for rejection in getattr(batch, "rejected", []) or []:
-            try:
-                persist_rejection(rejection)
-            except Exception as e:
-                logger.warning("拒绝留痕失败: %s", e)
 
         # 【六】策略下线告警推送（一套不能被自己的业绩杀死的逻辑，不算被厘清）
         newly_offline = [
@@ -902,26 +910,6 @@ class Orchestrator:
             self._t0_push_keys.add(push_key)
         self._pushplus.send_intraday_report(env, scheduled_entry_batch, scheduled_exit_batch, observation_batch)
 
-        # 【P1-1】踏空成本台账推送：防守模式未放行的创新高+放量标的
-        # （回退禁用后继续留档——这份数据是防守模式是否值得存在的证据）
-        chase_missed = getattr(batch, "chase_missed", []) or []
-        if chase_missed:
-            try:
-                missed_lines = []
-                for item in chase_missed[:10]:
-                    missed_lines.append(f"  {_stock_push_line(item)}")
-                missed_lines.append(
-                    "  （30笔滚动胜率<30%且期望<0 → 回退禁用；台账继续记录，"
-                    "作废条件与踏空成本同时留档供审计）"
-                )
-                self._pushplus.send(
-                    "防守追强踏空台账",
-                    f"<pre>{chr(10).join(missed_lines)}</pre><p>代码版本 {_get_git_head()}</p>",
-                    level="常规",
-                )
-            except Exception:
-                pass
-
         # 【P1-3】再入场待命队列推送：创新高/收复Z线的止损后续标的
         standby_queue = getattr(batch, "standby_queue", []) or []
         if standby_queue:
@@ -953,38 +941,23 @@ class Orchestrator:
                 pass
 
         # ---- 5.5 P1-3 + 【六】记录闭环：推送后落库（user_action=pending）----
-        # 每笔交易四行日志之第一行：假说原文（X/Y/Z/W + 整句）与配对价位，
+        # 每笔交易四行日志之第一行：通用价位与事件链接，
         # 推送时同步落库（修复：原实现 stop_loss/target_price 从未写入，全部为 0）。
-        # 回执后 update_action 联动回填 exit_price/pnl_pct/zw_triggered。
+        # 回执后 update_action 联动回填 exit_price/pnl_pct/exit_reason。
         # 去重：当日同股同类型 pending 已存在则跳过（盘中多次运行不重复落库）
         today = datetime.now().strftime("%Y-%m-%d")
         existing_pending = self._trade_logger.get_pending_signals(today)
         pending_keys = {(p["stock_code"], p["signal_type"], p["entry_type"] or p["exit_type"]) for p in existing_pending}
         logged = {"buy": 0, "sell": 0}
+        try:
+            from ..analyzers.theme_attribution import get_theme_version
+            _sector_version = get_theme_version()
+        except Exception:
+            _sector_version = "v0-unversioned"
         for s in scheduled['buy']:
             key = (s.stock_code, "buy", s.entry_type or "")
             if key in pending_keys:
                 continue
-            hyp = dict(s.hypothesis or {})
-            w_range = [v for v in (hyp.get("w") or []) if v]
-            if not w_range:
-                plan_targets = (s.execution_plan or {}).get("target_range") or [0]
-                w_range = [plan_targets[0] or 0]
-            # 【P0-2/P2-1/P1-1】假说携带审计元数据：Z线模式/板块版本/
-            # 防守降仓标记（统计对照函数按这些键切分样本）
-            try:
-                from ..analyzers.timing_engine import get_timing_engine as _gte
-                _gate_cfg = _gte()._cfg("hypothesis_gate") or {}
-                hyp.setdefault("z_line_mode", _gate_cfg.get("z_line_mode", "bare_structure"))
-            except Exception:
-                hyp.setdefault("z_line_mode", "bare_structure")
-            try:
-                from ..analyzers.theme_attribution import get_theme_version as _gtv
-                hyp.setdefault("sector_version", _gtv())
-            except Exception:
-                hyp.setdefault("sector_version", "v0-unversioned")
-            if getattr(s, "market_mode", "") == "defend" or (s.execution_plan or {}).get("defensive_chase"):
-                hyp.setdefault("defensive_chase", True)
             self._trade_logger.log_signal(
                 signal_type="buy",
                 stock_code=s.stock_code,
@@ -995,17 +968,14 @@ class Orchestrator:
                     "mode_at_signal": s.market_mode,
                     "market_score": env.get("market_score", 0),
                     "suggested_position": min(s.shares * s.trigger_price / max(total_asset, 1), 0.25),
-                    # 【一】假说四要素 + 配对 Z/W 落库（记录闭环第一行）
-                    "stop_loss": float(hyp.get("z") or 0) or s.execution_plan.get("stop_loss", 0),
-                    "target_price": float(w_range[0] or 0),
-                    "paired_z": float(hyp.get("z") or 0),
-                    "paired_w_low": float(w_range[0] or 0),
-                    "paired_w_high": float(w_range[-1] or 0),
+                    "stop_loss": ((s.execution_plan or {}).get("stop_loss", 0)),
+                    "target_price": (((s.execution_plan or {}).get("target_range") or [0])[0]),
                     "event_id": getattr(s, "event_id", "") or "",
-                    "hypothesis": hyp,
+                    "driver": getattr(s, "driver", {}) or {},
+                    "sector_version": _sector_version,
                 },
                 shares=s.shares,
-                note=(s.schedule_note + " | 假说: " + hyp.get("sentence", "")) if hyp.get("sentence") else s.schedule_note,
+                note=s.schedule_note,
             )
             logged["buy"] += 1
         for s in scheduled['sell']:

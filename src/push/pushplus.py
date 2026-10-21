@@ -45,13 +45,10 @@ class PushPlus:
             if confidence:
                 parts.append(f"评分{confidence.group(1)}")
         rrr = re.search(r"RRR\s*(-?\d+(?:\.\d+)?)", text)
-        balance = re.search(r"盈亏平衡胜率(\d+(?:\.\d+)?%)", text)
         if confidence:
             parts.append(f"评分{confidence.group(1)}")
         if rrr:
             parts.append(f"RRR{rrr.group(1)}")
-        if balance:
-            parts.append(f"平衡胜率{balance.group(1)}")
         return "｜".join(parts) if parts else text[:120]
 
     def __init__(self, config_path: Optional[str] = None):
@@ -491,7 +488,7 @@ class PushPlus:
             content += f"<b>买入提示｜{score_gate.get('count', 0)}条，已调度</b><br/>"
             content += (
                 "&nbsp;&nbsp;口径: 技术同向｜机构同向｜主线板块｜无冲突｜"
-                "环境≥6｜RRR2.5-5；每项1分，放行线≥2<br/>"
+                "环境≥6；每项1分，放行线≥2<br/>"
             )
             if gate_items:
                 for item in gate_items:
@@ -529,6 +526,18 @@ class PushPlus:
             content += (
                 f"<b>撮合计数</b><br/>&nbsp;&nbsp;{_esc(str(virtual_counts))}<br/>"
             )
+
+        point_decisions = environment.get("point_decisions") or []
+        if point_decisions:
+            action_names = {"BUY": "买入", "SELL": "卖出", "WATCH": "观察"}
+            content += "<b>📐 独立点位决策</b><br/>"
+            for item in point_decisions[:30]:
+                action = action_names.get(str(item.get("action")), str(item.get("action")))
+                content += (
+                    f"&nbsp;&nbsp;{_esc(stock_identity(item))}｜{_esc(action)}｜"
+                    f"{_esc(str(item.get('reason') or ''))}<br/>"
+                )
+            content += "<br/>"
 
         if data_missing:
             content += f"<b>数据未取到 ({len(data_missing)}条)</b><br/>"

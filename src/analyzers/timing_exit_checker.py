@@ -51,22 +51,6 @@ class TimingExitMixin:
             logger.warning("卖出检查跳过 %s: 现价缺失", stock_code)
             return []
 
-        # ============================================================
-        # 【四】Block 0: 策略配对出场——读取该持仓的入场假说（X/Y/Z/W）
-        # 每个策略在定义买入的那一刻就定义卖出：Z 是 X 的直接否定（硬触发），
-        # W 是兑现位（价位触发，与进场同颗粒度）；旧漂移止损+投票门降为辅助观察。
-        # 持仓策略未知（无回执记录）时退回旧系统兑底逻辑。
-        # ============================================================
-        paired_position = self._get_paired_position(stock_code)
-        paired_strategy = (paired_position or {}).get("entry_type") or ""
-        if paired_position and (paired_position.get("paired_z") or 0) > 0:
-            # C1 破位止损锚定到配对 Z（X 的直接否定），
-            # 不再用"现价锚定支撑位"的漂移止损（沃尔德式两个锚点错位根源）
-            stop_loss_calc.stop_loss_price = float(paired_position["paired_z"])
-            paired_ref = float(paired_position.get("z_reference") or 0)
-            if paired_ref > 0:
-                stop_loss_calc.chosen_support = paired_ref
-
         # 技术指标投票 + K 线形态
         tech_vote = tech_data.get("tech_signals", {}).get("vote", "中性")
         tech_score = tech_data.get("tech_signals", {}).get("vote_score", 0)
@@ -74,47 +58,6 @@ class TimingExitMixin:
 
         _bearish_votes = {"强烈看空", "偏空", "温和偏空"}
         is_bearish = tech_vote in _bearish_votes
-
-        # 【P0-1】结构位与止损之间的灰区不再是空白：收盘跌破结构位给出
-        # 减仓/清仓指令；量比缺失时保守给减仓，不伪造“持有正常”。
-        gray_zone = None
-        if paired_position and (paired_position.get("z_reference") or 0) > 0:
-            structure_ref = float(paired_position["z_reference"])
-            paired_stop = float(stop_loss_calc.stop_loss_price)
-            if structure_ref > paired_stop > 0 and paired_stop < current_price < structure_ref:
-                try:
-                    gray_volume = (
-                        float(tech_data.get("volume_ratio"))
-                        if tech_data.get("volume_ratio") is not None else None
-                    )
-                except (TypeError, ValueError):
-                    gray_volume = None
-                if gray_volume is not None and gray_volume < 0.8:
-                    gray_action = "灰区清仓"
-                    gray_urgency = "紧急"
-                    volume_text = f"量比{gray_volume:.2f}<0.8，缩量失守"
-                else:
-                    gray_action = "灰区减仓"
-                    gray_urgency = "重要"
-                    volume_text = (
-                        f"量比{gray_volume:.2f}≥0.8" if gray_volume is not None
-                        else "量比数据未取到，按保守减仓"
-                    )
-                signals.append(ExitSignal(
-                    stock_code=stock_code, stock_name=stock_name,
-                    exit_type=gray_action,
-                    trigger_price=current_price,
-                    stop_loss_price=paired_stop,
-                    reason=(
-                        f'收盘{current_price:.2f}跌破结构位{structure_ref:.2f}，'
-                        f'未到止损{paired_stop:.2f}；{volume_text}，'
-                        f'执行{gray_action[2:]}（持有/减仓/清仓中取一）'
-                    ),
-                    urgency=gray_urgency, mode_constrained=False,
-                    sector_status=sector_status, sector_name=sector_name,
-                    tech_data=tech_data, source="paired",
-                    paired_strategy=paired_strategy,
-                ))
 
         # 指标走弱信息提前计算（供破位定性参考，不再独立产出卖出信号）
         weakness_labels = []
@@ -180,11 +123,7 @@ class TimingExitMixin:
             if passive_note:
                 qual_label += f"({passive_note})"
             
-            if paired_position:
-                reason = (f'跌破配对止损Z={stop_loss_calc.stop_loss_price:.2f}'
-                          f'（[{paired_strategy}]买入理由的直接否定，X 被证伪）')
-            else:
-                reason = f'跌破{stop_loss_calc.chosen_support:.2f}(止损{stop_loss_calc.stop_loss_price:.2f})'
+            reason = f'跌破{stop_loss_calc.chosen_support:.2f}(止损{stop_loss_calc.stop_loss_price:.2f})'
             
             # 三档分流：
             # 档1: 放量+主动 → 紧急，立即触发
@@ -491,50 +430,6 @@ class TimingExitMixin:
                 if '吞没' in pat or '乌云' in pat:
                     exhaustion.append(('medium', f'K线:{pat}'))
 
-        # ============================================================
-        # 【四】Block 6: 策略配对 W（兑现离场）—— 价位硬触发 + 确认追强动能耗尽
-        # 买卖敏感度对称：进场精确到 0.1% 挂单，出场同样在价位上触发，
-        # 不再等 8~10% 外加四重投票。
-        # ============================================================
-        if paired_position:
-            w_low = float(paired_position.get("paired_w_low") or 0)
-            w_high = float(paired_position.get("paired_w_high") or 0)
-            if w_low > 0 and current_price >= w_low:
-                kline_raw_pw = tech_data.get('kline', [])
-                recent_5d_low = (
-                    min(float(k.get('最低', k.get('low', 999999))) for k in kline_raw_pw[-5:])
-                    if len(kline_raw_pw) >= 5 else current_price
-                )
-                trailing = round(max(recent_5d_low * 1.02, w_low), 2)  # trailing跟随近5日低
-                hit_high = w_high > 0 and current_price >= w_high
-                action = "清仓兑现" if hit_high else "减半+trailing跟随"
-                signals.append(ExitSignal(
-                    stock_code=stock_code, stock_name=stock_name,
-                    exit_type='策略兑现', trigger_price=current_price,
-                    stop_loss_price=min(trailing, current_price),
-                    reason=(f'[{paired_strategy}] 兑现条件W触发: 现价{current_price:.2f}'
-                            f'触及兑现位{w_low:.2f}'
-                            + (f'~{w_high:.2f}' if w_high > w_low else '')
-                            + f'，{action}；trailing {trailing:.2f}（价位触发，非投票门）'),
-                    urgency='紧急' if hit_high else '重要', mode_constrained=False,
-                    sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
-                    source='paired', paired_strategy=paired_strategy,
-                ))
-            elif paired_strategy == '确认追强' and exhaustion:
-                strong_ex = sum(1 for lvl, _ in exhaustion if lvl == 'strong')
-                if strong_ex >= 1:
-                    labels = '; '.join(lbl for _, lbl in exhaustion)
-                    signals.append(ExitSignal(
-                        stock_code=stock_code, stock_name=stock_name,
-                        exit_type='策略兑现', trigger_price=current_price,
-                        stop_loss_price=stop_loss_calc.stop_loss_price,
-                        reason=f'[确认追强] 兑现条件W(动能耗尽): {labels}——提前分批兑现',
-                        urgency='重要', mode_constrained=False,
-                        sector_status=sector_status, sector_name=sector_name, tech_data=tech_data,
-                        source='paired', paired_strategy=paired_strategy,
-                    ))
-
-
         # === 推送 ===
         # 三类信号分别推送：冲高止盈 / MA5压制 / 技术走弱
         strong_min = self._cfg("exit", "exhaustion", "strong_signal_min_count", default=2)
@@ -648,17 +543,6 @@ class TimingExitMixin:
             weakness_labels = [f'{lbl}({lvl})' for lvl, lbl in weakness]
 
 
-        # ============================================================
-        # 【四】配对优先：已知持仓策略时，旧系统出场信号降级为辅助观察
-        # （配对 Z/W 是硬触发；破位止损作为系统安全网保留硬触发）
-        # 注：必须放在旧信号全部生成之后（推送段之后）再统一降级。
-        # ============================================================
-        if paired_position:
-            for sig in signals:
-                if getattr(sig, 'source', 'system') == 'system' and sig.exit_type != '破位止损':
-                    sig.urgency = '观察'
-                    sig.reason = f"[辅助观察·非策略配对出场] {sig.reason}"
-
         # 合并同类 + 追加推导链
         if not signals:
             if not tech_data:
@@ -712,26 +596,3 @@ class TimingExitMixin:
             sig.reason += "\n  推导: " + derivation
 
         return list(merged.values())
-
-    # ============================================================
-    # 【四】配对持仓读取 / 【三】事件生命周期评估
-    # ============================================================
-
-    def _get_paired_position(self, stock_code: str) -> Optional[Dict]:
-
-        """读取该持仓的入场假说（来源：回执闭环 trade_logs executed 买入行）。
-
-        返回 dict: entry_type / paired_z / paired_w_low / paired_w_high /
-        z_reference / entry_price / hypothesis_sentence 等；无持仓返回 None。
-        回测模式不读 DB，直接返回 None（回测引擎自管出场）。
-        """
-        if self._backtest_mode:
-            return None
-        try:
-            from ..feedback.trade_logger import get_trade_logger
-            position = get_trade_logger().get_open_position(stock_code)
-            return position if position else None
-        except Exception as e:
-            logger.debug("配对持仓读取失败 %s: %s", stock_code, e)
-            return None
-

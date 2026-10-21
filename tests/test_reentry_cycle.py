@@ -86,8 +86,8 @@ class TestReentryStatus:
             max_reentries=2, store=store,
         )
         assert status["standby"] is True
-        assert status["reason"] == "收复Z线"
-        assert "收复上次认错位481.00" in status["note"]
+        assert status["reason"] == "高于认错位"
+        assert "高于上次认错位481.00" in status["note"]
 
     def test_below_z_and_below_high_not_standby(self):
         """既未创新高也未收复 Z → 再入场条件未激活（不基于沉没成本）"""
@@ -218,7 +218,6 @@ class TestReentryGateInEngine:
         assert len(signals) == 1
         assert "有2次历史失败尝试" in signals[0].trigger_reason
         assert "再入场不限次数" in signals[0].trigger_reason
-        assert te._entry_rejections.get("920045") is None
 
     def test_one_prior_attempt_still_allows_new_signal(self, monkeypatch):
         """一次尝试后新事件（突破条件重新满足）→ 信号照常诞生（再入场放行）"""

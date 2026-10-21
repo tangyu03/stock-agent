@@ -16,7 +16,6 @@ from datetime import datetime, date, timedelta
 
 from ..config_models import load_config
 from ..db import get_connection
-from ..llm_client import get_llm_client
 from ..data_layer.skill_wrapper import get_skill_wrapper
 from ..data_layer.data_cache import get_data_cache
 from ..push.pushplus import get_pushplus
@@ -62,85 +61,14 @@ class InsightMiner:
     def __init__(self):
         self._insights_config = load_config("insights.yaml")
         self._risk_config = load_config("risk.yaml").get("risk", {})
-        self._llm = get_llm_client()
         self._skill = get_skill_wrapper()
         self._cache = get_data_cache()
         self._pushplus = get_pushplus()
         self._refute_threshold = self._risk_config.get("verify_defaults", {}).get("refute_count_threshold", 3)
 
     def process_article(self, article_text: str, source: str = "") -> Optional[Dict]:
-        """
-        处理用户输入的文章/观点
-
-        Step 1: LLM提取判断
-        Step 2: 向下挖掘→关联A股标的
-        Step 3: 问财Skills补全标的画像
-        Step 4: 写入追踪池
-
-        Args:
-            article_text: 文章原文
-            source: 来源标注
-
-        Returns:
-            处理结果（包含提取的判断和标的）
-        """
-        logger.info("=== 观点挖掘开始 ===")
-        logger.info("来源: %s, 文本长度: %d字", source, len(article_text))
-
-        # Step 1: LLM提取判断
-        extraction = self._llm.extract_judgments(article_text)
-        if not extraction:
-            logger.warning("LLM未提取到有效判断")
-            return None
-
-        judgments_data = extraction.get("judgments", [])
-        if not judgments_data:
-            logger.warning("未提取到可追踪的判断")
-            return None
-
-        logger.info("提取到 %d 条判断", len(judgments_data))
-
-        # 生成洞察ID
-        today = datetime.now().strftime("%Y%m%d")
-        insight_id = f"INS-{today}-{datetime.now().strftime('%H%M%S')}"
-
-        # Step 2+3: 逐判断处理
-        processed_judgments = []
-        for j_data in judgments_data:
-            # 如果LLM没有提供标的，尝试挖掘
-            targets = j_data.get("targets", [])
-            if not targets:
-                targets = self._mine_targets(j_data.get("judgment", ""))
-
-            # 补全标的画像
-            for target in targets:
-                self._enrich_target_profile(target)
-
-            # 构建验证配置
-            verify_config = j_data.get("verify_config", {})
-            if not verify_config:
-                verify_config = self._generate_verify_config(j_data, targets)
-
-            j_data["targets"] = targets
-            j_data["verify_config"] = verify_config
-            processed_judgments.append(j_data)
-
-        # Step 4: 写入数据库
-        self._save_insight(insight_id, source, article_text, processed_judgments, extraction.get("chains", []))
-
-        # 保存判断链
-        for chain in extraction.get("chains", []):
-            self._save_chain(chain)
-
-        result = {
-            "insight_id": insight_id,
-            "source": source,
-            "judgments": processed_judgments,
-            "chains": extraction.get("chains", []),
-        }
-
-        logger.info("观点挖掘完成: %s, %d条判断, %d条关联链", insight_id, len(processed_judgments), len(extraction.get("chains", [])))
-        return result
+        logger.info("LLM观点提取已移除，跳过文章自动入库: %s", source or "unknown")
+        return None
 
     def daily_track(self) -> List[InsightTrackResult]:
         """
@@ -286,34 +214,6 @@ class InsightMiner:
                 self._update_judgment_status(judgment.id, judgment.status, new_refute_count)
 
         return result
-
-    def _mine_targets(self, judgment_text: str) -> List[Dict]:
-        """
-        从判断文本中挖掘关联A股标的
-        使用LLM辅助挖掘
-        """
-        try:
-            prompt = f"""
-基于以下判断，挖掘关联的A股标的。
-判断：{judgment_text}
-
-请输出JSON格式：
-[
-  {{"code": "股票代码", "name": "股票名称", "role": "该标的在判断中的角色"}}
-]
-"""
-            from ..llm_client import LLMMessage
-            response = self._llm.chat([
-                LLMMessage(role="system", content="你是A股研究分析师，根据判断挖掘关联标的。"),
-                LLMMessage(role="user", content=prompt),
-            ])
-            targets = self._llm.extract_json(response)
-            if isinstance(targets, list):
-                return targets
-        except Exception as e:
-            logger.error("挖掘标的失败: %s", e)
-
-        return []
 
     def _enrich_target_profile(self, target: Dict):
         """

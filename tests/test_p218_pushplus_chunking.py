@@ -120,7 +120,7 @@ def test_send_intraday_report_uses_four_layer_order(monkeypatch):
     assert positions == sorted(positions)
     assert content.index("#t-300394") < content.index("③ 相对上一推送 DIFF")
     assert "综合评分1/6≤1" in content
-    assert "口径: 技术同向｜机构同向｜主线板块｜无冲突｜环境≥6｜RRR2.5-5" in content
+    assert "口径: 技术同向｜机构同向｜主线板块｜无冲突｜环境≥6" in content
 
 
 def test_gate_items_preserve_score_and_evidence(monkeypatch):
@@ -141,7 +141,7 @@ def test_gate_items_preserve_score_and_evidence(monkeypatch):
                 "count": 1,
                 "items": [{
                     "stock_name": "创世纪", "stock_code": "300083",
-                    "reason": "期望值闸门: 置信度评分0/6低于放行线2/6，RRR0.37，盈亏平衡胜率72.8%；空仓是合法输出",
+                    "reason": "评分提示: 置信度评分0/6，RRR0.37，仅显著披露",
                     "score": 0,
                     "applicable_score": 6,
                     "min_confidence_score": 2,
@@ -152,7 +152,7 @@ def test_gate_items_preserve_score_and_evidence(monkeypatch):
     )
 
     content = captured["content"]
-    assert "创世纪(300083)｜评分0/6｜RRR0.37｜平衡胜率72.8%｜依据:技术票+0.5；机构票0" in content
+    assert "创世纪(300083)｜评分0/6｜RRR0.37｜依据:技术票+0.5；机构票0" in content
 
 
 def test_send_intraday_report_diffs_against_last_snapshot(monkeypatch):
@@ -185,7 +185,7 @@ def test_send_intraday_report_diffs_against_last_snapshot(monkeypatch):
             },
         },
             "gate_codes": ["603061"],
-            "gate_detail": "金海通(603061) | 期望值闸门",
+            "gate_detail": "金海通(603061) | 评分提示",
         "no_add_codes": [],
         "missing_codes": [],
         "sector_concentration": "",

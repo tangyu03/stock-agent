@@ -121,24 +121,6 @@ def test_risk_stop_discloses_event_z_and_tracking_line():
     assert "技术跟踪止损未触发(现价97.00>90.30)" in text
 
 
-def test_defensive_gate_summary_folds_to_top3():
-    from src.orchestrator.unified_engine import _defensive_gate_blocker_text
-
-    tech = {
-        "current_price": 80.0,
-        "recent_high": 100.0,
-        "prior_high": 100.0,
-        "volume_ratio": 0.8,
-        "adx": 18.0,
-        "rsi": 40.0,
-        "kline": [],
-        "fundamental": {},
-    }
-    text = _defensive_gate_blocker_text(tech, "main_trend")
-    assert "达标" in text
-    assert "缺口前三: " in text
-    assert text.count("|", text.index("缺口前三:")) <= 3
-
 
 def test_p214_completion_price_labels_source_and_dual_value():
     """P2-14：完结价标注数据源，与交易所收盘差异>0.1元或>0.1% 时双值显示。

@@ -52,10 +52,9 @@ def _oversold_tech(current_price: float = 304.03):
     }
 
 
-def _engine_with(tech, position=None):
+def _engine_with(tech):
     engine = TimingEngine(backtest_mode=False)
     engine._fetch_tech_data = lambda code, mode="defend": tech
-    engine._get_paired_position = lambda code: position
     return engine
 
 
@@ -116,14 +115,7 @@ class TestOversoldExitAudit:
     @pytest.mark.skip(reason='技术走弱已降级为附加信息')
     def test_hard_stop_still_fires_inside_oversold(self):
         tech = _oversold_tech(current_price=280.00)
-        position = {
-            "paired_z": 282.10,
-            "z_reference": 282.10,
-            "entry_type": "价量突破",
-            "paired_w_low": 340.00,
-            "paired_w_high": 350.00,
-        }
-        engine = _engine_with(tech, position)
+        engine = _engine_with(tech)
         signals = engine.check_exit_signals("688361", "中科飞测", "defend")
         breakdown = [signal for signal in signals if signal.exit_type == "破位止损"]
         assert len(breakdown) == 1

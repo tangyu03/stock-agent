@@ -16,7 +16,6 @@ def test_multiple_signals_are_not_capped_by_count():
     summary = format_scheduled_summary(scheduled)
 
     assert scheduled["stats"]["buy_executed"] == 6
-    assert scheduled["stats"]["buy_skipped_no_budget"] == 0
     assert "单次建议上限" not in summary
 
 
@@ -25,7 +24,6 @@ def test_scheduler_summary_discloses_every_gate_rejection():
         "stats": {
             "buy_executed": 0,
             "entry_in": 2,
-            "buy_hypothesis_rejected": 0,
             "buy_strategy_offline": 0,
             "buy_skipped_low_confidence": 0,
             "sell_executed": 0,
@@ -38,26 +36,16 @@ def test_scheduler_summary_discloses_every_gate_rejection():
                 "stock_code": "688008", "stock_name": "澜起科技",
                 "entry_type": "恐慌抄底", "reason": "评分提示: 1/6",
             }],
-            "buy_ev_gate": [{
-                "stock_code": "688521", "stock_name": "芯原股份",
-                "entry_type": "恐慌抄底", "reason": "EV提示: RRR-0.30，负期望",
-            }],
         },
         "buy": [],
         "sell": [],
         "position_advice": [],
         "skipped": {
-            "buy_no_budget": [],
             "buy_dust_order": [],
             "buy_low_confidence": [],
-            "buy_hypothesis_rejected": [],
             "buy_score_gate": [{
                 "stock_code": "688008", "stock_name": "澜起科技",
                 "entry_type": "恐慌抄底", "reason": "评分闸门: 1/6≤1",
-            }],
-            "buy_ev_gate": [{
-                "stock_code": "688521", "stock_name": "芯原股份",
-                "entry_type": "恐慌抄底", "reason": "RRR-0.30，负期望",
             }],
             "buy_strategy_offline": [],
         },
@@ -68,9 +56,6 @@ def test_scheduler_summary_discloses_every_gate_rejection():
     assert "买入: 0/2" in summary
     assert "评分提示（逐条，不拦截）" in summary
     assert "688008 澜起科技" in summary
-    assert "期望值提示（逐条，不拦截）" in summary
-    assert "688521 芯原股份" in summary
-    assert "RRR-0.30" in summary
 
 
 def test_buy_signals_ignore_total_asset_budget():
@@ -92,21 +77,15 @@ def test_buy_signals_ignore_total_asset_budget():
     scheduled = schedule_live_signals(signals, [], total_asset=10_000)
 
     assert scheduled["stats"]["buy_executed"] == 2
-    assert scheduled["stats"]["buy_skipped_no_budget"] == 0
     assert scheduled["stats"]["buy_skipped_dust_order"] == 0
-    # 【一】【六】新增两类跳过桶（假说拒绝/策略下线），默认为空
+    # 【六】策略下线跳过桶默认为空
     assert scheduled["skipped"] == {
-        "buy_no_budget": [],
         "buy_dust_order": [],
         "buy_low_confidence": [],
-        "buy_hypothesis_rejected": [],
         "buy_score_gate": [],
-        "buy_ev_gate": [],
         "buy_strategy_offline": [],
     }
-    assert scheduled["stats"]["buy_hypothesis_rejected"] == 0
     assert scheduled["stats"]["buy_strategy_offline"] == 0
-    assert scheduled["stats"]["buy_ev_gate"] == 0
     assert "跳过信号" not in format_scheduled_summary(scheduled)
 
 

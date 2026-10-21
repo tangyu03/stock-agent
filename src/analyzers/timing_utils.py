@@ -1,5 +1,5 @@
 """Utility functions for timing engine."""
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -55,6 +55,18 @@ def ma20_rising(tech_data: Dict) -> bool:
             return False
         closes.append(value)
     return sum(closes[1:]) / 20 > sum(closes[:-1]) / 20
+
+
+def get_limit_ratio(stock_code: str) -> float:
+    """Return the A-share daily price limit ratio for a stock code."""
+    code = stock_code.upper().strip()
+    if code.startswith(("300", "301", "688", "689")):
+        return 0.20
+    if code.startswith(("830", "831", "832", "833", "834", "835", "836",
+                        "837", "838", "839", "870", "871", "872", "873",
+                        "874", "920")):
+        return 0.30
+    return 0.10
 
 
 def _nested_config(config: Optional[Dict], *path, default=None):

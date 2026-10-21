@@ -5,8 +5,8 @@
 一套不能被自己的业绩杀死的逻辑，不算被厘清，只是被相信。
 
 统计口径（回执闭环自动完成）：
-  - 每笔交易四行日志：假说原文 / 实际出入场 / Z-W 是否触发 / 事后归因
-  - 平仓回执时自动回填 pnl_pct 与 zw_triggered（trade_logger._link_exit_to_position）
+  - 每笔交易日志：通用价位 / 实际出入场 / 离场原因 / 事后归因
+  - 平仓回执时自动回填 pnl_pct 与 exit_reason（trade_logger._link_exit_to_position）
   - 积累 min_trades_for_stats（默认 30）笔后按策略分层统计胜率和实际盈亏比
 
 作废条件（自动下线，写入 strategy_status 表，调度器过滤 + 告警推送）：
@@ -41,16 +41,12 @@ def _ensure_table(cursor) -> None:
 def compute_strategy_stats(closed_trades: Optional[List[Dict]] = None) -> Dict[str, Dict]:
     """按策略分层统计：笔数/胜率/均盈/均亏/盈亏比/期望/归因分布。
 
-    【P1-1】防守模式降仓放行的确认追强单独分层（策略键 "确认追强@防守"）：
     30 笔滚动胜率<30% 且期望<0 → 回退禁用（踏空成本继续留档）。
     """
     trades = closed_trades if closed_trades is not None else get_trade_logger().get_closed_trades()
     stats: Dict[str, Dict] = {}
     for t in trades:
         strategy = str(t.get("strategy") or "未知策略")
-        # 【P1-1】防守追强单独分层（标记字段由调度器写入）
-        if t.get("defensive_chase") and "@防守" not in strategy:
-            strategy = f"{strategy}@防守"
         pnl = t.get("pnl_pct")
         if pnl is None:
             continue
@@ -241,54 +237,6 @@ def format_strategy_report(offline: Optional[Dict[str, Dict]] = None) -> str:
     return "\n".join(lines)
 
 
-# ============================================================
-# 【Phase4】决策记录的作废条件数据基础设施
-# ============================================================
-
-def z_mode_comparison(closed_trades: Optional[List[Dict]] = None) -> Dict[str, Dict]:
-    """【P0-2】Z 线双模式对照统计（作废条件判定材料）。
-
-    作废条件原文：若 30 笔以上实盘统计显示结构位止损的期望值显著
-    低于 ATR 缓冲止损（结构位+1~2×ATR），则采用后者——缓冲版仍在
-    Z 线家族内，被否决的只是"裸结构位"。
-
-    口径：trade_logs 的 hypothesis JSON 携带 z_line_mode；
-    本函数按模式分层给出期望值对照（样本不足 30 笔时不下结论）。
-    """
-    trades = closed_trades if closed_trades is not None else get_trade_logger().get_closed_trades()
-    buckets: Dict[str, Dict] = {}
-    for t in trades or []:
-        hyp = t.get("hypothesis")
-        if isinstance(hyp, str):
-            try:
-                import json
-                hyp = json.loads(hyp) if hyp else {}
-            except (ValueError, TypeError):
-                hyp = {}
-        mode = str((hyp or {}).get("z_line_mode") or "unknown")
-        pnl = t.get("pnl_pct")
-        if pnl is None:
-            continue
-        bucket = buckets.setdefault(mode, {"trades": 0, "sum": 0.0, "wins": 0})
-        bucket["trades"] += 1
-        bucket["sum"] += float(pnl)
-        if float(pnl) > 0:
-            bucket["wins"] += 1
-    result: Dict[str, Dict] = {}
-    for mode, bucket in buckets.items():
-        n = bucket["trades"]
-        note = (
-            f"样本{n}笔，期望{bucket['sum'] / n:+.2f}%，胜率{bucket['wins'] / n * 100:.1f}%"
-            if n else "无样本"
-        )
-        if n < 30:
-            note += f"（不足30笔，对照不成立，继续积累）"
-        result[mode] = {"trades": n, "expectancy_pct": round(bucket["sum"] / n, 2) if n else None,
-                        "win_rate": round(bucket["wins"] / n, 4) if n else None,
-                        "note": note}
-    return result
-
-
 def graded_exit_sensitivity(days: int = 7) -> Dict:
     """【P0-3】分级 OR 过敏感统计（作废条件判定材料）。
 
@@ -335,13 +283,6 @@ def sector_version_breakdown(closed_trades: Optional[List[Dict]] = None) -> Dict
     trades = closed_trades if closed_trades is not None else get_trade_logger().get_closed_trades()
     counts: Dict[str, int] = {}
     for t in trades or []:
-        hyp = t.get("hypothesis")
-        if isinstance(hyp, str):
-            try:
-                import json
-                hyp = json.loads(hyp) if hyp else {}
-            except (ValueError, TypeError):
-                hyp = {}
-        version = str((hyp or {}).get("sector_version") or "v0-unversioned")
+        version = str(t.get("sector_version") or "v0-unversioned")
         counts[version] = counts.get(version, 0) + 1
     return counts

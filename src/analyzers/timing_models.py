@@ -28,21 +28,12 @@ class EntrySignal:
     kline_patterns: List[Dict] = field(default_factory=list)
     tech_data: Dict = field(default_factory=dict)
     execution_plan: Dict = field(default_factory=dict)
-    # 【一】可证伪假说（X/Y/Z/W 四要素，出厂检查已通过才到达这里）
-    hypothesis: Dict = field(default_factory=dict)
     # 【三】信号事件 ID（生命周期链接，回执后转 triggered）
     event_id: str = ""
     # 【三】受众：empty=仅空仓者成立 / holding=持仓者加仓参考
     audience: str = "empty"
-    # 【二】基本面摘要（业绩雷/盈利质量/财报窗口，来自 fundamental_gate）
-    fundamental_note: str = ""
-    # 【Phase3】估值透镜摘要（估值泡沫/低基数反转/亏损分型/资金-分析师冲突）
-    valuation_note: str = ""
-    # 【Phase4 P1-1】防守模式降仓放行标记（三重门证据 + 外推量能）
-    defensive_chase: Optional[Dict] = None
-    # 事件出生时落审计：Y 不再只给结果，也给公式和输入。
-    entry_y_formula: str = ""
-    entry_y_inputs: Dict = field(default_factory=dict)
+    # 驱动源归因（第八问），与价位字段分离。
+    driver: Dict = field(default_factory=dict)
 
 
 @dataclass
@@ -60,9 +51,7 @@ class ExitSignal:
     sector_name: str = ""
     sw_level3: str = ""
     tech_data: Dict = field(default_factory=dict)
-    # 【四】配对出场标记：paired=策略原生 Z/W 硬触发 / system=旧系统兜底（降观察）
     source: str = "system"
-    paired_strategy: str = ""
     # 只读引用事件库；卖出信号不得自行描述买入事件的阶段。
     event_id: str = ""
 

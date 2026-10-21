@@ -9,32 +9,6 @@ from typing import Optional, Dict, List, Any
 logger = logging.getLogger(__name__)
 
 
-# ============ LLM 配置 ============
-class LLMProvider(BaseModel):
-    api_key: str = ""
-    base_url: str
-    model: str
-    max_tokens: int = 4096
-    temperature: float = 0.3
-
-
-class LLMPromptConfig(BaseModel):
-    system: str
-    temperature: float = 0.3
-
-
-class LLMConfigRoot(BaseModel):
-    version: str
-    llm: Dict[str, Any]  # nested under 'llm' key
-
-
-class LLMConfig(BaseModel):
-    version: str
-    active: str
-    providers: Dict[str, LLMProvider]
-    prompts: Dict[str, LLMPromptConfig]
-
-
 # ============ 推送配置 ============
 class ScheduleTime(BaseModel):
     pre_market: str = "08:50"
@@ -146,7 +120,6 @@ from pathlib import Path
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 CONFIG_VALIDATORS = {
-    "llm.yaml": LLMConfig,
     "push.yaml": PushConfig,
     "portfolio.yaml": PortfolioConfig,
     "position.yaml": PositionConfig,

@@ -51,9 +51,9 @@ class TestSectorVersioning:
         """闭合样本按分类口径版本计数——新旧口径统计不再互相污染"""
         from src.feedback.strategy_stats import sector_version_breakdown
         trades = [
-            {"strategy": "价量突破", "pnl_pct": 1.0, "hypothesis": {"sector_version": "v2026-08"}},
-            {"strategy": "价量突破", "pnl_pct": -2.0, "hypothesis": {"sector_version": "v2026-08"}},
-            {"strategy": "价量突破", "pnl_pct": 3.0, "hypothesis": {"sector_version": "v2026-09-07-a"}},
+            {"strategy": "价量突破", "pnl_pct": 1.0, "sector_version": "v2026-08"},
+            {"strategy": "价量突破", "pnl_pct": -2.0, "sector_version": "v2026-08"},
+            {"strategy": "价量突破", "pnl_pct": 3.0, "sector_version": "v2026-09-07-a"},
         ]
         counts = sector_version_breakdown(trades)
         assert counts["v2026-08"] == 2
@@ -61,7 +61,7 @@ class TestSectorVersioning:
 
     def test_unversioned_falls_to_v0(self):
         from src.feedback.strategy_stats import sector_version_breakdown
-        counts = sector_version_breakdown([{"strategy": "x", "pnl_pct": 1.0, "hypothesis": {}}])
+        counts = sector_version_breakdown([{"strategy": "x", "pnl_pct": 1.0}])
         assert counts == {"v0-unversioned": 1}
 
 
@@ -109,63 +109,6 @@ class TestFundLayering:
         assert "慢变量计票:主力↓/股东→" in text
         assert "拆层不投票" in text
 
-
-# ============================================================
-# P2-3 组合预算（同板块并发敞口上限）
-# ============================================================
-
-class TestPortfolioBudget:
-    def _sig(self, code, sector):
-        from src.analyzers.timing_engine import EntrySignal
-        return EntrySignal(
-            stock_code=code, stock_name=f"标的{code}", entry_type="价量突破",
-            entry_trigger_price=100.0, stop_loss=95.0,
-            target_type="突破持有", target_range=[108.0, 115.0],
-            sector_status="main_trend", sector_name=sector,
-            benchmark_price=98.0, rrr_low=2.5,
-        )
-
-    def test_semiconductor_8_same_label_blocked_beyond_3(self):
-        """9/7 半导体设备 8 只同标签 → 前3放行，后续降级观察并留痕"""
-        from src.analyzers.portfolio_budget import apply_portfolio_budget
-        entries = [self._sig(f"68840{i}", "半导体设备(主题)") for i in range(8)]
-        result = apply_portfolio_budget(entries, holdings=[], config={})
-        assert result["applied"] is True
-        assert len(result["blocked"]) == 5
-        assert len(result["passed"]) == 3
-        assert result["counts"]["半导体设备"] == 3
-        assert "集群风险拦截" in result["blocked"][0]["reason"]
-        assert "个股纪律结论保留" in result["blocked"][0]["reason"]
-
-    def test_holdings_count_toward_budget(self):
-        """预算计入已有持仓：已有2只同板块 → 新信号只剩1个名额"""
-        from src.analyzers.portfolio_budget import apply_portfolio_budget
-        holdings = [
-            {"stock_code": "688001", "sector_name": "半导体设备(主题)"},
-            {"stock_code": "688002", "sector_name": "半导体设备(主题)"},
-        ]
-        entries = [self._sig(f"68840{i}", "半导体设备(主题)") for i in range(3)]
-        result = apply_portfolio_budget(entries, holdings=holdings, config={})
-        assert len(result["blocked"]) == 2
-        assert len(result["passed"]) == 1
-
-    def test_different_sectors_independent(self):
-        from src.analyzers.portfolio_budget import apply_portfolio_budget
-        entries = [
-            self._sig("688409", "半导体设备(主题)"),
-            self._sig("300308", "光模块(CPO)(主题)"),
-            self._sig("920045", "通信设备(主题)"),
-        ]
-        result = apply_portfolio_budget(entries, holdings=[], config={})
-        assert len(result["blocked"]) == 0
-
-    def test_disabled_budget_passes_all(self):
-        from src.analyzers.portfolio_budget import apply_portfolio_budget
-        entries = [self._sig(f"68840{i}", "半导体设备(主题)") for i in range(8)]
-        result = apply_portfolio_budget(
-            entries, holdings=[], config={"portfolio_budget": {"enabled": False}})
-        assert result["applied"] is False
-        assert len(result["passed"]) == 8
 
 
 # ============================================================
@@ -246,24 +189,6 @@ class TestTrendContinuation:
         sig = te._check_trend_continuation("688028", "沃尔德", tech, stop, "defend", "main_trend")
         assert sig is None
 
-    def test_exit_spec_paired_z_is_ma10(self):
-        """趋势延续配对出场规格：Z 锚 MA10（延续结构破位），W=延伸目标；
-        默认 buffered = MA10−clamp(k×ATR)，裸结构位对照族 Z=MA10 本体"""
-        from src.analyzers.hypothesis import STRATEGY_EXIT_SPECS, calculate_paired_stop
-        spec = STRATEGY_EXIT_SPECS["趋势延续"]
-        assert spec["z_reference"] == "ma10"
-        assert spec["w_rule"]
-        z, ref, note = calculate_paired_stop(
-            "趋势延续", _woerde_tech(), benchmark_price=101.5, atr=2.0)
-        assert ref == 100.0
-        # ATR/ref = 2% < 5% → 低波动档 k=2.0 → buffer=4.0 → Z=96.0（Phase5 默认）
-        assert z == 96.0
-        assert "MA10" in note
-        z_bare, _, _ = calculate_paired_stop(
-            "趋势延续", _woerde_tech(), benchmark_price=101.5, atr=2.0,
-            config={"hypothesis_gate": {"z_line_mode": "bare_structure"}})
-        assert z_bare == 100.0                # 裸结构位对照族
-
     def test_disabled_switch_restores_absence(self, monkeypatch):
         from src.analyzers.timing_engine import TimingEngine, StopLossCalc
         te = TimingEngine(backtest_mode=True)
@@ -340,7 +265,7 @@ class TestDriverAttribution:
         assert "业绩驱动" in text
         # 模板层渲染（买入卡 ⑧驱动源）
         from src.push.templates import _driver_line
-        assert "业绩驱动" in _driver_line({"hypothesis": {"driver": info}})
+        assert "业绩驱动" in _driver_line({"driver": info})
 
 
 # ============================================================
@@ -358,11 +283,8 @@ class TestParamAppendix:
         assert "RRR门槛1.5" in text
         assert "隐含胜率假设40%" in text
         assert "实测胜率45.0%" in text
-        assert "Z线模式:bare_structure" in text
         assert "量能外推" in text
         assert "卖出分级OR" in text
-        assert "防守追强试探仓" in text
-        assert "风险预算1%÷止损距离" in text
         assert "附录机制永不作废" in text
 
     def test_appendix_without_stats_is_honest(self):
@@ -380,6 +302,4 @@ class TestBatchFields:
         from src.orchestrator.unified_engine import UnifiedSignalBatch
         batch = UnifiedSignalBatch()
         assert batch.standby_queue == []
-        assert batch.chase_missed == []
-        assert batch.budget_blocked == []
         assert batch.theme_version == ""

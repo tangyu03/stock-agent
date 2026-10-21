@@ -1,106 +1,116 @@
+# stock-agent
 
+A股短线信号 Agent。当前版本定位是**瘦身后的信号服务**：只保留数据质量、择时判断、信号生命周期、调度推送和交易回执闭环；不再运行基本面闸门、估值透镜、LLM 解释器或复杂组合预算。所有报告以原始价位、指标、事件和回执为主，避免无法还原来源的黑盒透视。
 
-#### **一、项目定位**
+## 当前能力
 
-A股短线交易 Agent：大V的规则框架 + 机器的执行纪律（止盈不犹豫、破位不心软、熔断不讨价还价）。链路覆盖环境判定、进场/出场、仓位、数据层；回测层与实盘共享 TimingEngine。系统定位为**信号服务**：只输出买卖建议，卖出全量、买入按入场类型优先级排序，资金管理由用户自理。
+### 数据层
 
-#### **二、核心机制：可证伪假说**
+- akshare 封装与安全调用：`src/data_layer/akshare_adapter.py`、`src/data_layer/akshare_safe.py`。
+- 问财/技能数据封装：`src/data_layer/skill_wrapper.py`，需在 `.env` 或环境变量设置 `IWENCAI_API_KEY`。
+- 数据新鲜度检查：`src/loop/data_freshness.py` 中的 `DataFreshnessGuard`。
+- 脏数据闸门：`src/analyzers/signal_plan.py` 校验量比、换手率和成交量口径；口径矛盾时拦截入场。
+- 主题归属：`config/theme_map.yaml` 提供人工确认的股票→主题映射。
 
-每笔交易执行前必须写成完整句子：“因为 X，所以在 Y 买入；若 Z 出现说明我错了，离场；若 W 出现，兑现离场。”四要素缺一，`build_execution_plan` 直接拒绝并写入 `signal_rejections` 留痕，不调度、不推送。
+### 信号链路
 
-| 要素 | 含义 | 出厂约束 |
-|---|---|---|
-| X | 买入理由 | 非空，且须与基本面共存 |
-| Y | 买点 | 追强类=触发位×0.98 浅回踩档；低吸类=MA10 档 |
-| Z | 认错价 | 必须 Z<Y；默认 buffered_structure（结构位−clamp(k×ATR)），缓冲上限 8%，防毫厘止损也防拖到跌停价 |
-| W | 兑现区 | W低沿>Y，价位触发：触低沿减半+trailing，触高沿清仓 |
+1. `TimingEngine` 生成入场候选，覆盖恐慌抄底、套利低吸、确认追强、价量突破和趋势延续。
+2. `signal_plan` 重估基准价、止损、目标区间、风险比例、置信度与分档。
+3. `signal_lifecycle` 把状态信号转成事件：突破当日诞生，默认 5 个自然日有效；跌回突破位、板块退潮或超期后作废。
+4. `live_scheduler` 按受众分流：空仓者收买入建议，持仓者收加仓评估；卖出信号全量输出。
+5. `templates` 渲染 PushPlus 报告，报告中保留价位、指标、置信度和事件来源。
 
-围绕假说的四个子系统：
+入场信号以事件为准，同日同策略不重复建档；再入场由新事件触发，不使用沉没成本驱动的固定次数闸门。
 
-**数据闸门**：量比<1 而量能>10 倍、换手<10% 而成交量>10 亿股 → 判定脏数据，生成阶段直接拦截。
+### 出场规则
 
-**信号事件**（状态→事件）：突破当日诞生（收阳+量能双腿确认），默认 5 日有效；收盘跌回突破位或板块退潮 → 作废并推送撤单；活跃事件存在即不重播。买入事件只对空仓者成立；持仓者收到持有/加仓/减仓/止损四选一。
+- 破位止损是硬触发：现价跌破系统止损价即输出卖出信号。
+- 止损类技术信号采用分级 OR；止盈类信号继续保留计票。
+- MA5 压制、冲高止盈、技术走弱和板块退潮仍作为系统级出场检查。
+- 已删除“买入假说对应的 Z/W 配对出场”，系统不再把买入文案映射成独立卖出承诺。
 
-**配对出场**：定义买入时即定义卖出，Z 是 X 的直接否定：
+### 记录与复盘
 
-| 策略 | X | Z | W |
-|---|---|---|---|
-| 价量突破 | 放量站上关键位 | 收盘跌回突破位(MA25) | 下一阻力分批 / trailing |
-| 恐慌抄底 | 超跌+量能衰竭 | 反弹失败再创新低 | 反弹至近20日高减仓 |
-| 套利低吸 | 周线低位结构 | 破近5日低/MA10 | 回趋势通道上沿 |
-| 确认追强 | 趋势确认 | 破趋势线/MA20 | 顶背驰+缩量 / 目标位 |
+- `trade_logs` 记录信号价位、事件 ID、驱动源、板块版本、用户回执、实际成交和盈亏。
+- 卖出回执自动回填开仓行的 `exit_price`、`exit_date`、`exit_reason` 和 `pnl_pct`。
+- 策略统计按 `entry_type` 分层；达到样本阈值后可标记业绩下线。
+- 事件跟踪保留入场、离场、作废、过期和成交状态，方便回看原始判定。
 
-已知持仓策略时，旧技术门（MA5 压制/冲高止盈等）降级为辅助观察；破位止损保持硬触发作安全网。止损类条件分级 OR（任一即出），止盈类保留计票。
-
-**记录闭环**：trade_logs 四行日志（假说原文 / 实际出入场 / ZW 触发归类 / 事后归因）。30 笔起分层统计；滚动 50 笔期望 ≤0 → 该策略自动下线并告警。
-
-#### **三、基本面与估值**
-
-- **基本面闸门（第七问）**：预亏/首亏/续亏/增亏/预减，或扣非/净利同比<−30% → veto 出厂拒绝；净利与扣非同比差≥30pp → warn 降档×0.6；距法定披露≤7天 → 标注不否决；数据缺失 → 放行。
-- **估值透镜**：PE(TTM)≥300 且净利<2亿 → veto；PE≥300 大体量 → warn+0.5；同比≥100% 但净利<2亿 → 低基数反转、双口径呈现；亏损分型：合同负债/存货显著增长 → strategic_loss(warn)，无订单证据 → model_loss（追高 veto / 低吸 warn）。锚定案例一行版：兆易（资金-研报冲突双标签）、长光华芯（泡沫 veto）、中科飞测（战略亏损）、芯原（模式亏损）、中际旭创（防守模式冲突披露）。
-- **标签语义**：四票资金源全是短周期数据，“机构看X”已改为“资金看X”；分析师共识走旁路双标签，不混入资金计分。
-- **主题归属**：`config/theme_map.yaml` 人工映射修正行业库错配；代理板块状态取最严格值。
-- **数据源修复**：两融按接口成败区分“非标的/接口失败”；股东户数截止日超90天不投票；主力/股东票权降 0.5（拆单可规避的噪音源）。
-
-#### **四、执行质量规则（Phase 4–6 沉淀）**
-
-- **量能外推**：盘中累计量÷U型分位外推全天量；10:00 前、封板、14:45 后、回测禁用；实际>1.0 或外推≥1.2 触发，误差入表供作废判定。
-- **RRR 纪律**：RRR≥2.5 置信度+1，>5 不加分并标注“神话数字嫌疑”（钳制区间 [2.5, 5]）。
-- **防守追强**：防守=压缩敞口而非禁用。三重门（技术四确认+基本面强+板块主线）全过 → 放行试探仓，仓位=1%风险预算÷止损距离，封顶 1/3；被拦的强势标的入踏空台账留证。
-- **再入场**：止损后创新高或收复 Z 线 → 待命队列头部；上限 2 次，不携带沉没成本逻辑。
-- **EV 闸门**：评分<1（0/6）直接拒绝——“负期望不出场，空仓是合法输出”；足 30 笔用真实胜率，不足按 0.5 保守。
-- **风险乘数规则化**：振幅≥8%→0.6，≥5%→0.8，<5% 不降档；同板块并发敞口上限 3。
-
-#### **五、板块层（S 系列）**
-
-一句话：给系统补上“板块的眼睛”，看见板块间资金跷跷板。三条规则全部**只加权、不出新信号**：S1 相对强弱（锚点日起滚动板块对大盘超额收益，识别主线）；S2 虹吸度（主线成交额占比 5 日变化>+30% 冻结对立面进场，<−20% 放开抄底）；S3 预期验证（attack 模式但主线连续 2 日走弱 → 环境判定强制降一档）。
-
-数据与约束：全源同花顺（东财接口被封），每日恒定 31 次调用（行业一览 1 + 概念指数 30）；DataFreshnessGuard 强制断言“最后日期==最近交易日”，防静默截断。概念层因无成分股接口，永久测量态，仅周报人眼消费。上线路径：快照积累 → 指标层 → C1–C4 关卡（覆盖≥80%/换手≤30%/CI 不重叠/2024 段不倒退）→ 行业版乘数接入调度排序键。
-
-#### **六、回测引擎**
-
-T+1 次日开盘成交（消除前视偏差，涨跌停用 T+1 数据判断）；优化目标为 Sharpe；Walk-Forward（train 60 / test 20 / step 20）输出样本外指标防过拟合；17 维阈值网格搜索、等权仓位；沪深300 基准（Alpha/Beta/IR/跟踪误差）；指标输出与 Pyfolio 对齐。回测模式下量能外推禁用、配对出场不启用。
-
-#### **七、每日运行**
+## 运行
 
 ```bash
-python -m src.main run --phase intraday      # 8:50 盘中：环境→信号→调度→推送（pre_market 已合并）
-python scripts/trade_feedback.py --list      # 推送后回执（当天人工完成）
-python scripts/trade_feedback.py --execute <id> --price 127.5   # 真买了
-python scripts/trade_feedback.py --ignore <id>                  # 没执行
-python scripts/trade_feedback.py --holdings  # 聚合持仓
-python -m src.main run --phase post_market   # 15:30 盘后复盘
-python scripts/s_daily_run.py                # 16:00/17:00 板块管道（非交易日自跳过，--date 回补）
-python -m src.main run --phase weekly        # 周五周报
+python -m src.main run --phase pre_market
+python -m src.main run --phase intraday
+python -m src.main run --phase post_market
+python -m src.main run --phase weekly
 ```
 
-闭环一句话：盘中推 → 收盘回执 → 盘后跑板块 → 次日盘中调度。诊断 CLI：`--stats`（分层统计）、`--strategies`（在线状态）、`--projection-errors`、`--zmode`、`--sensitivity`、`--sector-versions`。
-
-#### **八、环境与配置**
+交易回执：
 
 ```bash
-pip install -r requirements.txt   # akshare / pyyaml / pydantic / requests / numpy / python-docx
-export DEEPSEEK_API_KEY=... TOKEN_PUSH=... IWENCAI_API_KEY=...   # 凭证全走环境变量
-export PYTHONIOENCODING=utf-8     # Windows GBK 控制台必备
-python -m src.main init           # 幂等迁移，自动补列补表，旧数据保留
+python scripts/trade_feedback.py --list
+python scripts/trade_feedback.py --execute <id> --price 127.5
+python scripts/trade_feedback.py --ignore <id>
+python scripts/trade_feedback.py --holdings
 ```
 
-| 参数（timing.yaml） | 默认 | 说明 |
-|---|---|---|
-| hypothesis_gate.z_line_mode | buffered_structure | bare / atr_buffer 为对照、回退族 |
-| z_buffer_max_pct | 0.08 | 缓冲上限，防止损拖到跌停价 |
-| ev_gate.min_confidence_score | 1 | 0/6 拒绝出场 |
-| confidence.rrr_quality_cap | 5.0 | RRR 质量票钳制 |
-| exit.graded_or.enabled | true | 止损 OR 化，false 回退 AND 计票 |
-| defensive_chase.enabled | true | false=回退禁追强（踏空留档） |
-| position_budget | 25 万/笔、账户 100 万 | 预算披露基数 |
-| reentry.max_reentries | 2 | 再入场次数上限 |
-
-#### **九、测试与已知局限**
+诊断命令：
 
 ```bash
-python -m pytest tests/ -q --ignore=tests/test_institutional_fund_flow.py
-# 366 passed / 2 skipped（沙箱无 akshare；2 个失败为基线环境遗留）
+python scripts/trade_feedback.py --stats
+python scripts/trade_feedback.py --strategies
+python scripts/trade_feedback.py --projection-errors
+python scripts/trade_feedback.py --sensitivity
+python scripts/trade_feedback.py --sector-versions
 ```
 
-已知局限：F4/F11 需分钟级数据；F2 机构买入均价为 VWAP 近似；F5 未来解禁需人工维护；C3 默认观察级；回测中机构打分被禁用（实盘启用）。
+## 配置
+
+主要配置在 `config/timing.yaml`：
+
+| 配置 | 用途 |
+|---|---|
+| `timing.data_guard` | 量比、换手率、成交量一致性拦截 |
+| `timing.signal_lifecycle.valid_days` | 事件有效期 |
+| `timing.exit.graded_or.enabled` | 止损类技术信号是否启用分级 OR |
+| `timing.strategy_stats` | 分层统计和自动下线样本窗口 |
+| `timing.volume_projection` | 盘中量能外推窗口与阈值 |
+
+推送 token 配置在 `config/push.yaml` 的 `pushplus.token`。Windows 控制台建议设置：
+
+```bash
+export PYTHONIOENCODING=utf-8
+```
+
+数据库初始化与迁移：
+
+```bash
+python -m src.main init
+```
+
+## 已退役模块
+
+以下复杂链路已从当前主信号链路移除：
+
+- XYZW 可证伪假说与假说出厂拒绝闸门。
+- 买入假说和配对 Z/W 出场逻辑。
+- 基本面闸门、估值透镜、标签语义模块。
+- RRR 纪律、风险乘数规则化引擎、EV 闸门。
+- 板块 S1–S3 调度层、LLM 调用、`position_budget` 和解锁日历事件。
+- 独立回测引擎与回测驱动的主链路。
+
+保留的业绩统计和回执闭环只用于审计与策略下线判断，不会重新生成这些已退役闸门。
+
+## 测试
+
+```bash
+python -X utf8 -m pytest -q
+```
+
+最近一次全量结果：
+
+```text
+530 passed, 5 skipped
+```
+
+已知边界：部分外部数据源在无网或无密钥环境下会自动降级；分钟级数据能力和机构成交均价近似仍依赖上游数据质量。

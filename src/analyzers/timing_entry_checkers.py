@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from .timing_models import EntrySignal
 from ..analyzers.market_env import get_market_environment
 from ..analyzers.stock_filter import get_stock_filter, FilterResult
-from .timing_utils import _number_or_none, ma20_rising
+from .timing_utils import _number_or_none, get_limit_ratio, ma20_rising
 
 
 logger = logging.getLogger(__name__)
@@ -282,219 +282,14 @@ class TimingEntryMixin:
             )
         return None
 
-    def _defensive_chase_gates(self, tech_data: Dict, sector_status: str) -> Dict:
-        """【P1-1】防守模式确认追强的三重门（降仓可用，不是无条件放行）。
 
-        门一 四确认+时机：创新高 + 量比 + 量能（外推口径）+ ADX 单边力度
-                          + 外盘主动 + RSI 未过热；
-        门二 基本面验证：净利同比达门槛且非业绩雷/低基数/模式亏损，
-                        筹码无分散（减持迹象）；
-        门三 板块联动：主线板块（主线意味着联动度，非孤立动量）。
-        任何一关不过 → 不放行（回退为禁用，磨空成本由 unified_engine 留档）。
-        """
-        cfg = self._cfg("defensive_chase") or {}
-        evidence: List[str] = []
-
-        # ── 门一：四确认 + 时机 ──
-        # 【P1-2】每个闸门都输出 当前值/阈值/差距，读者可复现候梯排序。
-        def _gap(label: str, value, threshold: float, direction: str = "ge",
-                 fmt: str = "{:.2f}") -> Tuple[str, float]:
-            """direction=ge 表示越大越好；lt 表示越小越好。返回(展示, 缺口%)。"""
-            if value is None:
-                return f"{label} 数据未取到(阈值{fmt.format(threshold)})", 100.0
-            value = float(value)
-            if direction == "ge":
-                ok = value >= threshold
-                gap_pct = max(0.0, (threshold - value) / abs(threshold) * 100.0) if threshold else 0.0
-                rel = "缺" if not ok else "✓"
-            else:
-                ok = value <= threshold
-                gap_pct = max(0.0, (value - threshold) / abs(threshold) * 100.0) if threshold else 0.0
-                rel = "超" if not ok else "✓"
-            return (
-                f"{label} {fmt.format(value)}/{fmt.format(threshold)} "
-                + (f"{rel}{gap_pct:.0f}%" if not ok else "✓"),
-                gap_pct,
-            )
-
-        current = float(tech_data.get("current_price") or 0)
-        recent_high = float(tech_data.get("recent_high") or 0)
-        volume_ratio = float(tech_data.get("volume_ratio") or 1.0)
-        adx = tech_data.get("adx") or (tech_data.get("tech_signals") or {}).get("adx")
-        rsi = tech_data.get("rsi") or (tech_data.get("tech_signals") or {}).get("rsi")
-        outer = tech_data.get("outer_volume")
-        inner = tech_data.get("inner_volume")
-
-        from .signal_plan import build_volume_snapshot
-        snapshot = build_volume_snapshot(
-            tech_data, guard=self._cfg("data_guard") or None,
-            projection_config=self._projection_cfg(),
-        )
-        projected = snapshot.projected_volume_vs_ma60
-
-        new_high_ratio = float(cfg.get("new_high_ratio", 0.99))
-        volume_ratio_min = float(cfg.get("volume_ratio_min", 1.2))
-        projected_volume_min = float(cfg.get("projected_volume_min", 1.2))
-        adx_min = float(cfg.get("adx_min", 25.0))
-        rsi_overheat = float(cfg.get("rsi_overheat", 67.0))
-
-        # 【Phase5 回炉】“创新高”用 prior_high（近20日高剔除当日）——
-        # 盘中创新高但收盘回落 >1% 的标的（蘅东光 9/7）不再被误拦；
-        # prior_high 缺失时回退 recent_high（兼容旧测试/旧缓存数据）。
-        prior_high = tech_data.get("prior_high") or recent_high
-        gap_items: List[Dict] = []
-        gate1_checks = {}
-        gate1_text = []
-        if current and prior_high:
-            text, gap = _gap(
-                "创新高", current, float(prior_high) * new_high_ratio,
-                "ge", "{:.2f}",
-            )
-            gate1_checks["创新高"] = gap == 0.0
-            gate1_text.append(text)
-            gap_items.append({"gate": "确认追强", "item": "创新高", "gap": gap, "direction": "ge"})
-        else:
-            gate1_checks["创新高"] = False
-            gate1_text.append(f"创新高 数据未取到(阈值{new_high_ratio:.2f}×近段高)")
-            gap_items.append({"gate": "确认追强", "item": "创新高", "gap": 100.0, "direction": "ge"})
-
-        text, gap = _gap("量比", volume_ratio, volume_ratio_min, "ge", "{:.2f}")
-        gate1_checks["量比"] = gap == 0.0
-        gate1_text.append(text)
-        gap_items.append({"gate": "确认追强", "item": "量比", "gap": gap, "direction": "ge"})
-
-        projected_ok = projected is not None and snapshot.projection_mode == "ok"
-        volume_value = projected if projected_ok else snapshot.volume_vs_ma60
-        volume_threshold = projected_volume_min if projected_ok else 1.0
-        volume_label = "量能外推" if projected_ok else "量能实际"
-        text, gap = _gap(volume_label, volume_value, volume_threshold, "ge", "{:.2f}x")
-        gate1_checks["量能(外推或实际)"] = gap == 0.0
-        gate1_text.append(text)
-        gap_items.append({"gate": "确认追强", "item": "量能", "gap": gap, "direction": "ge"})
-
-        text, gap = _gap("ADX", adx, adx_min, "ge", "{:.1f}")
-        gate1_checks["ADX单边力度"] = gap == 0.0
-        gate1_text.append(text)
-        gap_items.append({"gate": "确认追强", "item": "ADX", "gap": gap, "direction": "ge"})
-
-        if outer is None or inner is None:
-            gate1_checks["外盘主动"] = True
-            gate1_text.append("外盘主动 数据未取到(不阻断)")
-        else:
-            text, gap = _gap("外盘/内盘", float(outer), float(inner), "ge", "{:.0f}")
-            gate1_checks["外盘主动"] = gap == 0.0
-            gate1_text.append(text)
-            gap_items.append({"gate": "确认追强", "item": "外盘主动", "gap": gap, "direction": "ge"})
-
-        # 【Phase5 回炉】文案带口径：实际判定用 RSI14；同条件两判定的口径差异可见。
-        text, gap = _gap("RSI14", rsi, rsi_overheat, "lt", "{:.1f}")
-        gate1_checks[f"RSI14未过热(<{rsi_overheat:.0f})"] = gap == 0.0
-        gate1_text.append(f"RSI14未过热(<{rsi_overheat:.0f})：{text}")
-        gap_items.append({"gate": "确认追强", "item": "RSI14", "gap": gap, "direction": "lt"})
-
-        gate1_failed = [k for k, v in gate1_checks.items() if not v]
-        if gate1_failed:
-            evidence.append(f"门一未过: {'、'.join(gate1_text)}")
-
-        # ── 门二：基本面验证 ──
-        fundamental = tech_data.get("fundamental") or {}
-        profit_yoy = None
-        profit_abs = None
-        try:
-            profit_yoy = float(fundamental.get("profit_yoy")) if fundamental.get("profit_yoy") is not None else None
-            profit_abs = float(fundamental.get("profit_abs")) if fundamental.get("profit_abs") is not None else None
-        except (TypeError, ValueError):
-            pass
-        verdict = (fundamental.get("verdict") or {}).get("verdict") if isinstance(fundamental.get("verdict"), dict) else None
-        lens = tech_data.get("valuation_lens") or {}
-        lens_tags = ((lens.get("verdict") or {}).get("tags") or []) if isinstance(lens, dict) else []
-        shareholder_change = None
-        try:
-            votes = (tech_data.get("institutional_holding") or {}).get("votes") or {}
-            raw = (votes.get("shareholder") or {}).get("raw") or {}
-            if raw.get("change_pct") is not None:
-                shareholder_change = float(raw.get("change_pct"))
-        except (TypeError, ValueError, AttributeError):
-            pass
-
-        profit_yoy_min = float(cfg.get("profit_yoy_min", 30.0))
-        dispersion_max = float(cfg.get("shareholder_dispersion_max", 0.20))
-        profit_text, profit_gap = _gap(
-            "净利同比", profit_yoy, profit_yoy_min, "ge", "{:.1f}%"
-        )
-        if profit_gap:
-            gap_items.append({"gate": "确认追强", "item": "净利同比", "gap": profit_gap, "direction": "ge"})
-        dispersion_text, dispersion_gap = _gap(
-            "筹码分散", shareholder_change, dispersion_max, "lt", "{:.1%}"
-        )
-        if shareholder_change is not None and dispersion_gap:
-            gap_items.append({"gate": "确认追强", "item": "筹码分散", "gap": dispersion_gap, "direction": "lt"})
-        gate2_checks = {
-            "净利同比达标": bool(profit_yoy is not None and profit_yoy >= profit_yoy_min),
-            "无业绩雷/降级": bool(verdict not in ("veto", "warn")) if verdict else (profit_yoy is not None),
-            "非低基数/模式亏损": not any(t in lens_tags for t in ("low_base", "model_loss")),
-            "筹码无分散": bool(
-                shareholder_change is None or shareholder_change <= dispersion_max
-            ),
-        }
-        gate2_failed = [k for k, v in gate2_checks.items() if not v]
-        if gate2_failed:
-            evidence.append(f"门二未过: 净利同比达标；{profit_text}；筹码无分散：{dispersion_text}")
-
-        # ── 门三：板块联动 ──
-        if sector_status != "main_trend":
-            sector_names = {
-                "rotational": "轮动", "retreating": "退潮",
-                "main_trend": "主线", "unknown": "未知",
-            }
-            evidence.append(
-                f"门三未过: 板块非主线({sector_names.get(sector_status, sector_status)}"
-                f"/主线，差距不可量化)"
-            )
-
-        tech_data["defensive_gate_audit"] = {
-            "gap_items": gap_items,
-            "check_total": len(gate1_checks) + len(gate2_checks) + 1,
-            "checks_passed": (
-                sum(1 for value in gate1_checks.values() if value)
-                + sum(1 for value in gate2_checks.values() if value)
-                + (1 if sector_status == "main_trend" else 0)
-            ),
-        }
-        return {
-            "passed": not evidence,
-            "evidence": evidence,
-            "gap_items": gap_items,
-            "check_total": len(gate1_checks) + len(gate2_checks) + 1,
-            "checks_passed": (
-                sum(1 for value in gate1_checks.values() if value)
-                + sum(1 for value in gate2_checks.values() if value)
-                + (1 if sector_status == "main_trend" else 0)
-            ),
-            "min_gate_gap": min((x["gap"] for x in gap_items), default=100.0),
-            "projected_volume": projected,
-            "snapshot": snapshot,
-        }
 
     def _check_momentum_chase(self, code, name, tech_data, stop_loss, mode, sector) -> Optional[EntrySignal]:
         """
         确认追强（海龟突破）
-
-        【P1-1】防守模式降仓可用：防守的定义是压缩敞口而非禁用策略
-        （蘅东光 9/7 +14.81%、量比2.01、ADX48 却零提示），
-        但必须过三重门（四确认+基本面+板块联动），仓位由风险预算反推。
         """
-        if mode not in ("attack", "defend"):
+        if mode != "attack":
             return None
-        defensive_gate = None
-        if mode == "defend":
-            cfg = self._cfg("defensive_chase") or {}
-            if not cfg.get("enabled", True):
-                return None  # 回退禁用（磨空成本由 unified_engine 留档）
-            defensive_gate = self._defensive_chase_gates(tech_data, sector)
-            if not defensive_gate["passed"]:
-                return None
-
         current = tech_data.get("current_price", 0)
         ma20 = tech_data.get("ma20", 0)
         recent_high = tech_data.get("recent_high", 0)
@@ -538,14 +333,6 @@ class TimingEntryMixin:
         ]
         position_level = "spread"
         applicable_modes = ["attack"]
-        if defensive_gate is not None:
-            # 防守模式降仓放行：三重门全过 + 风险预算仓位（试探仓）
-            position_level = "probe"
-            applicable_modes = ["defend"]
-            conditions.append(
-                "防守降仓放行(三重门全过: 四确认+基本面+板块联动；"
-                "仓位=单笔风险预算÷止损距离，非 1/3 惯例)"
-            )
         # 【P0-2】高位回落票不允许把 MA20 突破机械当作低位突破；
         # 必须量能（已过）+资金同向双重确认，否则只观察不发买入。
         deep_pullback, drawdown_pct, high_52w = self._deep_pullback_from_52w(tech_data)
@@ -569,10 +356,6 @@ class TimingEntryMixin:
             sector_status=sector,
             trigger_reason="；".join(conditions),
             confidence="高",
-            defensive_chase=(defensive_gate or None) and {
-                "evidence": defensive_gate["evidence"],
-                "projected_volume": defensive_gate["projected_volume"],
-            },
         )
 
     def _check_trend_continuation(self, code, name, tech_data, stop_loss, mode, sector) -> Optional[EntrySignal]:
@@ -732,10 +515,6 @@ class TimingEntryMixin:
         # 修复 BUG-E2: 涨停日放宽量能要求
         # A 股涨停日缩量是正常现象（卖方惜售），涨停本身就算强势确认
         # 检测涨停：当日涨幅 >= 涨停比例的 99.5%
-        try:
-            from ..loop.backtest_engine import get_limit_ratio
-        except ImportError:
-            from src.loop.backtest_engine import get_limit_ratio
         is_limit_up_today = False
         if prev_close > 0:
             chg_pct = (current - prev_close) / prev_close

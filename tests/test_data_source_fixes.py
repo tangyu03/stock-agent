@@ -264,7 +264,7 @@ class TestVoteWeights:
         assert result["vote_weights"]["north_bound"] == 1.0
 
     def test_disclosed_sources_keep_full_weight(self, monkeypatch):
-        """两融+1、龙虎榜+1（交易所披露口径）→ 加权 2.0 → 资金看多。"""
+        """两融+1、龙虎榜+1（交易所披露口径）→ 加权 2.0 → 机构看多。"""
         monkeypatch.setattr(_inst, "_fetch_margin_balance",
                             lambda c: {"vote": 1, "detail": "两融增加", "raw": {"as_of": datetime.now().date().isoformat()}})
         monkeypatch.setattr(_inst, "_fetch_lhb_institutional",
@@ -277,7 +277,7 @@ class TestVoteWeights:
         _inst._reset_institutional_state()
         result = _REAL_SCORE("603061")
         assert result["vote_score"] == 2
-        assert result["vote_label"] == "资金看多"
+        assert result["vote_label"] == "机构看多"
 
     def test_weight_annotation_in_push_template(self):
         """推送④资金行：主力/股东明细带（权重0.5）标注，人工可复核。"""
@@ -346,10 +346,10 @@ class TestObservationFundamental:
             "note": "买入: 无 | 卖出: 无",
         }
         title, content = _render_compact_observation_signal(data)
-        assert "9 基本面:业绩=" in content
-        assert "预亏" in content
-        assert "业绩雷" in content
-        assert "报告期2026-06" in content
+        assert "9 基本面:业绩=N/A" in content
+        assert "预亏" not in content
+        assert "业绩雷" not in content
+        assert "报告期2026-06" not in content
 
 # ============================================================
 # 5. 大宗交易：默认 akshare 路径崩溃降级 + 市场级缓存

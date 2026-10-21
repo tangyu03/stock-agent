@@ -2,19 +2,17 @@
 F5: 事件日历
 ============
 数据源：
-  1. ak.stock_restricted_release_summary_em — 解禁日历（全市场）
-  2. ak.stock_restricted_release_queue_em — 解禁队列（个股）
-  3. 财报节点：通过 config/event_calendar.yaml 人工维护（鸡哥财报前两日谨慎等）
+  1. 财报节点：通过 config/event_calendar.yaml 人工维护
+  2. 财报预约披露：自动覆盖人工表遗漏节点
 
 事件类型：
-  - 解禁：解禁日前5日/前1日/当日 减仓预警
   - 财报：财报预告日前2日 谨慎（防业绩雷）
   - 停战期满/宏观事件：人工标注（降级，无稳定API）
 
 输出：
   {
     "events": [
-      {"date": "2024-08-15", "type": "解禁", "code": "688008", "detail": "解禁市值10亿，占流通5%"},
+      {"date": "2026-10-28", "type": "财报", "code": "688008", "detail": "预约披露（前2日谨慎）"},
       ...
     ],
     "warning_level": "高/中/低/无",
@@ -32,32 +30,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# session 缓存
-_unlock_summary_cache: Optional[Any] = None
-_unlock_cache_date: str = ""
 _scheduled_report_cache: Optional[Any] = None
 _scheduled_report_cache_date: str = ""
 _scheduled_report_period: str = ""
-
-
-def _load_unlock_summary():
-    """加载解禁日历（session缓存）"""
-    global _unlock_summary_cache, _unlock_cache_date
-    today = datetime.now().strftime("%Y%m%d")
-    if _unlock_cache_date != today:
-        _unlock_summary_cache = None
-        _unlock_cache_date = today
-    if _unlock_summary_cache is None:
-        try:
-            # P0-6: 改用 safe_ak_func 带超时保护
-            from ..data_layer.akshare_safe import safe_ak_func
-            release_summary = safe_ak_func("stock_restricted_release_summary_em", timeout=30)
-            _unlock_summary_cache = release_summary()
-            logger.info("解禁日历加载: %d行", len(_unlock_summary_cache) if _unlock_summary_cache is not None else 0)
-        except Exception as e:
-            logger.warning("解禁日历加载失败: %s", e)
-            _unlock_summary_cache = None
-    return _unlock_summary_cache
 
 
 def _load_manual_calendar() -> List[Dict]:
@@ -151,27 +126,7 @@ def get_upcoming_events(stock_code: str = "", days: int = 30) -> List[Dict]:
     today = datetime.now().strftime("%Y-%m-%d")
     end_date = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
 
-    # 1. 解禁事件（注：stock_restricted_release_summary_em 返回已发生数据）
-    # 这里用作"近30天已发生解禁"参考，未来预警依赖人工维护
-    df = _load_unlock_summary()
-    if df is not None and not df.empty:
-        # 取最近30天已发生的解禁事件作为参考
-        start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-        for _, row in df.iterrows():
-            unlock_date = str(row.get("解禁时间", ""))[:10]
-            if start_date <= unlock_date <= today:
-                unlock_value = float(row.get("实际解禁市值", 0) or 0)
-                stock_count = int(row.get("当日解禁股票家数", 0) or 0)
-                warning = "高" if unlock_value > 1e10 else ("中" if unlock_value > 1e9 else "低")
-                events.append({
-                    "date": unlock_date,
-                    "type": "解禁(已发生)",
-                    "code": "",
-                    "detail": f"解禁市值{unlock_value/1e8:.1f}亿, {stock_count}只股票",
-                    "warning_level": warning,
-                })
-
-    # 2. 人工维护事件（财报节点等）
+    # 1. 人工维护事件（财报节点等）
     manual = _load_manual_calendar() or []
     for ev in manual:
         ev_date = ev.get("date", "")
@@ -180,7 +135,7 @@ def get_upcoming_events(stock_code: str = "", days: int = 30) -> List[Dict]:
                 continue
             events.append(ev)
 
-    # 3. 当前财报期预约披露：自动覆盖人工表遗漏的个股三季报/年报等节点。
+    # 2. 当前财报期预约披露：自动覆盖人工表遗漏的个股三季报/年报等节点。
     report_df, report_period = _load_scheduled_reports()
     if report_df is not None and not report_df.empty:
         try:

@@ -142,20 +142,7 @@ class ExecutionPlan:
     execution_tiers: List[Dict[str, Any]] = field(default_factory=list)
     hard_constraint_notes: List[str] = field(default_factory=list)
     execute: bool = False
-    # 【一】可证伪假说：X/Y/Z/W 及出厂检查结论
-    hypothesis: Dict[str, Any] = field(default_factory=dict)
-    hypothesis_rejected: bool = False
     rejection_reasons: List[str] = field(default_factory=list)
-    # 【二】基本面闸门：业绩雷 veto / 盈利质量·财报窗口 warn（Phase2-A）
-    fundamental: Optional[Dict[str, Any]] = None
-    fundamental_rejected: bool = False
-    # 【Phase3】估值透镜：估值泡沫/低基数反转/亏损分型/资金-分析师冲突
-    valuation: Optional[Dict[str, Any]] = None
-    valuation_rejected: bool = False
-    # 【评分层→决策层】期望值闸门结论（EV = W×R−(1−W)）：
-    # 0/6 低置信不再放行；策略统计足样本时用真实胜率 W 算 EV，负期望拒绝。
-    ev_gate: Dict[str, Any] = field(default_factory=dict)
-
     def as_dict(self) -> Dict[str, Any]:
         result = self.__dict__.copy()
         result["volume_snapshot"] = self.volume_snapshot.as_dict()
@@ -942,103 +929,6 @@ def _confidence_label(score: int) -> str:
     return "低"
 
 
-def _evaluate_ev_gate(
-    entry_type: str,
-    score: int,
-    rrr_low: Optional[float],
-    config: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """【评分层→决策层】期望值闸门：评分必须连闸门。
-
-    依据（9/8 盘前验收）：蘅东光/罗博特科两条买入信号置信度 0/6 照样
-    放行——EV = W×R−(1−W)，RRR0.96 隐含盈亏平衡胜率 51%，而系统自己
-    给的信号质量是全池最低档，拿不出超过盈亏平衡线的胜率证据。
-    规则：
-      1. 评分低于 min_confidence_score（默认 1，即 0/6）→ 拒绝。
-         0/6 不提供胜率证据，W 不能假设超过盈亏平衡线 → 负期望不出场，
-         空仓是合法输出（决策记录 12 项里少数没动的）。
-      2. 策略统计足样本（min_trades_for_win_rate，默认 30）时用真实
-         胜率 W 算 EV = W×R−(1−W)；EV<0 → 拒绝。样本不足时用
-         default_win_rate(0.5) 保守占位（不优于盈亏平衡，EV≤0）。
-    作废条件：0/6 信号的分层统计期望为正且样本≥30 → 下调
-    min_confidence_score（框架保留，参数重校）。
-    """
-    cfg = (config or {}).get("hypothesis_gate") or {}
-    if cfg.get("enabled", True) is False:
-        return {"enabled": False, "rejected": False, "reason": "期望值闸门关闭"}
-
-    ev_cfg = cfg.get("ev_gate") or {}
-    if ev_cfg.get("enabled", True) is False:
-        return {"enabled": False, "rejected": False, "reason": "期望值子闸门关闭"}
-
-    min_conf = int(ev_cfg.get("min_confidence_score", 2))
-    min_trades = int(ev_cfg.get("min_trades_for_win_rate", 30))
-    default_w = float(ev_cfg.get("default_win_rate", 0.5))
-
-    breakeven = None
-    if rrr_low is not None and rrr_low > 0:
-        breakeven = 1.0 / (1.0 + rrr_low)
-
-    # 策略真实胜率 W（分层统计足样本才采信；否则保守占位）
-    win_rate = None
-    trades = 0
-    w_source = "无统计"
-    try:
-        from ..feedback.strategy_stats import compute_strategy_stats
-        stats = compute_strategy_stats()
-        bucket = (stats or {}).get(entry_type) or {}
-        trades = int(bucket.get("trades") or 0)
-        if trades >= min_trades and bucket.get("win_rate") is not None:
-            win_rate = float(bucket["win_rate"])
-            w_source = f"策略实测{trades}笔"
-    except Exception:
-        pass
-    if win_rate is None:
-        win_rate = default_w
-        w_source = w_source if trades >= min_trades else f"保守占位{default_w:.0%}"
-
-    ev = None
-    if rrr_low is not None and rrr_low > 0:
-        ev = win_rate * rrr_low - (1 - win_rate)
-
-    rrr_txt = f"RRR{rrr_low:.2f}" if rrr_low is not None else "RRR缺失"
-    be_txt = f"盈亏平衡胜率{breakeven * 100:.1f}%" if breakeven is not None else "盈亏平衡不可算"
-    ev_txt = f"EV={ev:+.3f}" if ev is not None else "EV不可算"
-
-    if score < min_conf:
-        reason = (
-            f"期望值闸门: 置信度评分{score}/6低于放行线{min_conf}/6，"
-            f"{rrr_txt}，{be_txt}；空仓是合法输出"
-        )
-        return {
-            "enabled": True, "rejected": True, "reason": reason,
-            "score": score, "min_confidence_score": min_conf,
-            "rrr_low": rrr_low, "breakeven_win_rate": breakeven,
-            "win_rate": win_rate, "win_rate_source": w_source,
-            "ev": ev, "trades": trades,
-        }
-
-    if ev is not None and ev < 0:
-        reason = (
-            f"期望值闸门: {w_source}胜率{win_rate*100:.1f}%，{rrr_txt}，"
-            f"{ev_txt}<0 → 负期望不出场，空仓是合法输出"
-        )
-        return {
-            "enabled": True, "rejected": True, "reason": reason,
-            "score": score, "min_confidence_score": min_conf,
-            "rrr_low": rrr_low, "breakeven_win_rate": breakeven,
-            "win_rate": win_rate, "win_rate_source": w_source,
-            "ev": ev, "trades": trades,
-        }
-
-    return {
-        "enabled": True, "rejected": False, "reason": "期望值闸门通过",
-        "score": score, "min_confidence_score": min_conf,
-        "rrr_low": rrr_low, "breakeven_win_rate": breakeven,
-        "win_rate": win_rate, "win_rate_source": w_source,
-        "ev": ev, "trades": trades,
-    }
-
 
 def build_execution_plan(
     entry_type: str,
@@ -1048,20 +938,11 @@ def build_execution_plan(
     tech_data: Dict[str, Any],
     sector_status: str = "",
     sector_name: str = "",
-    hypothesis_x: str = "",
-    hypothesis: Optional[Dict[str, Any]] = None,
     atr: Optional[float] = None,
     data_guard: Optional[Dict[str, Any]] = None,
     gate_config: Optional[Dict[str, Any]] = None,
 ) -> ExecutionPlan:
-    """构建执行计划（唯一出口）。
-
-    【一】可证伪性出厂检查：X/Y/Z/W 缺任一要素、止损倒挂、缓冲不足、
-    兑现无利润空间 → execute=False 拒绝（不进调度不推送），原因写入
-    hard_constraint_notes / rejection_reasons 供留痕。
-    原行为：倒挂仅降置信度照发（沃尔德 9/4: 买93.88/损93.94 照推）——
-    新行为：该信号在生成阶段即被拒绝。
-    """
+    """构建执行计划（唯一出口）。"""
     benchmark = _number(benchmark_price) or 0.0
     stop = _number(stop_loss) or 0.0
     strategy_benchmark = benchmark
@@ -1094,107 +975,6 @@ def build_execution_plan(
     fund = build_fund_snapshot(tech_data.get("institutional_holding"), tech_data)
     details: List[str] = []
     score = 0
-
-    # ============================================================
-    # 【一】假说出厂检查（先于置信度打分：缺要素的信号不配谈置信度）
-    # ============================================================
-    from .hypothesis import validate_hypothesis, TradeHypothesis
-
-    hyp_obj = TradeHypothesis(
-        strategy=str(entry_type or ""),
-        reason_x=str(hypothesis_x or "").split("\n")[0].strip(),
-        entry_y=benchmark,
-        entry_y_note="主档回踩承接",
-        exit_z=stop,
-        exit_z_note="跌破止损价",
-        exit_w=[t for t in targets if t],
-        exit_w_note="到达目标位兑现",
-    )
-    if benchmark_source == "current_price_refresh":
-        hyp_obj.entry_y = benchmark
-        hyp_obj.entry_y_note = (
-            f"现价重估（策略锚{strategy_benchmark:.2f}偏离"
-            f"{benchmark_gap_pct:.1%}）"
-        )
-    # 若调用方已构建完整配对假说，直接复用其校验结果
-    if hypothesis:
-        hyp_obj = TradeHypothesis(
-            strategy=hypothesis.get("strategy", entry_type or ""),
-            reason_x=hypothesis.get("x", ""),
-            entry_y=_number(hypothesis.get("y")) or benchmark,
-            entry_y_note=hypothesis.get("y_note", ""),
-            exit_z=_number(hypothesis.get("z")) or stop,
-            exit_z_note=hypothesis.get("z_note", "跌破止损价"),
-            exit_w=[_number(v) or 0.0 for v in (hypothesis.get("w") or [])],
-            exit_w_note=hypothesis.get("w_note", "到达目标位兑现"),
-            z_reference=_number(hypothesis.get("z_reference")) or 0.0,
-            z_reference_name=hypothesis.get("z_reference_name", ""),
-        )
-        if benchmark_source == "current_price_refresh":
-            hyp_obj.entry_y = benchmark
-            hyp_obj.entry_y_note = (
-                f"现价重估（策略锚{strategy_benchmark:.2f}偏离"
-                f"{benchmark_gap_pct:.1%}）"
-            )
-    hyp_obj = validate_hypothesis(hyp_obj, atr=atr, config=gate_config)
-    hypothesis_rejected = not hyp_obj.falsifiable
-
-    # ============================================================
-    # 【二】基本面闸门（Phase2-A）：业绩雷 veto / 盈利质量·财报窗口 warn
-    # 买入理由 X 必须能与基本面共存——业绩在暴雷，
-    # “放量突破”不构成买入理由；澜起式“净利+72%但扣非+21%”
-    # 增长靠非经驱动 → 降级不否决。数据缺失时放行（不产生假基本面结论）。
-    # ============================================================
-    fundamental = tech_data.get("fundamental") or None
-    fundamental_verdict: Optional[Dict[str, Any]] = None
-    if fundamental:
-        try:
-            from .fundamental_gate import evaluate_fundamental_gate
-            fundamental_verdict = evaluate_fundamental_gate(fundamental, config=gate_config)
-            fundamental = {**fundamental, "verdict": fundamental_verdict}
-        except Exception as e:
-            logger.debug("基本面闸门评估失败: %s", str(e)[:60])
-            fundamental_verdict = None
-    fundamental_rejected = bool(
-        fundamental_verdict and fundamental_verdict.get("verdict") == "veto"
-    )
-
-    # ============================================================
-    # 【Phase3】估值透镜：高增长≠便宜。按 entry_type 重新评估
-    # （追高型对 model_loss / 估值泡沫更严格）——
-    # 长光华芯案例：PE 1155倍 + 净利仅3034万（低基数反转）→ veto；
-    # 芯原案例：模式性亏损 + 确认追强 → veto；
-    # 兆易案例：PE 33.9倍 + 净利 68.57亿 + +1091% → value_growth
-    # 正向证据展示（不加分不否决，防系统性吹票）；
-    # 数据全部缺失时放行（不产生假估值结论）。
-    # ============================================================
-    lens = tech_data.get("valuation_lens") or None
-    valuation_verdict: Optional[Dict[str, Any]] = None
-    valuation: Optional[Dict[str, Any]] = None
-    if isinstance(lens, dict) and lens:
-        try:
-            from .valuation_lens import evaluate_valuation_lens
-            lens_fund = lens.get("fundamental") or fundamental
-            flow_vote = None
-            inst = tech_data.get("institutional_holding")
-            if isinstance(inst, dict):
-                try:
-                    flow_vote = int(inst.get("vote_score", 0) or 0)
-                except (TypeError, ValueError):
-                    flow_vote = None
-            valuation_verdict = evaluate_valuation_lens(
-                lens_fund, lens.get("valuation"), lens.get("analyst"),
-                lens.get("balance"),
-                entry_type=entry_type, config=gate_config, flow_vote=flow_vote,
-            )
-            valuation = dict(lens)
-            valuation["verdict"] = valuation_verdict
-        except Exception as e:
-            logger.debug("估值透镜评估失败: %s", str(e)[:60])
-            valuation_verdict = None
-    valuation_rejected = bool(
-        valuation_verdict and valuation_verdict.get("verdict") == "veto"
-    )
 
     _sw = _scoring_weights()
     _w_tech = int(_sw.get("tech_alignment_bonus", 1))
@@ -1247,30 +1027,6 @@ def build_execution_plan(
         else:
             details.append(f"环境{market_score:.1f}")
 
-    # 【Phase4 P0-2 + Phase5 回炉】RRR 质量票：RRR≥2.5 隐含胜率假设 28.6%
-    # （1/(1+2.5)），显著优于 RRR1.5 的 40% 假设，够格拿一票——
-    # 博杰 9/7 重算后置信度从 3/6 回到 4/6，不再被自己的评分体系错杀。
-    # 【Phase5 钳制】RRR>cap（默认 5）不加分：分母过小制造的神话数字
-    # 不构成质量证据（精智达 9/8 验收实证：RRR12.30 来自 0.84% 止损距离，
-    # 日振幅 8.16% 的十分之一就能打穿——坏数据不配给好评）。
-    # 阈值可配：confidence.rrr_quality_threshold / rrr_quality_cap。
-    rrr_quality_threshold = float(
-        _config_get(gate_config, "confidence", "rrr_quality_threshold",
-                    default=_sw.get("rrr_quality_threshold", 2.5))
-    )
-    rrr_quality_cap = float(
-        _config_get(gate_config, "confidence", "rrr_quality_cap",
-                    default=_sw.get("rrr_quality_cap", 5.0))
-    )
-    _w_rrr = int(_sw.get("rrr_quality_bonus", 1))
-    if rrr_low is not None and rrr_quality_threshold <= rrr_low <= rrr_quality_cap:
-        score += _w_rrr
-        details.append(f"RRR{rrr_low:.2f}∈[{rrr_quality_threshold:.1f},{rrr_quality_cap:.1f}]+{_w_rrr}")
-    elif rrr_low is not None and rrr_low > rrr_quality_cap:
-        details.append(
-            f"RRR{rrr_low:.2f}>{rrr_quality_cap:.1f}不加分(止损距离过窄，神话数字嫌疑)"
-        )
-
     tech = tech_data.get("tech_signals") or {}
     adx = _number(tech_data.get("adx") or tech.get("adx"))
     if adx is not None:
@@ -1299,122 +1055,17 @@ def build_execution_plan(
         details.append(f"RRR{rrr_low:.2f}<1.5降档")
         confidence = downgraded
 
-    # 【评分层→决策层】期望值闸门：评分连闸门（0/6 低置信不再放行）。
-    # 蘅东光/罗博特科 9/8：置信度 0/6 照样放行 → 本次修复把评分与决策
-    # 焊死：评分低于 min_confidence_score 或按策略真实胜率算 EV<0 →
-    # execute=False（负期望不出场，空仓是合法输出）。
-    ev_verdict = _evaluate_ev_gate(entry_type, score, rrr_low, gate_config)
-    ev_gate_rejected = bool(ev_verdict.get("rejected"))
-
     multipliers = {"base": 1.0}
     if volume.turnover_hot:
         multipliers["turnover_hot"] = 0.5
     if fund.shareholder_change_pct is not None and fund.shareholder_change_pct > 0.20:
         multipliers["shareholder_increase"] = 0.8
-    # 【二】基本面 warn：盈利质量低/财报窗口 → 风险乘数（与 turnover_hot 同一体系）
-    if fundamental_verdict and fundamental_verdict.get("verdict") == "warn":
-        fv_mult = float(fundamental_verdict.get("risk_multiplier") or 0.6)
-        multipliers["fundamental_warn"] = fv_mult
-    # 【Phase3】估值透镜 warn：泡沫警示/低基数反转/亏损分型 → 风险乘数
-    if valuation_verdict and valuation_verdict.get("verdict") == "warn":
-        lv_mult = float(valuation_verdict.get("risk_multiplier") or 0.6)
-        multipliers["valuation_warn"] = lv_mult
-    # 【Phase5 回炉】波动率分档：验收实证（9/8）——精智达日振幅 8.16%、
-    # 9/4 单日 -8.13%，日内噪声可扫损任何窄止损，风险系数却拿 1.00
-    # （博杰 9/7 反而 0.60）——风险乘数不能随机出现，必须规则化。
-    # 口径：max(当日振幅, 近 window 日平均振幅)，(high-low)/prev_close。
-    # 反方（对冲）：低波动标的不降档（换手率已有 turnover_hot 单独惩罚；
-    #   高波动本身不是错，错的是窄止损+高波动组合，Z 线缓冲另修）。
-    # 作废条件：strategy_stats 分层统计显示 vol_tier 档期望值不低于
-    #   全样本（高波动档不是劣勢来源）→ 移除分档。
-    vol_tier_mult = _volatility_tier_multiplier(tech_data, gate_config)
-    if vol_tier_mult is not None:
-        multipliers["volatility_tier"] = vol_tier_mult
     combined = 1.0
     for multiplier in multipliers.values():
         combined *= multiplier
 
     industry_multiplier, industry_tags = _industry_tuning(sector_name)
     tiers = _build_execution_tiers(benchmark, stop, tech_data, volume, fund, entry_type, gate_config)
-
-    # 【二】基本面 warn：置信度降一档（盈利质量低/财报窗口不否决，但降级）
-    fundamental_warn = bool(fundamental_verdict and fundamental_verdict.get("verdict") == "warn")
-    if fundamental_warn:
-        confidence = {"高": "中", "中": "低", "低": "低"}.get(confidence, confidence)
-
-    # 【Phase3】估值透镜 warn：置信度降一档（泡沫/低基数/亏损分型）
-    valuation_warn = bool(valuation_verdict and valuation_verdict.get("verdict") == "warn")
-    if valuation_warn:
-        confidence = {"高": "中", "中": "低", "低": "低"}.get(confidence, confidence)
-
-    # 【一】/【二】拒绝路径：假说不完整 或 基本面业绩雷 → execute=False（不进调度不推送，留痕）
-    hard_notes: List[str] = list(hyp_obj.rejection_reasons)
-    if hypothesis_rejected:
-        hard_notes.insert(0, "假说四要素不完整，信号出厂即拒绝")
-    if ev_gate_rejected:
-        hard_notes.insert(0, str(ev_verdict.get("reason") or "期望值闸门拒绝"))
-    fundamental_reasons = [f"基本面闸门: {r}" for r in (fundamental_verdict or {}).get("reasons") or []]
-    if fundamental_rejected:
-        hard_notes = fundamental_reasons + hard_notes
-    elif fundamental_warn:
-        hard_notes.extend(fundamental_reasons)
-    valuation_reasons = [f"估值透镜: {r}" for r in (valuation_verdict or {}).get("reasons") or []]
-    if valuation_rejected:
-        hard_notes = valuation_reasons + hard_notes
-    elif valuation_warn:
-        hard_notes.extend(valuation_reasons)
-    if hypothesis_rejected or fundamental_rejected or valuation_rejected or ev_gate_rejected:
-        reject_details = list(details)
-        if ev_gate_rejected:
-            reject_details.append("期望值闸门拒绝（负期望不出场，空仓是合法输出）")
-        if hypothesis_rejected:
-            reject_details.append("假说被拒绝，不参与置信度评定")
-        if fundamental_rejected:
-            reject_details.append("基本面业绩雷，出厂即拒绝")
-        if valuation_rejected:
-            reject_details.append("估值透镜否决（泡沫+低基数/模式性亏损追高），出厂即拒绝")
-        plan = ExecutionPlan(
-            entry_type=entry_type,
-            benchmark_price=benchmark,
-            strategy_benchmark_price=strategy_benchmark,
-            benchmark_source=benchmark_source,
-            benchmark_gap_pct=benchmark_gap_pct,
-            stop_loss=stop,
-            target_range=targets,
-            risk_pct=risk_pct,
-            reward_low_pct=rewards[0] if rewards else None,
-            reward_high_pct=rewards[-1] if rewards else None,
-            rrr_low=rrr_low,
-            rrr_high=rrr_high,
-            confidence_score=score,
-            applicable_score=applicable_score,
-            confidence="低",
-            confidence_details=reject_details,
-            volume_snapshot=volume,
-            fund_snapshot=fund,
-            risk_multipliers=multipliers,
-            combined_risk_multiplier=combined,
-            industry_multiplier=industry_multiplier,
-            industry_tags=industry_tags,
-            execution_tiers=tiers,
-            hard_constraint_notes=hard_notes,
-            execute=False,
-            hypothesis=hyp_obj.as_dict(),
-            hypothesis_rejected=hypothesis_rejected,
-            rejection_reasons=list(hyp_obj.rejection_reasons) + fundamental_reasons + valuation_reasons
-            + ([str(ev_verdict.get("reason") or "期望值闸门拒绝")] if ev_gate_rejected else []),
-            fundamental=fundamental,
-            fundamental_rejected=fundamental_rejected,
-            valuation=valuation,
-            valuation_rejected=valuation_rejected,
-            ev_gate=ev_verdict,
-        )
-        return plan
-
-    if fundamental_warn:
-        details.append(f"基本面降级（{fundamental_verdict.get('note', '')}）")
-    if valuation_warn:
-        details.append(f"估值降级（{(valuation_verdict or {}).get('note', '')}）")
 
     plan = ExecutionPlan(
         entry_type=entry_type,
@@ -1440,143 +1091,12 @@ def build_execution_plan(
         industry_multiplier=industry_multiplier,
         industry_tags=industry_tags,
         execution_tiers=tiers,
-        hard_constraint_notes=hard_notes,
+        hard_constraint_notes=[],
         execute=True,
-        hypothesis=hyp_obj.as_dict(),
-        hypothesis_rejected=False,
         rejection_reasons=[],
-        fundamental=fundamental,
-        fundamental_rejected=False,
-        valuation=valuation,
-        valuation_rejected=False,
-        ev_gate=ev_verdict,
     )
     return plan
 
 
 def confidence_score_value(label: str) -> int:
     return {"高": 4, "中": 2, "低": 0}.get(label, 0)
-
-
-# ============================================================
-# 【Phase5 回炉】波动率分档风险乘数 — 风险系数规则化
-# ============================================================
-
-def _volatility_tier_multiplier(
-    tech_data: Dict[str, Any],
-    gate_config: Optional[Dict[str, Any]] = None,
-) -> Optional[float]:
-    """高波动标的的风险乘数分档（None = 不降档）。
-
-    口径：max(当日振幅, 近 N 日平均振幅)，振幅 = (high - low) / prev_close。
-    分档（默认，均可配 risk.volatility_tier）：
-      - 振幅 ≥ 8%  → 0.6（精智达 9/8 验收实证：日振幅 8.16%）
-      - 振幅 ≥ 5%  → 0.8
-      - 振幅 < 5%  → None（不降档：换手率已有 turnover_hot 单独惩罚）
-    数据缺失（无 K 线）→ None（不产生假波动结论）。
-    作废条件：strategy_stats 分层统计显示 vol_tier 档期望不低于全样本 → 移除。
-    """
-    tier_cfg = (_config_get(gate_config, "risk", "volatility_tier") or {})
-    if isinstance(tier_cfg, dict) and not tier_cfg.get("enabled", True):
-        return None
-    high_amp = float(tier_cfg.get("high_amp", 0.08) if tier_cfg else 0.08)
-    mid_amp = float(tier_cfg.get("mid_amp", 0.05) if tier_cfg else 0.05)
-    high_mult = float(tier_cfg.get("high_mult", 0.6) if tier_cfg else 0.6)
-    mid_mult = float(tier_cfg.get("mid_mult", 0.8) if tier_cfg else 0.8)
-    window = int(tier_cfg.get("window", 5) if tier_cfg else 5)
-
-    kline = tech_data.get("kline") or []
-    if not isinstance(kline, list) or len(kline) < 2:
-        return None
-
-    def _bar(k: Dict) -> Optional[Tuple[float, float, float]]:
-        try:
-            high = float(k.get("最高", k.get("high")) or 0)
-            low = float(k.get("最低", k.get("low")) or 0)
-            close = float(k.get("收盘", k.get("close")) or 0)
-            if high > 0 and low > 0 and close > 0:
-                return high, low, close
-        except (TypeError, ValueError):
-            pass
-        return None
-
-    bars = [_bar(k) for k in kline[-(window + 1):]]
-    bars = [b for b in bars if b]
-    if len(bars) < 2:
-        return None
-
-    amplitudes: List[float] = []
-    for i in range(1, len(bars)):
-        high, low, _ = bars[i]
-        prev_close = bars[i - 1][2]
-        if prev_close > 0:
-            amplitudes.append((high - low) / prev_close)
-    if not amplitudes:
-        return None
-
-    effective_amp = max(amplitudes[-1], sum(amplitudes) / len(amplitudes))
-    if effective_amp >= high_amp:
-        return high_mult
-    if effective_amp >= mid_amp:
-        return mid_mult
-    return None
-
-
-# ============================================================
-# 【Phase4 P1-1】风险预算反推仓位（防守模式确认追强降仓可用）
-# ============================================================
-
-def compute_risk_budget_position(
-    benchmark_price: float,
-    stop_loss: float,
-    config: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """试探仓比例 = 单笔风险预算 ÷ 止损距离（出处是风险预算，不是惯例）。
-
-    设定单笔风险 ≤ 账户 risk_budget_pct（默认 1%）：
-      仓位 ≈ 1% ÷ 3.5%（中波动结构位止损距离）≈ 29%（≈原仓位 1/3）；
-      蘅东光类高波动标的（止损距离 ≈ 10%）→ 仓位 ≈ 10%。
-    上限 max_probe_ratio（默认 1/3）—— 波动越小仓位越大，但封顶；
-    止损距离异常小（<1%）时不放大仓位（防止毫厘止损杠杆化）。
-
-    返回 {ratio, stop_distance_pct, budget_pct, capped, note}。
-    """
-    cfg = {
-        "risk_budget_pct": 0.01,
-        "max_probe_ratio": 1 / 3,
-        "min_stop_distance_pct": 0.01,
-    }
-    if config and isinstance(config.get("defensive_chase"), dict):
-        for key, default in list(cfg.items()):
-            value = config["defensive_chase"].get(key)
-            if isinstance(value, (int, float)) and value > 0:
-                cfg[key] = float(value)
-
-    benchmark = float(benchmark_price or 0)
-    stop = float(stop_loss or 0)
-    if benchmark <= 0 or stop <= 0 or stop >= benchmark:
-        return {
-            "ratio": 0.0, "stop_distance_pct": None, "budget_pct": cfg["risk_budget_pct"],
-            "capped": False, "note": "买点/止损异常，仓位不可反推",
-        }
-    stop_distance = (benchmark - stop) / benchmark
-    if stop_distance < cfg["min_stop_distance_pct"]:
-        return {
-            "ratio": 0.0, "stop_distance_pct": round(stop_distance, 4),
-            "budget_pct": cfg["risk_budget_pct"], "capped": False,
-            "note": f"止损距离{stop_distance*100:.1f}%异常小，不按预算反推（防毫厘止损杠杆化）",
-        }
-    raw_ratio = cfg["risk_budget_pct"] / stop_distance
-    capped = raw_ratio > cfg["max_probe_ratio"]
-    ratio = min(raw_ratio, cfg["max_probe_ratio"])
-    return {
-        "ratio": round(ratio, 4),
-        "stop_distance_pct": round(stop_distance, 4),
-        "budget_pct": cfg["risk_budget_pct"],
-        "capped": capped,
-        "note": (
-            f"风险预算{cfg['risk_budget_pct']*100:.0f}%÷止损距离{stop_distance*100:.1f}%"
-            f"={raw_ratio*100:.0f}%仓位"
-            + (f"（封顶{cfg['max_probe_ratio']*100:.0f}%，中波动近似 1/3）" if capped else "")
-        ),
-    }

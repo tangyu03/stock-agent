@@ -73,7 +73,6 @@ def main():
         logger.error("无效日期: %s", d)
         sys.exit(2)
 
-    # 非交易日跳过（周末；与 s1_daily_snapshot 一致）
     if target.weekday() >= 5:
         logger.info("非交易日（周末），跳过构建 %s", target.isoformat())
         sys.exit(0)

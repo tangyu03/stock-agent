@@ -71,7 +71,6 @@ def test_ma5_pressure_signal_contains_ma10_buyback(monkeypatch):
     }
     engine = TimingEngine(backtest_mode=False)
     monkeypatch.setattr(engine, "_fetch_tech_data", lambda code, mode="defend": tech)
-    monkeypatch.setattr(engine, "_get_paired_position", lambda code: None)
     signals = engine.check_exit_signals("688028", "测试", "defend")
     signal = next(item for item in signals if item.exit_type == "MA5压制")
     assert "接回参考MA10=101.00" in signal.reason
@@ -150,21 +149,29 @@ def test_t0_reverse_full_on_extended_heavy_volume():
 
 
 def _break_tech(**overrides):
-    from tests.test_paired_exits import _exit_tech, _position
-
-    tech = _exit_tech(current_price=83.0, volume_ratio=0.5)
+    tech = {
+        "current_price": 82.0,
+        "ma5": 81.0,
+        "ma10": 88.0,
+        "ma20": 95.0,
+        "change_pct": -3.0,
+        "volume_ratio": 0.5,
+        "kline": _kline(82.0),
+        "tech_signals": {},
+    }
     tech.update(overrides)
-    position = _position(paired_z=84.0, z_reference=85.0)
-    return tech, position
+    return tech
 
 
 def test_breakdown_with_complete_sector_data_labels_active(monkeypatch):
     from src.analyzers.timing_engine import TimingEngine
 
-    tech, position = _break_tech(change_pct=-3.0, sector_change_pct=-2.0)
+    tech = _break_tech(change_pct=-3.0, sector_change_pct=-2.0)
     engine = TimingEngine(backtest_mode=False)
     monkeypatch.setattr(engine, "_fetch_tech_data", lambda code, mode="defend": tech)
-    monkeypatch.setattr(engine, "_get_paired_position", lambda code: position)
+    engine.calculate_stop_loss = lambda code, data=None: SimpleNamespace(
+        stop_loss_price=84.0, chosen_support=88.0,
+    )
 
     signals = engine.check_exit_signals("688028", "测试", "defend", sector_change_pct=-2.0)
     breakdown = next(item for item in signals if "破位" in item.exit_type)
@@ -174,10 +181,12 @@ def test_breakdown_with_complete_sector_data_labels_active(monkeypatch):
 def test_breakdown_without_sector_data_stays_unknown(monkeypatch):
     from src.analyzers.timing_engine import TimingEngine
 
-    tech, position = _break_tech(change_pct=-3.0)
+    tech = _break_tech(change_pct=-3.0)
     engine = TimingEngine(backtest_mode=False)
     monkeypatch.setattr(engine, "_fetch_tech_data", lambda code, mode="defend": tech)
-    monkeypatch.setattr(engine, "_get_paired_position", lambda code: position)
+    engine.calculate_stop_loss = lambda code, data=None: SimpleNamespace(
+        stop_loss_price=84.0, chosen_support=88.0,
+    )
 
     signals = engine.check_exit_signals("688028", "测试", "defend")
     breakdown = next(item for item in signals if "破位" in item.exit_type)

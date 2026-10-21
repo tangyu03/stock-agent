@@ -239,14 +239,14 @@ def test_bse_missing_data_neutralizes_bullish_votes(monkeypatch):
     result = inst.score_institutional_holding("920045", turnover_available=False)
 
     assert result["vote_score"] == 0
-    assert result["vote_label"] == "资金数据不足(降权)"
+    assert result["vote_label"] == "机构数据不足(降权)"
     assert result["data_sufficient"] is False
     assert result["downweighted"] is True
     assert result["votes"]["main_force"]["raw"].get("uncovered_market") is None
 
 
 def test_low_coverage_directional_vote_relabeled(monkeypatch):
-    """残缺投票：仅1源覆盖(两融-1) → 不得标"资金偏空"，降级"覆盖1/4"。"""
+    """残缺投票：仅1源覆盖(两融-1) → 不得标"机构偏空"，降级"覆盖1/4"。"""
     import importlib
     import src.analyzers.institutional_scorer as inst
     importlib.reload(inst)

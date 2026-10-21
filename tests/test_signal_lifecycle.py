@@ -79,13 +79,12 @@ class TestBreakoutEventBoundary:
         assert len(signals) == 1
         sig = signals[0]
         assert sig.entry_type == "价量突破"
-        assert sig.hypothesis.get("z", 0) < sig.hypothesis.get("y", 0)   # Z < Y
         assert sig.event_id                                   # 事件已注册
         # 事件已进入生命周期（born → valid）
         events = te._lifecycle.get_active_events("688028")
         assert len(events) == 1
-        assert events[0].entry_price == sig.hypothesis["y"]
-        assert events[0].stop_loss == sig.hypothesis["z"]
+        assert events[0].entry_price == sig.benchmark_price
+        assert events[0].stop_loss == sig.stop_loss
 
     def test_no_replay_on_second_day(self, monkeypatch):
         """9/4 沃尔德场景：事件边界拦下（昨收已在昨日MA25上方，非突破当日）"""
@@ -162,7 +161,7 @@ class TestLifecycleInvalidation:
         notices = te.evaluate_signal_events("688028", current_price=86.5, sector_status="rotational")
         assert len(notices) == 1
         assert notices[0]["exit_type"] == "信号作废"
-        assert "回踩失败已撤单" in notices[0]["reason"]
+        assert "收盘86.50跌破止损线88.80" in notices[0]["reason"]
         assert "撤单" in notices[0]["reason"]
         assert te._lifecycle.get_active_events("688028") == []   # 已失效
 
@@ -204,7 +203,7 @@ class TestLifecycleInvalidation:
             "688028", "沃尔德", "价量突破",
             breakout_level=88.0, entry_price=89.50, stop_loss=83.50,
             target_low=96.0, target_high=102.0,
-            hypothesis={"x": "放量突破MA25"},
+            driver={},
         )
         notices = lifecycle.evaluate_events(
             "688028", current_price=90.0, day_high=91.0,
@@ -218,7 +217,7 @@ class TestLifecycleInvalidation:
             "688029", "博杰", "价量突破",
             breakout_level=88.0, entry_price=102.77, stop_loss=91.44,
             target_low=112.89, target_high=120.21,
-            hypothesis={"x": "放量突破MA25"},
+            driver={},
         )
         notices = lifecycle.evaluate_events(
             "688029", current_price=100.91, day_high=104.0,
@@ -315,7 +314,7 @@ class TestLifecycleInvalidation:
 
         assert lifecycle.mark_scheduler_rejected(
             event.event_id, "688521", "恐慌抄底",
-            "调度拒绝撤单：期望值闸门拦截",
+            "调度拒绝撤单：评分闸门拦截",
         ) is True
         assert store.events[event.event_id].status == "expired"
         assert reentry_usage("688521", 2, store=store)["used"] == 0
@@ -333,7 +332,7 @@ class TestLifecycleInvalidation:
         event = lifecycle.register_event(
             stock_code="688028", stock_name="沃尔德", entry_type="价量突破",
             breakout_level=88.0, entry_price=89.5, stop_loss=83.5,
-            target_low=96.0, target_high=102.0, hypothesis={"x": "放量突破MA25"},
+            target_low=96.0, target_high=102.0, driver={},
         )
         # 第 6 天 → 过期
         future = date.fromisoformat(event.born_date) + timedelta(days=6)
@@ -365,9 +364,8 @@ class TestAudienceRouting:
             "entry_type": "价量突破",
             "trigger_price": 89.5,
             "confidence": "高",
-            "hypothesis": {
-                "x": "放量突破MA25", "y": 89.5, "z": 83.5, "w": [96.0, 102.0],
-                "sentence": "因为放量突破MA25，所以在89.50买入…",
+            "driver": {
+                "label": "放量突破MA25", "evidence": "站上MA25",
             },
             "execution_plan": {
                 "execute": True,
@@ -389,7 +387,7 @@ class TestAudienceRouting:
         advice = scheduled["position_advice"][0]
         assert advice.audience == "holding"
         assert advice.position_action == "加仓"                # 四选一
-        assert "假说" in advice.schedule_note
+        assert "放量突破MA25" in advice.schedule_note
 
     def test_held_retreating_sector_becomes_no_add(self):
         from src.decision.live_scheduler import schedule_live_signals
@@ -467,7 +465,7 @@ class TestForwardOnlyState:
             "002975", "博杰股份", "价量突破",
             breakout_level=99.39, entry_price=102.77, stop_loss=99.39,
             target_low=112.89, target_high=120.21,
-            hypothesis={"x": "放量突破MA25"},
+            driver={},
         )
         notices = lifecycle.evaluate_events("002975", current_price=100.43)
 
@@ -484,7 +482,7 @@ class TestForwardOnlyState:
             "688028", "沃尔德", "价量突破",
             breakout_level=88.0, entry_price=89.50, stop_loss=83.50,
             target_low=96.0, target_high=102.0,
-            hypothesis={"x": "放量突破MA25"},
+            driver={},
         )
         notices = lifecycle.evaluate_events("688028", current_price=104.0)
 
@@ -503,7 +501,7 @@ class TestForwardOnlyState:
             "688028", "沃尔德", "价量突破",
             breakout_level=88.0, entry_price=89.50, stop_loss=83.50,
             target_low=96.0, target_high=102.0,
-            hypothesis={"x": "放量突破MA25"},
+            driver={},
         )
         lifecycle.freeze(event.event_id, "技术-1（放量阴线），冻结")
         future = date.fromisoformat(event.born_date) + _timedelta(days=6)

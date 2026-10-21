@@ -18,7 +18,6 @@ def test_upcoming_events_include_auto_scheduled_reports(monkeypatch):
             "实际披露": None,
         }
     ])
-    monkeypatch.setattr(calendar, "_load_unlock_summary", lambda: None)
     monkeypatch.setattr(calendar, "_load_scheduled_reports", lambda now=None: (frame, "2026三季"))
 
     events = calendar.get_upcoming_events("688008", days=30)
@@ -33,7 +32,6 @@ def test_upcoming_events_include_auto_scheduled_reports(monkeypatch):
 
 
 def test_upcoming_events_include_manual_yaml_calendar(monkeypatch):
-    monkeypatch.setattr(calendar, "_load_unlock_summary", lambda: None)
     monkeypatch.setattr(calendar, "_load_scheduled_reports", lambda now=None: (None, "2026三季"))
 
     events = calendar.get_upcoming_events("688630", days=30)

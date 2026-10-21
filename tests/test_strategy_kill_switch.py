@@ -42,7 +42,6 @@ def _closed_trade(strategy, pnl, reviewed="unreviewed", day=1):
         "stock_code": "688028",
         "strategy": strategy,
         "pnl_pct": pnl,
-        "zw_triggered": "W" if pnl > 0 else "Z",
         "review_outcome": reviewed,
         "entry_date": f"2026-08-{day:02d}",
         "exit_date": f"2026-08-{day + 3:02d}",
@@ -122,8 +121,6 @@ class TestStrategyStats:
                 signal_data={
                     "entry_type": "套利低吸", "trigger_price": 100.0,
                     "stop_loss": 95.0, "target_price": 103.0,
-                    "hypothesis": {"x": "周线趋势低吸", "y": 100, "z": 95, "w": [103],
-                                   "sentence": "因为周线趋势低吸…"},
                 },
                 shares=100, user_action="executed", actual_price=100.0,
             )
@@ -186,10 +183,10 @@ def compute_stats_lite(trades):
     return compute_strategy_stats(trades)["价量突破"]
 
 
-class TestTradeLogHypothesis:
-    """【六】四行日志落库：假说原文 + 配对 Z/W（推送时写入）"""
+class TestTradeLogAudit:
+    """【六】通用交易日志与回执联动"""
 
-    def test_buy_log_records_full_hypothesis(self, tmp_db):
+    def test_buy_log_records_generic_audit_fields(self, tmp_db):
         from src.feedback.trade_logger import get_trade_logger
         tl = get_trade_logger()
         log_id = tl.log_signal(
@@ -197,30 +194,22 @@ class TestTradeLogHypothesis:
             signal_data={
                 "entry_type": "价量突破", "trigger_price": 89.5,
                 "stop_loss": 83.5, "target_price": 96.0,
-                "paired_z": 83.5, "paired_w_low": 96.0, "paired_w_high": 102.0,
                 "event_id": "evt-test-1",
-                "hypothesis": {
-                    "x": "放量突破MA25", "y": 89.5, "z": 83.5, "w": [96.0, 102.0],
-                    "sentence": "因为放量突破MA25，所以在89.50买入…",
-                },
+                "driver": {"label": "放量突破MA25", "evidence": "站上MA25"},
             },
-            shares=100, note="调度备注 | 假说: 因为放量突破MA25…",
+            shares=100, note="调度备注",
         )
         assert log_id is not None
         with tmp_db.get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM trade_logs WHERE id=?", (log_id,))
             row = dict(cursor.fetchone())
-        assert row["hypothesis_x"] == "放量突破MA25"
-        assert row["paired_z"] == 83.5
-        assert row["paired_w_low"] == 96.0
-        assert row["paired_w_high"] == 102.0
         assert row["event_id"] == "evt-test-1"
         assert row["stop_loss"] == 83.5          # 修复：原实现从未写入
         assert row["target_price"] == 96.0
 
     def test_sell_receipt_links_exit_to_position(self, tmp_db):
-        """卖出回执（update_action）→ 自动回填开仓行 exit_price/pnl_pct/zw_triggered"""
+        """卖出回执（update_action）→ 自动回填开仓行离场结果"""
         from src.feedback.trade_logger import get_trade_logger
         tl = get_trade_logger()
         buy_id = tl.log_signal(
@@ -228,8 +217,6 @@ class TestTradeLogHypothesis:
             signal_data={
                 "entry_type": "价量突破", "trigger_price": 89.5,
                 "stop_loss": 83.5, "target_price": 96.0,
-                "paired_z": 83.5, "paired_w_low": 96.0, "paired_w_high": 102.0,
-                "hypothesis": {"x": "放量突破", "y": 89.5, "z": 83.5, "w": [96.0, 102.0]},
             },
             shares=100, user_action="executed", actual_price=89.5,
         )
@@ -245,7 +232,7 @@ class TestTradeLogHypothesis:
             cursor.execute("SELECT * FROM trade_logs WHERE id=?", (buy_id,))
             row = dict(cursor.fetchone())
         assert row["exit_price"] == 98.0
-        assert row["zw_triggered"] == "W"                    # 策略兑现 → W
+        assert row["exit_reason"] == "策略兑现"
         assert abs(row["pnl_pct"] - round((98.0 - 89.5) / 89.5 * 100, 2)) < 0.01
         assert row["exit_date"]
 
@@ -267,7 +254,7 @@ class TestTradeLogHypothesis:
         assert row["review_outcome"] == "logic_right"
         assert "突破有效" in row["review_note"]
 
-    def test_open_position_provides_paired_hypothesis(self, tmp_db):
+    def test_open_position_provides_generic_position(self, tmp_db):
         from src.feedback.trade_logger import get_trade_logger
         tl = get_trade_logger()
         tl.log_signal(
@@ -275,42 +262,11 @@ class TestTradeLogHypothesis:
             signal_data={
                 "entry_type": "价量突破", "trigger_price": 89.5,
                 "stop_loss": 83.5, "target_price": 96.0,
-                "paired_z": 83.5, "paired_w_low": 96.0, "paired_w_high": 102.0,
-                "z_reference": 88.0,
-                "hypothesis": {"x": "放量突破", "y": 89.5, "z": 83.5, "w": [96.0, 102.0]},
             },
             shares=100, user_action="executed", actual_price=89.5,
         )
         position = tl.get_open_position("688028")
         assert position is not None
         assert position["entry_type"] == "价量突破"
-        assert position["paired_z"] == 83.5
-        assert position["paired_w_low"] == 96.0
-        assert position["z_reference"] == 88.0
         # 无持仓
         assert tl.get_open_position("688999") is None
-
-
-class TestRejectionLogging:
-    """【一】出厂拒绝留痕表"""
-
-    def test_rejection_is_logged_for_audit(self, tmp_db):
-        from src.feedback.trade_logger import get_trade_logger
-        tl = get_trade_logger()
-        tl.log_rejection(
-            stock_code="688028", stock_name="沃尔德", entry_type="价量突破",
-            reasons=["止损倒挂(Z>=Y): 认错价93.94高于买点93.88，假说自相矛盾"],
-            detail={
-                "benchmark_price": 93.88, "stop_loss": 93.94,
-                "target_range": [113.0],
-                "hypothesis": {"x": "放量突破MA25", "y": 93.88, "z": 93.94, "w": [113.0]},
-            },
-        )
-        with tmp_db.get_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM signal_rejections ORDER BY id DESC")
-            row = dict(cursor.fetchone())
-        assert row["stock_code"] == "688028"
-        assert row["entry_type"] == "价量突破"
-        assert "止损倒挂" in row["reason"]
-        assert row["missing_fields"] == ""       # 四要素都在，败在不变式

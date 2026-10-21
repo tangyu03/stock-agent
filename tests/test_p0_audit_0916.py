@@ -8,72 +8,6 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
-def test_gray_zone_outputs_reduce_not_blank(monkeypatch):
-    """中际旭创 9-14 收盘 873 落在结构位/止损灰区时必须有唯一指令。"""
-    from src.analyzers.timing_engine import get_backtest_timing_engine
-
-    te = get_backtest_timing_engine()
-    tech = {
-        "current_price": 873.00,
-        "volume_ratio": 1.00,
-        "ma5": 880.0,
-        "ma10": 875.0,
-        "ma20": 870.0,
-        "kline": [
-            {"close": 873.0, "open": 874.0, "high": 876.0, "low": 870.0,
-             "volume": 1000}
-            for _ in range(30)
-        ],
-        "tech_signals": {"vote": "中性", "vote_score": 0},
-        "kline_pattern": [],
-    }
-    paired = {
-        "entry_type": "价量突破",
-        "paired_z": 817.99,
-        "z_reference": 889.12,
-    }
-    monkeypatch.setattr(te, "_fetch_tech_data", lambda code, mode: tech)
-    monkeypatch.setattr(te, "_get_paired_position", lambda code: paired)
-
-    signals = te.check_exit_signals("300308", "中际旭创")
-
-    gray = [signal for signal in signals if signal.exit_type.startswith("灰区")]
-    assert gray
-    assert gray[0].exit_type == "灰区减仓"
-    assert "跌破结构位889.12" in gray[0].reason
-    assert "未到止损817.99" in gray[0].reason
-
-
-def test_gray_zone_shrinking_volume_outputs_clear(monkeypatch):
-    from src.analyzers.timing_engine import get_backtest_timing_engine
-
-    te = get_backtest_timing_engine()
-    tech = {
-        "current_price": 873.00,
-        "volume_ratio": 0.70,
-        "ma5": 880.0,
-        "ma10": 875.0,
-        "ma20": 870.0,
-        "kline": [
-            {"close": 873.0, "open": 874.0, "high": 876.0, "low": 870.0,
-             "volume": 1000}
-            for _ in range(30)
-        ],
-        "tech_signals": {"vote": "中性", "vote_score": 0},
-        "kline_pattern": [],
-    }
-    monkeypatch.setattr(te, "_fetch_tech_data", lambda code, mode: tech)
-    monkeypatch.setattr(
-        te, "_get_paired_position",
-        lambda code: {"entry_type": "价量突破", "paired_z": 817.99,
-                      "z_reference": 889.12},
-    )
-
-    signals = te.check_exit_signals("300308", "中际旭创")
-
-    assert any(signal.exit_type == "灰区清仓" for signal in signals)
-
-
 def _chase_tech(confirm_fund: bool):
     closes = [80.0 + index * 0.5 for index in range(25)]
     flows = [100.0, 200.0, 300.0]
@@ -598,28 +532,6 @@ def test_p18_no_adjudication_when_sources_agree_or_mild():
         "imbalance_pct": -4.0,
     }}})
     assert mild.margin_drive_conflict is False
-
-
-def test_p112_event_panel_splits_structure_and_tracking_stop():
-    """P1-12：事件面板两行分列——结构位(突破失败判定基准) 与 跟踪止损(风险出口)。"""
-    from src.push.templates import _hypothesis_block
-
-    html = _hypothesis_block({
-        "hypothesis": {
-            "sentence": "假说",
-            "x": "突破",
-            "y": 890.0,
-            "z": 821.99,
-            "z_note": "跌破结构位",
-            "z_reference": 889.12,
-            "w": [907.0],
-            "w_note": "兑现",
-        },
-        "event_id": "308",
-    })
-    assert "结构位: 889.12（突破失败判定基准，收盘跌回即撤单）" in html
-    assert "跟踪止损(风险出口)821.99" in html
-    assert "Z·跟踪止损" in html
 
 
 def test_p112_risk_stop_relabels_structure_and_tracking_stop():
