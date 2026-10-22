@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
+from typing import Any
 
 from ..core.generator import order_for_push
 from ..core.lifecycle import JournalEntry, TransitionConfirmation, TransitionEvent, transition
@@ -37,14 +38,38 @@ def qualify_break(
     stock_triggered: bool,
     sector_triggered: bool,
     index_triggered: bool,
+    divergence: bool = False,
+    limit_up: bool = False,
 ) -> BreakQualifier:
-    decision = break_qualifier(volume_ratio, active_delta)
+    decision = break_qualifier(volume_ratio, active_delta, divergence, limit_up)
     if decision.qualifier is BreakQualifier.EXECUTE_NOW:
         return BreakQualifier.EXECUTE_NOW
     activity = active_or_passive(stock_triggered, sector_triggered, index_triggered)
     if activity is Activity.ACTIVE:
         return BreakQualifier.EXECUTE_NOW
     return BreakQualifier.DELAY_OBSERVE
+
+
+def stop_break_decision(context: Mapping[str, Any] | None) -> tuple[BreakQualifier, str]:
+    if not context:
+        return BreakQualifier.DELAY_OBSERVE, 'NOT_CLASSIFIED'
+    decision = break_qualifier(
+        float(context.get('volume_ratio') or 0),
+        float(context.get('active_delta') or 0),
+        bool(context.get('divergence', False)),
+        bool(context.get('limit_up', False)),
+    )
+    if decision.qualifier is BreakQualifier.EXECUTE_NOW:
+        return decision.qualifier, decision.reason
+    activity = active_or_passive(
+        bool(context.get('stock_triggered', False)),
+        bool(context.get('sector_triggered', False)),
+        bool(context.get('index_triggered', False)),
+    )
+    return (
+        BreakQualifier.EXECUTE_NOW if activity is Activity.ACTIVE else BreakQualifier.DELAY_OBSERVE,
+        decision.reason,
+    )
 
 
 def process_touch(

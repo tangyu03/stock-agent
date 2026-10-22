@@ -79,11 +79,20 @@ def behavior(rows: Iterable[Mapping[str, Any]], t_rows: Iterable[Mapping[str, An
     receipts = [row for row in items if row.get('verdict')]
     executed = sum(bool(row.get('verdict') == 'executed') for row in receipts)
     coverage = len(receipts) / len(items) if receipts and items else None
+    if coverage is not None and coverage < 0.5:
+        return {
+            'receipt_coverage': coverage,
+            'insufficient_data': True,
+            'discipline_rate': None,
+            't_added_avg_pct': None,
+            'restore_violations': None,
+        }
     stops = [row for row in items if str(row.get('tag')) == 'stop' and str(row.get('status')) == 'TRIGGERED']
     executed_stops = sum(bool(row.get('verdict') == 'executed') for row in stops)
     t_values = [float(row['diff_pct']) for row in t_rows if row.get('diff_pct') is not None]
     return {
         'receipt_coverage': coverage,
+        'insufficient_data': False,
         'discipline_rate': executed_stops / len(stops) if stops else None,
         't_added_avg_pct': sum(t_values) / len(t_values) if t_values else None,
         'restore_violations': sum(bool(row.get('restore_violation')) for row in items),

@@ -1,0 +1,7 @@
+﻿*** Begin Patch
+*** Update File: README.md
+@@
+ python -m pointtable.cli --db pointtable/data/pointtable.db market-input --date 2026-10-22 --output pointtable/data/evening-2026-10-22.json
++python -m pointtable.cli --db pointtable/data/pointtable.db tail-snapshot --date 2026-10-22
+ python -m pointtable.cli --db pointtable/data/pointtable.db evening --input pointtable/data/evening-2026-10-22.json
+*** End Patch

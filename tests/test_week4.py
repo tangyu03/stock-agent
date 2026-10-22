@@ -8,6 +8,7 @@ from pointtable.cli import audit_pool_themes
 from pointtable.cli import main
 from pointtable.db.session import get_connection, init_db, set_database_path
 from pointtable.jobs.cutover import push_mode, switch_push_mode
+from pointtable.jobs.migration import migration_status
 from pointtable.notify.push import PushPlusSender
 
 
@@ -76,3 +77,39 @@ def test_legacy_top_level_query(tmp_db):
     set_database_path(tmp_db)
     init_db()
     assert main(['--db', str(tmp_db), '--legacy']) == 0
+
+
+def test_migration_status_reports_ready_state(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO journal (signal_id, from_status, to_status, reason, confirmed, created_at) "
+        "VALUES ('s1','ACTIVE','EXPIRED','system_migration','confirmed','2026-10-22T00:00:00+00:00')"
+    )
+    conn.execute(
+        "INSERT INTO pool (date, symbol, theme_label) VALUES ('2026-10-22','300001','AI')"
+    )
+    conn.commit()
+    theme_path = Path.cwd() / 'test_migration_theme.yaml'
+    push_path = Path.cwd() / 'test_migration_push.yaml'
+    theme_path.write_text('overrides:\n  300001: AI\n', encoding='utf-8')
+    push_path.write_text(
+        'pushplus:\n  mode: formal\n  token: formal\n',
+        encoding='utf-8',
+    )
+    try:
+        result = migration_status(
+            conn,
+            theme_map_path=theme_path,
+            push_config_path=push_path,
+            today=__import__('datetime').date(2026, 10, 22),
+        )
+        assert result['ready'] is True
+        assert result['stable_period']['days_remaining'] == 7
+        assert result['stable_period']['target_on'] == '2026-10-29'
+        assert result['pool_audit']['counts'] == {'mapped': 1, 'mismatch': 0, 'unmapped': 0}
+    finally:
+        set_database_path(Path('unused'))
+        theme_path.unlink(missing_ok=True)
+        push_path.unlink(missing_ok=True)

@@ -12,12 +12,23 @@ class PushPlusSender:
     MIN_INTERVAL = 1.2
     MAX_CONTENT_LEN = 18000
 
-    def __init__(self, config_path: str | Path | None = None, token: str | None = None):
+    def __init__(
+        self,
+        config_path: str | Path | None = None,
+        token: str | None = None,
+        channel: str | None = None,
+    ):
         path = config_path or Path(__file__).parents[1] / 'config' / 'push.yaml'
         raw = yaml.safe_load(Path(path).read_text(encoding='utf-8')) or {}
         push = raw.get('pushplus') or {}
         self.mode = str(push.get('mode') or 'formal')
-        if token is None:
+        if channel not in {None, 'configured', 'formal', 'test'}:
+            raise ValueError('channel must be configured, formal or test')
+        if token is None and channel == 'formal':
+            token = push.get('token')
+        elif token is None and channel == 'test':
+            token = push.get('test_token')
+        elif token is None:
             token = push.get('test_token') if self.mode == 'shadow' else push.get('token')
         self.token = str(token or '')
         self.daily_limit = int(push.get('daily_limit') or 200)

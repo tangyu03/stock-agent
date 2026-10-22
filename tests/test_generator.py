@@ -45,7 +45,12 @@ def test_enter_generates_parent_z_and_w():
 
 def test_invalid_strategy_is_rejected():
     with pytest.raises(ValueError, match='w'):
-        validate_strategy(Strategy('bad', 'BUY', '', {'type': 'a'}, {'type': 'b'}, {}))
+        validate_strategy(Strategy('bad', 'BUY', '放量', {'type': 'a'}, {'type': 'b'}, {}))
+
+
+def test_missing_premise_is_rejected():
+    with pytest.raises(ValueError, match='premise'):
+        validate_strategy(Strategy('bad', 'BUY', '', {'type': 'a'}, {'type': 'b'}, {'type': 'c'}))
 
 
 def test_holding_rows_follow_trend_rules():

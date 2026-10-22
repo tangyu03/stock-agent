@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -10,12 +10,15 @@ from typing import Any
 from ..core.auction import AuctionPattern
 from ..core.lifecycle import JournalEntry
 from ..db.session import save_journal, save_signal, save_signals
-from ..models.signal import Signal, SignalStatus
+from ..models.signal import Signal, SignalStatus, SignalTag, SignalValidPolicy
+from ..stats import signal_quality
 from .auction_call import apply_auction
-from .evening import build_context_rows, build_evening_signals
+from .evening import build_context_rows, build_evening_signals, build_holding_rows
+from .plan_builder import build_pool_plans
 from .restore_check import restore_reminders
 from .settle import create_retest_confirm, expire_intraday
-from .watch import process_touch
+from .settle import settle_retest
+from .watch import BreakQualifier, invalidate_premise, process_touch, stop_break_decision
 
 
 def signal_from_row(row: sqlite3.Row | dict[str, Any]) -> Signal:
@@ -71,25 +74,83 @@ def run_watch(
     now: datetime,
     volume_ratio: float | None = None,
     trade_date: str | None = None,
+    broken_signal_ids: Iterable[str] | None = None,
+    break_context: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     touched: list[str] = []
     waiting: list[str] = []
+    invalidated: list[str] = []
+    broken_ids = set(broken_signal_ids or ())
+    break_decisions: list[dict[str, str]] = []
     for signal in load_active_signals(conn, trade_date):
+        if signal.id in broken_ids:
+            updated, journal = invalidate_premise(signal, now)
+            save_signal(conn, updated)
+            save_journal(conn, journal)
+            invalidated.append(signal.id)
+            continue
+        decision: tuple[BreakQualifier, str] | None = None
+        if signal.tag is SignalTag.STOP:
+            decision = stop_break_decision((break_context or {}).get(signal.symbol))
         updated, journal, reason = process_touch(
             signal, price, second_cycle, volume_ratio, now
         )
         if reason == 'waiting_second_cycle':
             waiting.append(signal.id)
         elif updated is not None and journal is not None:
+            if decision is not None:
+                qualified_reason = f"{reason}:{decision[0].value}:{decision[1]}"
+                updated = updated.model_copy(update={'status_reason': qualified_reason})
+                journal = journal.model_copy(update={'reason': qualified_reason})
+                break_decisions.append({
+                    'signal_id': signal.id,
+                    'qualifier': decision[0].value,
+                    'reason': decision[1],
+                })
             save_signal(conn, updated)
             save_journal(conn, journal)
             touched.append(signal.id)
     conn.commit()
-    return {'touched': touched, 'waiting': waiting}
+    return {
+        'touched': touched,
+        'waiting': waiting,
+        'premise_broken': invalidated,
+        'break_decisions': break_decisions,
+    }
 
 
-def run_settle(conn: sqlite3.Connection, now: datetime) -> dict[str, Any]:
+def roll_stops(signals: list[Signal], stop_zones: Mapping[str, Sequence[float]]) -> list[Signal]:
+    rolled_by_id: dict[str, Signal] = {}
+    for signal in signals:
+        zone = stop_zones.get(signal.symbol)
+        if (
+            signal.tag is not SignalTag.STOP
+            or signal.valid_policy is not SignalValidPolicy.UNTIL_STOPPED
+            or signal.status is not SignalStatus.ACTIVE
+            or zone is None
+        ):
+            continue
+        zone_low, zone_high = float(zone[0]), float(zone[1])
+        if zone_low >= zone_high:
+            raise ValueError(f'invalid stop zone for {signal.symbol}')
+        rolled_by_id[signal.id] = signal.model_copy(update={
+            'zone_low': zone_low,
+            'zone_high': zone_high,
+        })
+    return [
+        rolled_by_id.get(signal.id, signal)
+        for signal in signals
+    ]
+
+
+def run_settle(
+    conn: sqlite3.Connection,
+    now: datetime,
+    stop_zones: Mapping[str, Sequence[float]] | None = None,
+    close_prices: Mapping[str, float] | None = None,
+) -> dict[str, Any]:
     all_signals = load_signals(conn)
+    all_signals = roll_stops(all_signals, stop_zones or {})
     active_signals = [signal for signal in all_signals if signal.status is SignalStatus.ACTIVE]
     expired_rows = expire_intraday(active_signals, now)
     expired = [signal for signal in expired_rows if signal.status is SignalStatus.EXPIRED]
@@ -101,10 +162,20 @@ def run_settle(conn: sqlite3.Connection, now: datetime) -> dict[str, Any]:
             to_status=SignalStatus.EXPIRED.value,
             reason='eod',
             created_at=now,
-        ))
+            ))
+
+    rolled = [
+        signal for signal in all_signals
+        if stop_zones and signal.tag is SignalTag.STOP
+        and signal.valid_policy is SignalValidPolicy.UNTIL_STOPPED
+        and signal.symbol in stop_zones
+    ]
+    for signal in rolled:
+        save_signal(conn, signal)
 
     existing_ids = {signal.id for signal in load_signals(conn)}
     created_retests: list[str] = []
+    settled_retests: list[str] = []
     for stop in [
         signal for signal in all_signals
         if signal.tag.value == 'stop'
@@ -119,8 +190,26 @@ def run_settle(conn: sqlite3.Connection, now: datetime) -> dict[str, Any]:
         save_signal(conn, retest)
         existing_ids.add(retest.id)
         created_retests.append(retest.id)
+
+    prices = close_prices or {}
+    for retest in [
+        signal for signal in load_signals(conn)
+        if signal.tag is SignalTag.RETEST_CONFIRM and signal.status is SignalStatus.ACTIVE
+    ]:
+        price = prices.get(retest.symbol)
+        if price is None or price < retest.zone_low:
+            continue
+        updated, journal = settle_retest(retest, price > retest.zone_high, price, now)
+        save_signal(conn, updated)
+        save_journal(conn, journal)
+        settled_retests.append(retest.id)
     conn.commit()
-    return {'expired': [signal.id for signal in expired], 'retest_created': created_retests}
+    return {
+        'expired': [signal.id for signal in expired],
+        'rolled': [signal.id for signal in rolled],
+        'retest_created': created_retests,
+        'retest_settled': settled_retests,
+    }
 
 
 def run_restore(
@@ -140,17 +229,44 @@ def run_evening(conn: sqlite3.Connection, input_path: str | Path) -> dict[str, A
     from ..core.generator import load_strategies
 
     strategies = {strategy.id: strategy for strategy in load_strategies(strategies_path)}
+    plans = list(payload.get('plans') or [])
+    assignments = list(payload.get('assignments') or [])
+    holding_rows = build_holding_rows(payload.get('holdings') or [], created_at)
+    if assignments:
+        plans.extend(build_pool_plans(strategies.values(), assignments))
     rows = build_evening_signals(
         strategies,
-        payload.get('plans') or [],
+        plans,
         str(payload.get('market_tier') or 'NORMAL'),
         created_at,
     )
+    rows.extend(holding_rows)
     rows.extend(build_context_rows(
         payload.get('index_context') or [],
         payload.get('sector_context') or [],
         created_at,
     ))
+    confirmed = {
+        row['signal_id']
+        for row in conn.execute(
+            "SELECT DISTINCT signal_id FROM journal WHERE to_status='TRIGGERED' AND confirmed='confirmed'"
+        ).fetchall()
+    }
+    quality_rows = [
+        {**dict(row), 'confirmed': str(row['id']) in confirmed}
+        for row in conn.execute('SELECT id, strategy_id, status FROM signals').fetchall()
+    ]
+    ev_negative = {
+        strategy_id
+        for strategy_id, quality in signal_quality(quality_rows).items()
+        if quality['ev_negative']
+    }
+    rows = [
+        signal.model_copy(update={'premise': {**signal.premise, 'ev_negative': True}})
+        if signal.strategy_id in ev_negative
+        else signal
+        for signal in rows
+    ]
     save_signals(conn, rows)
     conn.commit()
     return {

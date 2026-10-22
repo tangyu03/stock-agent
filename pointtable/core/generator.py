@@ -18,6 +18,12 @@ class PushPriority(str, Enum):
     ENTER = 4
 
 
+class TSizeChoice(str, Enum):
+    SAME = 'same'
+    DOUBLE = 'double'
+    HALF = 'half'
+
+
 _PRIORITY = {
     SignalTag.STOP: PushPriority.STOP,
     SignalTag.RETEST_CONFIRM: PushPriority.RETEST_CONFIRM,
@@ -49,7 +55,7 @@ def load_strategies(path: str | Path) -> list[Strategy]:
         strategy = Strategy(
             id=str(item['id']),
             side=str(item['side']),
-            premise=str(item.get('premise', '')),
+            premise=str(item['premise']),
             y=dict(item['y']),
             z=dict(item['z']),
             w=dict(item['w']),
@@ -62,6 +68,8 @@ def load_strategies(path: str | Path) -> list[Strategy]:
 def validate_strategy(strategy: Strategy) -> None:
     if not strategy.id or strategy.side != 'BUY':
         raise ValueError('strategy id must not be empty and side must be BUY')
+    if not strategy.premise.strip():
+        raise ValueError(f'strategy {strategy.id} requires non-empty premise')
     for key in ('y', 'z', 'w'):
         value = getattr(strategy, key)
         if not value or 'type' not in value:
@@ -107,6 +115,7 @@ def generate_entry(
     profit_zone: tuple[float, float],
     created_at: datetime,
     trade_date: date | None = None,
+    parent_id: str | None = None,
 ) -> list[Signal]:
     validate_strategy(strategy)
     trade_date = trade_date or created_at.date()
@@ -115,6 +124,7 @@ def generate_entry(
     enter = _signal(
         enter_id, strategy.id, symbol, 'BUY', SignalTag.ENTER,
         entry_zone, trend, created_at,
+        parent_id,
     )
     stop = _signal(
         f'{enter_id}-z', strategy.id, symbol, 'SELL', SignalTag.STOP,
@@ -202,3 +212,18 @@ def can_reenter(parent_chain: Iterable[str], max_depth: int = 2) -> bool:
 
 def order_for_push(signals: Iterable[Signal]) -> list[Signal]:
     return sorted(signals, key=lambda row: (_PRIORITY[row.tag].value, row.id))
+
+
+def apply_t_size_choice(signal: Signal, choice: TSizeChoice) -> Signal:
+    if signal.tag is not SignalTag.T or signal.side.value != 'BUY':
+        raise ValueError('t size choice applies only to T BUY rows')
+    if signal.size_hint is None or signal.size_hint <= 0:
+        raise ValueError('T BUY row requires a positive size_hint')
+    multipliers = {
+        TSizeChoice.SAME: 1.0,
+        TSizeChoice.DOUBLE: 2.0,
+        TSizeChoice.HALF: 0.5,
+    }
+    return signal.model_copy(update={
+        'size_hint': max(1, round(signal.size_hint * multipliers[choice]))
+    })

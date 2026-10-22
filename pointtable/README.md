@@ -14,6 +14,18 @@ python -m pointtable.cli holdings
 python -m pointtable.cli pool
 ```
 
+常用节奏命令：
+
+```bash
+python -m pointtable.cli market-input --date 2026-10-22 --output reports/market-2026-10-22.json
+python -m pointtable.cli watch --date 2026-10-22 --price 10.5 --second-cycle --context-json reports/break-context.json
+python -m pointtable.cli tail-snapshot --date 2026-10-22
+python -m pointtable.cli restore-check --date 2026-10-22
+python -m pointtable.cli pool-performance --date 2026-10-15 --window 5
+python -m pointtable.cli report --date 2026-10-22 --market-json reports/market-2026-10-22.json --output reports/2026-10-22.md
+python -m pointtable.cli push-file --title "复盘" --file reports/2026-10-22.md
+```
+
 ## 迁移
 
 ```bash

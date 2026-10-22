@@ -14,6 +14,7 @@ def expire_intraday(signals: list[Signal], now: datetime) -> list[Signal]:
             'closed_at': now,
         })
         if signal.status is SignalStatus.ACTIVE and signal.valid_policy is SignalValidPolicy.INTRADAY
+        and signal.tag is not SignalTag.RETEST_CONFIRM
         else signal
         for signal in signals
     ]

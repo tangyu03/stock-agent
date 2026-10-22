@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS signals (
     closed_at TEXT,
     CHECK (zone_low < zone_high)
 );
+
+CREATE TABLE IF NOT EXISTS tail_snapshots (
+    trade_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    captured_at TEXT NOT NULL,
+    price REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'spot',
+    PRIMARY KEY (trade_date, symbol)
+);
 CREATE INDEX IF NOT EXISTS idx_signals_symbol_status ON signals(symbol, status);
 CREATE INDEX IF NOT EXISTS idx_signals_parent ON signals(parent_id);
 
@@ -92,8 +101,9 @@ CREATE TABLE IF NOT EXISTS pool (
     date TEXT NOT NULL,
     symbol TEXT NOT NULL,
     theme_label TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'holding' CHECK (role IN ('holding','index','sector','candidate')),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(date, symbol, theme_label)
+    UNIQUE(date, symbol, theme_label, role)
 );
 """
 
@@ -101,6 +111,10 @@ CREATE TABLE IF NOT EXISTS pool (
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(SCHEMA)
+        pool_columns = {row[1] for row in conn.execute('PRAGMA table_info(pool)')}
+        if 'role' not in pool_columns:
+            conn.execute("ALTER TABLE pool ADD COLUMN role TEXT NOT NULL DEFAULT 'holding'")
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_pool_symbol_theme_role ON pool(date, symbol, theme_label, role)")
 
 
 def save_signal(conn: sqlite3.Connection, signal: Signal) -> None:

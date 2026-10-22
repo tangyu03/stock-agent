@@ -31,3 +31,30 @@ def test_sender_chunks_long_content(monkeypatch):
         assert len(calls) == 2
     finally:
         path.unlink(missing_ok=True)
+
+
+def test_sender_channel_overrides_configured_mode(monkeypatch):
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {'code': 200}
+
+    monkeypatch.setattr(
+        'pointtable.notify.push.requests.post',
+        lambda *args, **kwargs: calls.append(kwargs) or Response(),
+    )
+    path = Path.cwd() / 'test_push_channel.yaml'
+    path.write_text(
+        'pushplus:\n  mode: shadow\n  token: formal-token\n  test_token: test-token\n',
+        encoding='utf-8',
+    )
+    try:
+        PushPlusSender(path, channel='formal').send('title', 'content')
+        assert calls[0]['json']['token'] == 'formal-token'
+        PushPlusSender(path, channel='test').send('title', 'content')
+        assert calls[1]['json']['token'] == 'test-token'
+    finally:
+        path.unlink(missing_ok=True)

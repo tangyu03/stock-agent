@@ -74,10 +74,10 @@ pointtable/
 │   │   ├── restore_check.py    # 14:30起 T复原倒计时
 │   │   └── settle.py           # 15:05 清点（valid_policy、retest_confirm、T连坐、Z滚动）
 │   ├── notify/
-│   │   ├── push.py             # 通道 + 按钮（veto/execute/ignore/T档）
+│   │   ├── push.py             # 人工触发单向通知；不做按钮回传
 │   │   └── render.py           # 槽位报告（P1-P7/N1-N3/A1-A4/C1 + 措辞库 + 降级规则）
 │   ├── stats.py                # 两层报表（信号质量层 + 行为层）
-│   └── cli.py                  # receipt / veto / stats / holdings / pool
+│   └── cli.py                  # receipt / veto / t-size / stats / holdings / pool / push-file
 ├── legacy/                     # 冻结区：回测引擎、旧测试批次、被删模块源码
 └── tests/
     ├── fixtures/               # 川环26.5/博创42.3/兆龙60.5（懂哥当时输入三元组）
@@ -190,7 +190,7 @@ market_context:                 # 可触发，TRIGGERED 仅作环境事实（破
 
 **再入场链不在策略配置里**：它是 generator 行为——STOP 触发后持仓推算消失，下一晚自动检查 first_move_10d（乃至20日档）的 premise 是否满足，满足即生成新 BUY 行。"破5卖→10日再买"是换策略，不是同策略降级；stats 里两种先手分开算账。上限2次由 generator 按 parent 链深度控制。
 
-**size_hint 三修饰器**（按序）：① 量能 LOW 档全部 BUY 减半；② T_BUY 的 push 带"同等/加倍/减半"按钮，点哪个次日生效；③ 回执推算浮盈>15% 时 STOP 从5日线切10日线（"利润厚放宽到10日"），回执覆盖率不足时停用并在 stats 明示。
+**size_hint 修饰器**：量能 LOW 档全部 BUY 减半；T_BUY 档位通过 CLI `t-size` 落库，不做按钮回传。浮盈>15% 后 STOP 切 10 日线不实施：系统不保存可靠持仓成本和浮盈。
 
 **config.yaml**：market_volume_tiers（<9000亿 / 9000–13000亿 / >13000亿）；regulator_list、lhb_dumpers（人工维护）；轮询频率三段（竞价1分钟 / 常规5–15分钟 / 尾盘1分钟）；watchlist 上限25只（超限按 持仓>指数>板块>候选 截断）。**无杠杆字段——已删**。
 
@@ -214,7 +214,9 @@ TRANSITIONS = {
 **多信号同刻触发**：按 tag 排序推送，stop > retest_confirm > profit > t > enter——先卖后买，test_ordering 覆盖。
 
 ## 7. 报告形态（render.py）
-待定
+报告由 CLI `report --date <date> [--market-json <file>] [--output <file>]` 生成。系统只渲染市场档位、指数/板块环境、池内建议点位、股票名称、当前价或预估收盘价等可测事实；报告中不伪造成本、账户盈亏和成交。
+
+推送由 CLI `push-file` 人工触发，保持单向通知；没有定时任务自动推送，也没有按钮回传。执行/否决/T 档动作仍然通过 `receipt`、`veto`、`t-size` 等 CLI 命令落库。
 
 ## 8. 统计（两层）
 

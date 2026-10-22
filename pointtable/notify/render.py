@@ -28,9 +28,16 @@ def render_header(market: Mapping[str, Any]) -> str:
     if close is not None and ma5 is not None and float(ma5):
         distance = abs(float(close) - float(ma5)) / float(ma5)
         if distance < 0.005:
-            parts.append(f'收{_price(close)}，贴死在MA5上，明天这根线就是楚河汉界。')
+            position = '上方' if float(close) >= float(ma5) else '下方'
+            parts.append(
+                f'收{_price(close)}，在MA5（{_price(ma5)}）{position}'
+                f'{distance * 100:.2f}%，明天这根线就是楚河汉界。'
+            )
         elif float(close) < float(ma5):
-            parts.append('MA5破了，明天别幻想。')
+            parts.append(
+                f'收{_price(close)}，已破MA5（{_price(ma5)}）'
+                f'{distance * 100:.2f}%，明天别幻想。'
+            )
     crowded = _text(market.get('crowded_sector'))
     if crowded:
         parts.append(f'{crowded}的成交占比再次拥挤。')
@@ -54,6 +61,8 @@ def render_index_points(market: Mapping[str, Any]) -> str:
 def render_position(position: Mapping[str, Any]) -> str:
     name = _text(position.get('name') or position.get('symbol'))
     parts: list[str] = []
+    if position.get('current_price') is not None:
+        parts.append('当前价' + _price(position.get('current_price')) + '。')
     progress = position.get('progress_pct')
     parts.append(f'信号生效至今 +{_price(progress)}%。' if progress is not None else '系统外持仓。')
     if bool(position.get('up_day')) and float(position.get('volume_ratio') or 0) > 1.2 and float(position.get('active_delta') or 0) > 5:
@@ -75,11 +84,19 @@ def render_position(position: Mapping[str, Any]) -> str:
         parts.append('去弱择强，它就是那个强。' if pool_rank == 1 else '跟风位，有龙头在要它干嘛。')
     if position.get('receipt_coverage') is not None and float(position['receipt_coverage']) >= 0.5 and position.get('missed_stop_date'):
         parts.append('早该在' + _text(position['missed_stop_date']) + '那天走，之后每一天都是在给侥幸交税。')
+    entry_low = _price(position.get('entry_low'))
+    entry_high = _price(position.get('entry_high'))
+    if entry_low:
+        parts.append(f'先手买入{entry_low}–{entry_high}。')
     stop_low = _price(position.get('stop_low'))
     stop_high = _price(position.get('stop_high'))
     if stop_low:
         stop_prefix = '止损放宽到10日线' if int(position.get('stop_n') or 0) == 10 else '止损'
         parts.append(f'{stop_prefix}{stop_low}' + (f'–{stop_high}' if stop_high else '') + '。')
+    profit_low = _price(position.get('profit_low'))
+    profit_high = _price(position.get('profit_high'))
+    if profit_low:
+        parts.append(f'目标卖出{profit_low}–{profit_high}。')
     t_low = _price(position.get('t_buy_low'))
     t_high = _price(position.get('t_buy_high'))
     t_sell = _price(position.get('t_sell_low'))
@@ -88,6 +105,7 @@ def render_position(position: Mapping[str, Any]) -> str:
         if t_sell:
             line += f'，{t_sell}高抛'
         parts.append(line + '。')
+        parts.append('T仓位选择：同等 / 加倍 / 减半。')
     sentiment = _sentiment(position)
     if sentiment:
         parts.append(sentiment)

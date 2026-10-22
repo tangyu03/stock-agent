@@ -8,10 +8,11 @@ from ..core.generator import (
     Strategy,
     apply_size_hints,
     generate_context_row,
+    generate_holding_rows,
     generate_entry,
     premise_ok,
 )
-from ..models.signal import Signal, SignalTrend
+from ..models.signal import Signal, SignalTag, SignalTrend, SignalValidPolicy
 from ..notify.render import render_report
 
 
@@ -61,8 +62,38 @@ def build_evening_signals(
             (float(plan['stop_low']), float(plan['stop_high'])),
             (float(plan['profit_low']), float(plan['profit_high'])),
             created_at,
+            parent_id=plan.get('parent_id'),
         ))
     return apply_size_hints(rows, market_tier_name)
+
+
+def build_holding_rows(
+    holdings: list[Mapping[str, Any]],
+    created_at: datetime,
+) -> list[Signal]:
+    rows: list[Signal] = []
+    for holding in holdings:
+        symbol = str(holding.get('symbol') or '')
+        parent_id = holding.get('parent_id')
+        stop_zone = holding.get('stop_zone')
+        support_zone = holding.get('support_zone')
+        resistance_zone = holding.get('resistance_zone')
+        if not symbol or not parent_id or not stop_zone or not support_zone or not resistance_zone:
+            raise ValueError('holding rows require symbol, parent_id and three zones')
+        trend = SignalTrend.UP if str(holding.get('trend') or 'UP').upper() == 'UP' else SignalTrend.DOWN
+        generated = generate_holding_rows(
+            symbol,
+            trend,
+            (float(stop_zone[0]), float(stop_zone[1])),
+            (float(support_zone[0]), float(support_zone[1])),
+            (float(resistance_zone[0]), float(resistance_zone[1])),
+            str(parent_id),
+            created_at,
+        )
+        if holding.get('volatility_exceeded'):
+            generated = [row for row in generated if row.tag is not SignalTag.T]
+        rows.extend(generated)
+    return rows
 
 
 def evening_report(

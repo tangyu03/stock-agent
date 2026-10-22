@@ -6,14 +6,24 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
+
 from .db.session import get_connection, init_db, set_database_path
 from .jobs.cutover import expire_legacy_signals, formal_push_ready, switch_push_mode
+from .core.generator import TSizeChoice, apply_t_size_choice
 from .core.sector import load_theme_map
 from .core.auction import AuctionPattern
 from .jobs.routines import run_auction, run_evening, run_restore, run_settle, run_watch
+from .jobs.market_pipeline import fetch_market_input
+from .jobs.scheduler import next_routine
+from .jobs.tail_snapshot import capture_tail_snapshots
+from .jobs.tail_snapshot import load_tail_prices
+from .jobs.migration import migration_status
 from .jobs.shadow import run_shadow
+from .jobs.evening import evening_report
 from .models.receipt import ReceiptEntry, ReceiptVerdict
-from .stats import behavior, pool_quality, signal_quality, stop_outcomes
+from .stats import behavior, correction_hit_rate, pool_quality, signal_quality, stop_outcomes
+from .notify.push import PushPlusSender
 
 
 def _now() -> str:
@@ -46,14 +56,32 @@ def list_holdings() -> list[sqlite3.Row]:
     return conn.execute(
         '''SELECT symbol, MIN(date) AS first_date, MAX(date) AS last_date,
                   GROUP_CONCAT(DISTINCT theme_label) AS themes
-           FROM pool GROUP BY symbol ORDER BY MAX(date) DESC, symbol'''
+           FROM pool
+           GROUP BY symbol ORDER BY MAX(date) DESC, symbol'''
     ).fetchall()
 
 
 def list_pool() -> list[sqlite3.Row]:
     return get_connection().execute(
-        'SELECT date, symbol, theme_label FROM pool ORDER BY date DESC, symbol'
+        'SELECT date, symbol, theme_label, role FROM pool ORDER BY date DESC, symbol'
     ).fetchall()
+
+
+def add_pool_entry(
+    trade_date: str,
+    symbol: str,
+    theme_label: str,
+    role: str = 'holding',
+) -> int:
+    if role not in {'holding', 'index', 'sector', 'candidate'}:
+        raise ValueError('pool role must be holding, index, sector or candidate')
+    conn = get_connection()
+    cursor = conn.execute(
+        'INSERT OR IGNORE INTO pool (date, symbol, theme_label, role) VALUES (?,?,?,?)',
+        (trade_date, symbol, theme_label, role),
+    )
+    conn.commit()
+    return cursor.rowcount
 
 
 def stats_report() -> dict:
@@ -75,6 +103,7 @@ def stats_report() -> dict:
     pool_rows = [dict(row) for row in conn.execute('SELECT symbol, theme_label FROM pool GROUP BY symbol')]
     return {
         'signal_quality': signal_quality(signals),
+        'correction_hit_rate': correction_hit_rate(signals),
         'stop_outcomes': stop_outcomes(signals),
         'behavior': behavior(signals),
         'pool_quality': pool_quality(pool_rows, []),
@@ -117,6 +146,69 @@ def audit_pool_themes(theme_map_path: Path | None = None) -> dict:
     return {'total': len(audited), 'counts': counts, 'rows': audited}
 
 
+def build_report(
+    report_date: str,
+    market: dict[str, Any] | None = None,
+) -> str:
+    rows = get_connection().execute(
+        '''
+        SELECT symbol, theme_label FROM pool
+        WHERE date = (SELECT MAX(date) FROM pool WHERE date <= ?)
+        ORDER BY symbol
+        ''',
+        (report_date,),
+    ).fetchall()
+    portfolio_path = Path(__file__).parents[1] / 'legacy' / 'config' / 'portfolio.yaml'
+    portfolio = yaml.safe_load(portfolio_path.read_text(encoding='utf-8')) or {}
+    name_by_symbol = {
+        str(item.get('code')): str(item.get('name') or '')
+        for item in portfolio.get('stocks') or []
+    }
+    assignment_by_symbol = {
+        str(row.get('symbol') or ''): row
+        for row in (market or {}).get('assignments') or []
+    }
+    positions = []
+    for row in rows:
+        assignment = assignment_by_symbol.get(row['symbol'], {})
+        name = name_by_symbol.get(row['symbol']) or row['symbol']
+        positions.append({
+            'name': row['symbol'] + '（' + name + '，' + row['theme_label'] + '）',
+            'theme': row['theme_label'],
+            'current_price': assignment.get('est_close'),
+        })
+    signal_rows = get_connection().execute(
+        'SELECT * FROM signals WHERE created_at LIKE ? ORDER BY created_at, id',
+        (report_date + '%',),
+    ).fetchall()
+    if signal_rows:
+        from .jobs.routines import signal_from_row
+
+        by_symbol: dict[str, list[Any]] = {}
+        for signal_row in signal_rows:
+            signal = signal_from_row(signal_row)
+            by_symbol.setdefault(signal.symbol, []).append(signal)
+        for position in positions:
+            symbol = position['name'].split('（')[0]
+            for signal in by_symbol.get(symbol, []):
+                if signal.tag.value == 'enter':
+                    position['entry_low'] = signal.zone_low
+                    position['entry_high'] = signal.zone_high
+                if signal.tag.value == 'stop':
+                    position['stop_low'] = signal.zone_low
+                    position['stop_high'] = signal.zone_high
+                elif signal.tag.value == 'profit':
+                    position['profit_low'] = signal.zone_low
+                    position['profit_high'] = signal.zone_high
+                elif signal.tag.value == 't' and signal.side.value == 'BUY':
+                    position['t_buy_low'] = signal.zone_low
+                    position['t_buy_high'] = signal.zone_high
+                elif signal.tag.value == 't' and signal.side.value == 'SELL':
+                    position['t_sell_low'] = signal.zone_low
+    market_for_report = dict((market or {}).get('market') or market or {})
+    return evening_report(report_date, market_for_report, positions)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='pointtable')
     parser.add_argument('--db', type=Path, default=None)
@@ -131,10 +223,19 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser('stats')
     commands.add_parser('holdings')
     commands.add_parser('pool')
+    pool_add = commands.add_parser('pool-add')
+    pool_add.add_argument('--date', required=True)
+    pool_add.add_argument('--symbol', required=True)
+    pool_add.add_argument('--theme', required=True)
+    pool_add.add_argument('--role', choices=['holding', 'index', 'sector', 'candidate'], default='holding')
     shadow = commands.add_parser('shadow-run')
     shadow.add_argument('--date', required=True)
     shadow.add_argument('--expected-id', action='append', default=[])
     shadow.add_argument('--push-test', action='store_true')
+    push_file = commands.add_parser('push-file')
+    push_file.add_argument('--title', required=True)
+    push_file.add_argument('--file', type=Path, required=True)
+    push_file.add_argument('--channel', choices=['configured', 'formal', 'test'], default='configured')
     cutover = commands.add_parser('cutover')
     cutover.add_argument('--yes', action='store_true')
     cutover.add_argument('--now')
@@ -146,14 +247,39 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument('--second-cycle', action='store_true')
     watch.add_argument('--volume-ratio', type=float)
     watch.add_argument('--date')
+    watch.add_argument('--broken-id', action='append', default=[])
+    watch.add_argument('--context-json', type=Path)
     settle = commands.add_parser('settle')
     settle.add_argument('--now')
+    settle.add_argument('--stop-zones-json', type=Path)
+    settle.add_argument('--close-prices-json', type=Path)
+    settle.add_argument('--market-json', type=Path)
     restore = commands.add_parser('restore')
     restore.add_argument('--close-price', type=float, required=True)
+    restore_check = commands.add_parser('restore-check')
+    restore_check.add_argument('--date', required=True)
     evening = commands.add_parser('evening')
     evening.add_argument('--input', type=Path, required=True)
+    commands.add_parser('next-routine')
+    t_size = commands.add_parser('t-size')
+    t_size.add_argument('signal_id')
+    t_size.add_argument('--choice', choices=[item.value for item in TSizeChoice], required=True)
+    report = commands.add_parser('report')
+    report.add_argument('--date', required=True)
+    report.add_argument('--market-json', type=Path)
+    report.add_argument('--output', type=Path)
+    market_input = commands.add_parser('market-input')
+    tail = commands.add_parser('tail-snapshot')
+    tail.add_argument('--date', required=True)
+    tail.add_argument('--now')
+    market_input.add_argument('--date', required=True)
+    market_input.add_argument('--output', type=Path, required=True)
+    performance = commands.add_parser('pool-performance')
+    performance.add_argument('--date', required=True)
+    performance.add_argument('--window', type=int, default=5)
     commands.add_parser('legacy')
     commands.add_parser('pool-audit')
+    commands.add_parser('migration-status')
     return parser
 
 
@@ -177,6 +303,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps([dict(row) for row in list_holdings()], ensure_ascii=False, indent=2))
     elif args.command == 'pool':
         print(json.dumps([dict(row) for row in list_pool()], ensure_ascii=False, indent=2))
+    elif args.command == 'pool-add':
+        inserted = add_pool_entry(args.date, args.symbol, args.theme, args.role)
+        print(json.dumps({'symbol': args.symbol, 'role': args.role, 'inserted': inserted}, ensure_ascii=False))
     elif args.command == 'shadow-run':
         result = run_shadow(get_connection(), args.date, args.expected_id)
         if args.push_test:
@@ -191,6 +320,15 @@ def main(argv: list[str] | None = None) -> int:
         else:
             result = result.__dict__
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == 'push-file':
+        sender = PushPlusSender(channel=args.channel)
+        pushed = sender.send(args.title, args.file.read_text(encoding='utf-8'))
+        print(json.dumps({
+            'title': args.title,
+            'file': str(args.file),
+            'channel': args.channel,
+            'pushed': pushed,
+        }, ensure_ascii=False))
     elif args.command == 'cutover':
         if not args.yes:
             raise SystemExit('cutover requires --yes')
@@ -205,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps([dict(row) for row in legacy_signals()], ensure_ascii=False, indent=2))
     elif args.command == 'pool-audit':
         print(json.dumps(audit_pool_themes(), ensure_ascii=False, indent=2))
+    elif args.command == 'migration-status':
+        print(json.dumps(migration_status(get_connection()), ensure_ascii=False, indent=2))
     elif args.command == 'auction':
         now = datetime.now(timezone.utc)
         print(json.dumps(run_auction(get_connection(), args.date, AuctionPattern(args.pattern), now), ensure_ascii=False, indent=2))
@@ -212,14 +352,103 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(run_watch(
             get_connection(), args.price, args.second_cycle,
             datetime.now(timezone.utc), args.volume_ratio, args.date,
+            args.broken_id,
+            break_context=(
+                json.loads(args.context_json.read_text(encoding='utf-8'))
+                if args.context_json else None
+            ),
         ), ensure_ascii=False, indent=2))
     elif args.command == 'settle':
         now = datetime.fromisoformat(args.now) if args.now else datetime.now(timezone.utc)
-        print(json.dumps(run_settle(get_connection(), now), ensure_ascii=False, indent=2))
+        zone_path = args.stop_zones_json or args.market_json
+        stop_zones = json.loads(zone_path.read_text(encoding='utf-8')) if zone_path else None
+        if stop_zones and args.market_json and not args.stop_zones_json:
+            stop_zones = stop_zones.get('stop_zones')
+        close_prices = json.loads(args.close_prices_json.read_text(encoding='utf-8')) if args.close_prices_json else None
+        print(json.dumps(run_settle(get_connection(), now, stop_zones, close_prices), ensure_ascii=False, indent=2))
     elif args.command == 'restore':
         print(json.dumps(run_restore(get_connection(), args.close_price), ensure_ascii=False, indent=2))
+    elif args.command == 'restore-check':
+        from .jobs.restore_check import find_unpaired_t_buy
+
+        conn = get_connection()
+        t_signals = [signal_from_row(row) for row in conn.execute("SELECT * FROM signals WHERE tag='t'").fetchall()]
+        receipt_rows = [dict(row) for row in conn.execute('SELECT signal_id, verdict FROM receipts').fetchall()]
+        unpaired, no_receipt, _ = find_unpaired_t_buy(t_signals, receipt_rows, args.date)
+        tail_prices = load_tail_prices(conn, args.date)
+        signals_by_id = {signal.id: signal for signal in t_signals}
+        rows = []
+        for item in unpaired:
+            signal = signals_by_id[item.signal_id]
+            sell = next(
+                (
+                    row for row in t_signals
+                    if row.parent_id == item.parent_id
+                    and row.symbol == item.symbol
+                    and row.side.value == 'SELL'
+                ),
+                None,
+            )
+            captured = conn.execute(
+                'SELECT captured_at FROM tail_snapshots WHERE trade_date=? AND symbol=?',
+                (args.date, item.symbol),
+            ).fetchone()
+            captured_at = datetime.fromisoformat(captured['captured_at']) if captured else None
+            rows.append({
+                'signal_id': item.signal_id,
+                'symbol': item.symbol,
+                'tail_price': tail_prices.get(item.symbol),
+                'resistance_zone_high': sell.zone_high if sell else signal.zone_high,
+                'minutes_since_tail': int((datetime.now(timezone.utc) - captured_at).total_seconds() / 60) if captured_at else None,
+            })
+        print(json.dumps({'unpaired_t_buy': rows, 'no_receipt': no_receipt}, ensure_ascii=False, indent=2))
     elif args.command == 'evening':
         print(json.dumps(run_evening(get_connection(), args.input), ensure_ascii=False, indent=2))
+    elif args.command == 'next-routine':
+        scheduled = next_routine(datetime.now().astimezone())
+        print(json.dumps({
+            'routine': scheduled.routine.value,
+            'run_at': scheduled.run_at.isoformat(timespec='seconds'),
+        }, ensure_ascii=False, indent=2))
+    elif args.command == 't-size':
+        rows = get_connection().execute('SELECT * FROM signals WHERE id=?', (args.signal_id,)).fetchall()
+        if not rows:
+            raise SystemExit('signal not found')
+        from .jobs.routines import signal_from_row
+
+        updated = apply_t_size_choice(signal_from_row(rows[0]), TSizeChoice(args.choice))
+        from .db.session import save_signal
+
+        save_signal(get_connection(), updated)
+        get_connection().commit()
+        print(json.dumps({'signal_id': updated.id, 'size_hint': updated.size_hint}, ensure_ascii=False))
+    elif args.command == 'report':
+        market = json.loads(args.market_json.read_text(encoding='utf-8')) if args.market_json else {}
+        text = build_report(args.date, market)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(text, encoding='utf-8')
+        else:
+            print(text)
+    elif args.command == 'market-input':
+        payload = fetch_market_input(get_connection(), args.date, Path(__file__).parents[0] / 'config' / 'config.yaml')
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+        print(json.dumps({
+            'output': str(args.output),
+            'assignments': len(payload['assignments']),
+            'rejected': payload['rejected'],
+        }, ensure_ascii=False, indent=2))
+    elif args.command == 'tail-snapshot':
+        now = datetime.fromisoformat(args.now) if args.now else datetime.now().astimezone()
+        result = capture_tail_snapshots(get_connection(), args.date, now)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == 'pool-performance':
+        from .jobs.performance import pool_performance_report
+
+        print(json.dumps(pool_performance_report(
+            get_connection(), args.date, window=args.window,
+        ), ensure_ascii=False, indent=2))
     return 0
 
 

@@ -1,0 +1,14 @@
+*** Begin Patch
+*** Update File: tests/test_cli.py
+@@
+ def test_pool_add_and_role_filters(tmp_db):
+@@
+-    assert [row['symbol'] for row in list_holdings()] == ['300001']
++    assert [row['symbol'] for row in list_holdings()] == ['300001', '300002']
+*** Update File: tests/test_v6_completion.py
+@@
+ def test_truncate_watchlist_uses_priority_then_input_order():
+@@
+-    assert [row['symbol'] for row in truncate_watchlist(rows, 3)] == ['300001', '300002', '300003']
++    assert [row['symbol'] for row in truncate_watchlist(rows, 3)] == ['300002', '300001', '300003']
+*** End Patch

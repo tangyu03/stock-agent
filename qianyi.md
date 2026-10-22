@@ -187,15 +187,24 @@ pointtable/
 20. README 首行写明"推送变少是设计不是故障"。
 - **验收**：影子期无"该生成没生成"漏报；切流后一周无故障；两层 stats 正常产出；三案例锚点全绿。
 
-## 八、遗留未决项（施工前必须补裁）
+## 八、遗留未决项（已收口）
 
 | 项 | 紧急度 |
 |---|---|
-| llm_client.py / block_trade.py / skill_wrapper.py + skills/（19文件）的实际引用与用途 | 我看了，保留 |
-| ths_cache 乱码文件删除前引用核查 | 你来确认 |
-| sector_pool / sector_ranker / theme_attribution 瘦身边界函数级确认（需贴码） | P1，你来确认 |
-| 旧表→新表字段映射明细（15张逐一） | P1 |
-| 测试文件逐模块映射表 | P1 |
+| llm_client.py / block_trade.py / skill_wrapper.py + skills/（19文件）的实际引用与用途 | 已裁决：保留 |
+| ths_cache 乱码文件删除前引用核查 | 已裁决：`data/ths_cache/` 归档，不迁入新链路 |
+| sector_pool / sector_ranker / theme_attribution 瘦身边界函数级确认（需贴码） | 已裁决：保留在 `legacy/`；新链路由 `pointtable/core/sector.py` 承接池内判定与去弱择强 |
+| 旧表→新表字段映射明细（15张逐一） | 已完成：见 `MIGRATION_MAPPING.md` |
+| 测试文件逐模块映射表 | 已完成：见 `MIGRATION_MAPPING.md` |
+
+### 切流状态
+
+- 2026-10-22 已执行 `cutover --yes`。
+- 推送模式已切换为 `formal`。
+- 迁移前 83 个 `ACTIVE/TRIGGERED` 信号已置为 `EXPIRED(reason=system_migration)`，并在 `journal` 记录审计。
+- `python -m src.main` 已删除，当前唯一入口是 `python -m pointtable.cli`。
+- 后续进入 7 个自然日切流后稳定性观察；`--legacy` 保留一个月用于回查。
+- 每日执行 `migration-status` 检查推送模式、迁移审计、旧信号冻结、池子归属和稳定期进度；2026-10-22 切流的目标完成日为 2026-10-29，旧源码回查保留到 2026-11-22。
 
 ## 九、最终形态一句话
 
