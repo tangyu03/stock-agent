@@ -1,91 +1,26 @@
-<!--
-  精简架构文档 — 只覆盖调用链、模块职责和踩坑点。
-  超过 60 行或新增模块后应 review 是否过时。
--->
+# pointtable v6 architecture
 
-## 项目概览
+pointtable is a signal service, not an account tracker or execution engine. It turns a manual pool into four kinds of rows: entry points, protective stops, profit exits, and context/triggers. Human receipts annotate behavior; they never drive signal state.
 
-A股短线交易 Agent，支持盘前预案 / 盘中实时信号 / 盘后复盘 / 周报四阶段运行。
-入口：`python -m src.main run --phase <phase>`
+## Layers
 
-## 目录地图
-
-```
-src/
-├── main.py                  # CLI 入口
-├── config_models.py         # 统一配置加载 (YAML → dataclass)
-├── db.py                    # SQLite 初始化、sector_scan_history / data_cache 表
-├── orchestrator/
-│   ├── engine.py            # Orchestrator: 四阶段调度中枢 + 推送触发
-│   └── unified_engine.py    # UnifiedSignalBatch: 不区分持仓/自选的全量进场/出场扫描
-├── data_layer/              # 数据获取层（只读，无副作用）
-│   ├── akshare_adapter.py   # AKShare 封装：Session patch、反爬、数据源开关
-│   ├── sw_industry.py       # 申万行业数据：SW_LEVEL1(31个)/SW_LEVEL2(113个)、normalize_sector、calc_sector_metrics
-│   ├── stock_data.py        # 个股K线/指标 (KDJ/MACD/RSI/BOLL/均线)
-│   ├── skill_wrapper.py     # 技能包装器：注册 22 个外部分析技能
-│   └── data_cache.py        # 本地数据缓存
-├── analyzers/               # 分析层（纯计算，不持有状态）
-│   ├── sector_scanner.py    # SectorScanner: 板块三级分类 (主线/支线/退潮) + 轮动检测 + 交叉诊断
-│   ├── market_scorer.py     # MarketScorer: DB缓存读取（MarketModeAdaptive是唯一评分入口）
-│   ├── timing_engine.py     # TimingEngine: 技术面进场/出场信号（待拆分为包，见 TIMING_REFACTOR_README.md）
-│   ├── signal_plan.py       # signal_plan: 信号过滤评分（权重从 config/scoring_weights.yaml 读取）
-│   ├── hypothesis.py        # TradeHypothesis: 可证伪假说 X/Y/Z/W
-│   ├── volume_pattern.py    # 量能分型引擎
-│   ├── institutional_scorer.py  # 机构持仓4源投票
-│   ├── stock_filter.py      # StockFilter: 个股筛选
-│   ├── external_market.py   # 外盘 (美股/港股) 环境评分
-│   └── gem_sci_tech_scorer.py  # 创业板/科创板评分
-├── decision/                # 决策聚合层
-│   ├── aggregator.py        # Aggregator: 已弃用（信号聚合已迁移至 unified_engine.py UnifiedSignalBatch）
-│   ├── position_builder.py  # 仓位构建器
-│   └── insight_miner.py     # 历史观点追踪（无 LLM 依赖）
-├── utils/
-│   └── trading_calendar.py  # A股交易日历（节假日JSON + is_trading_day）
-├── loop/                    # 离线/回测
-│   ├── market_mode_adaptive.py  # 市场模式自适应（自适应仓位上限）
-│   ├── stockagent_tuned_v3_signals.py  # 策略调优 v3：动态板块+事件驱动
-│   └── data_loader.py       # 回测数据加载
-├── push/
-│   ├── pushplus.py          # PushPlus 微信推送 (200条/天, ~5 req/s)
-│   └── templates.py         # 推送模板渲染
-└── feedback/
-    ├── daily_review.py      # 每日复盘
-    ├── weekly_report.py     # 周报
-    └── trade_logger.py      # 交易日志
-
-config/
-  ├── timing.yaml             # 78个阈值（回测=实盘共用）
-  ├── scoring_weights.yaml    # 评分权重（8项，signal_plan读取）
-  ├── trading_days.json       # 法定假日（每年手动更新）
-  └── push.yaml               # 推送配置（⚠️含token，待迁移环境变量）
-skills/                       # 22 个外部分析技能 (K线形态、缠论、聪明钱等)
-data/logs/                    # 运行日志
+```text
+pointtable/
+├── models/     # Signal, JournalEntry, ReceiptEntry, PoolEntry domain contracts
+├── db/         # SQLite four-table schema, migrations and persistence adapters
+├── data/       # akshare safe wrapper, TTL cache, mock source and dirty-data guard
+├── core/       # pure math/judgment: MA, trend, volume, auction, LHB, sector, generator, lifecycle
+├── jobs/       # clock orchestration and routines: evening, auction, watch, restore, settle, shadow, cutover
+├── notify/     # report rendering and PushPlus channel
+├── stats.py    # signal-quality and behavior reports
+└── cli.py      # receipt/veto/stats/holdings/pool/shadow/cutover entry point
 ```
 
-## 四阶段调用链（v3 — pre_market/intraday 已合并）
+## Rules
 
-```
-pre_market / intraday:  环境评估(自适应模式+外盘+双创) → 板块扫描 → unified_engine 全量扫 → 合并推送(环境+买卖信号)
-post_market:            daily_review.generate → 推送复盘
-weekly:                 weekly_report.generate → 推送周报
-```
-
-## 关键模块依赖方向
-
-```
-data_layer (只读) → analyzers (纯计算) → decision (执行调度) → orchestrator (调度+推送)
-                                              ↑
-                                          loop (回测，只读决策层)
-
-信号唯一链路: engine.py → unified_engine.py(UnifiedSignalBatch)
-  → timing_engine(信号生成) → signal_plan(评分过滤) → live_scheduler(执行)
-  禁止反向调用。
-```
-
-
-
-## 外部数据源
-
-- **AKShare** (东方财富): 行情、涨停池、申万指数、行业资金流。Session 需 patch 静态 headers 防反爬。
-- **PushPlus**: 微信推送，每日 200 条限额，~1.2s/条间隔。
-- **SQLite**: 本地 `data/` 目录，存 sector_scan_history 和 data_cache。
+- `core/` must not import `data/`, `db/` or `notify/`.
+- Signal state has only four values: `ACTIVE`, `TRIGGERED`, `EXPIRED`, `INVALIDATED`; all transitions go through `core.lifecycle.transition`.
+- BUY touches require a second cycle or high volume; SELL/STOP triggers are single point.
+- Entry rows generate their protective stop and profit row together with the same parent chain.
+- LOW market volume halves BUY size hints and, with a DOWN index, forces a zero-plan day.
+- Push volume is intentionally low: point events and summary reports only, not analysis noise.

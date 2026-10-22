@@ -1,0 +1,31 @@
+strategies:
+  - id: first_move_5d
+    side: BUY
+    premise: 热门题材 + 5日线上行 + 未进监管 + 榜不烂
+    y: { type: ma_tomorrow, n: 5, when: tail_30min }
+    z: { type: ma_break, n: 5 }
+    w: { type: pressure_zone, action: sell_part }
+  - id: first_move_10d
+    side: BUY
+    premise: 热门题材 + 回调深但10日线方向未死 + 未进监管
+    y: { type: ma_tomorrow, n: 10, when: tail_30min }
+    z: { type: ma_break, n: 10 }
+    w: { type: pressure_zone, action: sell_part }
+  - id: first_move_drift
+    side: BUY
+    premise: 热门题材 + 5日线正在下移 + 尾盘突破明日5日线位置
+    y: { type: ma_tomorrow, n: 5, direction: descending }
+    z: { type: ma_break, n: 5 }
+    w: { type: pressure_zone, action: sell_part }
+  - id: first_board_dip
+    side: BUY
+    premise: 首板 + 分时回踩 + 未进监管
+    y: { type: intraday_support }
+    z: { type: ma_break, n: 5 }
+    w: { type: pressure_zone, action: sell_part }
+  - id: volume_breakout
+    side: BUY
+    premise: 放量站上关键位 + 收阳量能确认 + 未进监管
+    y: { type: pullback, ratio: 0.98 }
+    z: { type: close_below, level: breakout_price }
+    w: { type: next_resistance, trailing: true }

@@ -1,0 +1,45 @@
+market_volume_tiers:
+  low:
+    max_turnover: 90000000000
+    buy_size_multiplier: 0.5
+  normal:
+    min_turnover: 90000000000
+    max_turnover: 130000000000
+    buy_size_multiplier: 1.0
+  high:
+    min_turnover: 130000000000
+    buy_size_multiplier: 1.0
+
+theme_map_file: theme_map.yaml
+
+regulator_list: []
+lhb_dumpers: []
+
+polling:
+  auction_minutes: 1
+  regular_minutes: 10
+  tail_minutes: 1
+
+watchlist_limit: 25
+priority:
+  - holding
+  - index
+  - sector
+  - candidate
+
+stop_loss:
+  default_n: 5
+  profit_switch_n: 10
+  profit_threshold_pct: 15
+  receipt_min_coverage: 0.5
+
+t_overlay:
+  applies_to: holding
+  disable_when_volatility_exceeded: true
+
+market_context:
+  indices:
+    - sh000001
+    - sz399001
+    - sh000688
+  sectors_from_pool: true

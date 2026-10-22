@@ -1,0 +1,2 @@
+id,date,stock_code,user_action,actual_position,created_at,event_id
+1,2026-01-01,300001,executed,300.0,2026-01-01 10:01:00,evt-1

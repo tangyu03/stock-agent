@@ -1,0 +1,41 @@
+{
+  "source_db": "C:\\Users\\15831\\Downloads\\stock-agent2\\data\\stock_agent.db",
+  "generated_at": "2026-10-21T23:05:06",
+  "exports": {
+    "trade_logs": 147,
+    "signal_events": 61,
+    "signal_event_logs": 152
+  },
+  "signals": {
+    "source": 61,
+    "inserted": 0,
+    "skipped": 0
+  },
+  "journal": {
+    "source": 152,
+    "inserted": 0,
+    "skipped": 152
+  },
+  "receipts": {
+    "source": 4,
+    "inserted": 0,
+    "skipped": 4
+  },
+  "pool": {
+    "source": 133,
+    "inserted": 0,
+    "skipped": 0
+  },
+  "totals": {
+    "signals": 61,
+    "journal": 152,
+    "receipts": 0,
+    "pool": 131
+  },
+  "checks": {
+    "signal_events_source": 61,
+    "signals_inserted": 0,
+    "journal_source": 152,
+    "journal_inserted": 0
+  }
+}

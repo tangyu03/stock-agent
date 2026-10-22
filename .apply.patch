@@ -1,0 +1,9 @@
+*** Begin Patch
+*** Update File: pointtable/models/signal.py
+@@
+     @model_validator(mode="after")
+     def _validate_shape(self) -> "Signal":
++        if self.zone_low >= self.zone_high:
++            raise ValueError("zone_low must be less than zone_high")
+         return self
+*** End Patch

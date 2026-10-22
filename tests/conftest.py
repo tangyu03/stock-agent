@@ -1,18 +1,18 @@
-﻿"""Global test fixtures for isolation."""
+"""Global test fixtures for isolation."""
+
+from pathlib import Path
+
 import pytest
 
+from pointtable.db.session import set_database_path
 
-@pytest.fixture(autouse=True)
-def clean_institutional_cache():
-    """Clear institutional scorer global cache before and after each test."""
+
+@pytest.fixture
+def tmp_db():
+    db_path = Path.cwd() / 'test_pointtable_shadow.db'
+    db_path.unlink(missing_ok=True)
     try:
-        import src.analyzers.institutional_scorer as inst
-        inst._institutional_session_cache.clear()
-    except Exception:
-        pass
-    yield
-    try:
-        import src.analyzers.institutional_scorer as inst
-        inst._institutional_session_cache.clear()
-    except Exception:
-        pass
+        yield db_path
+    finally:
+        set_database_path(Path('unused'))
+        db_path.unlink(missing_ok=True)

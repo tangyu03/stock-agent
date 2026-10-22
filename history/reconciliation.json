@@ -1,0 +1,41 @@
+{
+  "source_db": "C:\\Users\\15831\\Downloads\\stock-agent2\\test_migration_exports_history_csv.db",
+  "generated_at": "2026-10-22T08:19:48",
+  "exports": {
+    "trade_logs": 1,
+    "signal_events": 1,
+    "signal_event_logs": 1
+  },
+  "signals": {
+    "source": 1,
+    "inserted": 0,
+    "skipped": 0
+  },
+  "journal": {
+    "source": 1,
+    "inserted": 0,
+    "skipped": 1
+  },
+  "receipts": {
+    "source": 1,
+    "inserted": 0,
+    "skipped": 1
+  },
+  "pool": {
+    "source": 1,
+    "inserted": 0,
+    "skipped": 0
+  },
+  "totals": {
+    "signals": 1,
+    "journal": 1,
+    "receipts": 1,
+    "pool": 41
+  },
+  "checks": {
+    "signal_events_source": 1,
+    "signals_inserted": 0,
+    "journal_source": 1,
+    "journal_inserted": 0
+  }
+}

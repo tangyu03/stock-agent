@@ -1,0 +1,2 @@
+event_id,from_status,to_status,reason,trigger_data,created_at
+evt-1,ACTIVE,TRIGGERED,hit,"{""price"":10.1}",2026-01-01 10:00:00

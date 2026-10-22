@@ -1,0 +1,16 @@
+anchors:
+  - symbol: chuanhuan
+    n: 5
+    closes: [25.5, 26.2, 26.7, 27.1]
+    est_close: 26.5
+    expected: 26.5
+  - symbol: bochuang
+    n: 5
+    closes: [40.8, 41.5, 43.0, 43.9]
+    est_close: 42.3
+    expected: 42.3
+  - symbol: zhaolong
+    n: 5
+    closes: [58.5, 59.8, 61.2, 62.5]
+    est_close: 60.5
+    expected: 60.5

@@ -13,12 +13,18 @@ data/logs/
 data/*.db
 data/*.db-shm
 data/*.db-wal
+pointtable/data/*.db
+pointtable/data/*.db-shm
+pointtable/data/*.db-wal
+pointtable/data/migration/*.csv
+pointtable/data/migration/portfolio_source.yaml
 .DS_Store
 
 # 缓存
 *.cache.json
 scripts/kline_cache.json
 scripts/pairs_detail.json
+pointtable/data/migration/*.cache.json
 
 # IDE
 .vscode/
@@ -29,6 +35,7 @@ scripts/pairs_detail.json
 # 环境变量
 .env
 .env.local
+pointtable/config/push.yaml
 
 # 构建产物
 dist/
