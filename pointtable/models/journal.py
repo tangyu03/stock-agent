@@ -12,6 +12,12 @@ class TransitionConfirmation(str, Enum):
     TOUCHED_ONLY = "touched_only"
 
 
+class JournalRecordType(str, Enum):
+    TRANSITION = "transition"
+    ZONE_UPDATE = "zone_update"
+    QUALIFIER = "qualifier"
+
+
 class JournalEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -21,6 +27,7 @@ class JournalEntry(BaseModel):
     reason: str = ""
     price: Optional[float] = None
     confirmed: TransitionConfirmation = TransitionConfirmation.TOUCHED_ONLY
+    record_type: JournalRecordType = JournalRecordType.TRANSITION
     created_at: datetime
 
     @field_validator("signal_id")

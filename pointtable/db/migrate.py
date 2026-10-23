@@ -72,16 +72,17 @@ def _migrate_signals(source: sqlite3.Connection, conn: sqlite3.Connection) -> di
             continue
         cursor = conn.execute(
             """INSERT OR IGNORE INTO signals (
-                id, symbol, strategy_id, side, tag, zone_low, zone_high, size_hint,
+                id, symbol, strategy_id, side, tag, role, zone_low, zone_high, size_hint,
                 premise, trend, activation, valid_policy, status, status_reason,
                 parent_id, created_at, closed_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 str(row["event_id"]),
                 str(row["stock_code"]),
                 str(row["entry_type"] or "unknown"),
                 "BUY",
                 "enter",
+                "entry",
                 zone_low,
                 zone_high,
                 None,

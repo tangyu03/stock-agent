@@ -18,6 +18,7 @@ from ..core.trend import classify_trend, moving_average
 from ..core.sector import load_theme_map
 from ..core.selector import COOLDOWN_STOP_COUNT, MA_FAMILY, cooled_out, select_strategies
 from ..data.guard import DataFreshnessGuard
+from ..data.guard import check_quote_sanity, check_two_source
 from ..models.signal import SignalTrend
 
 
@@ -157,42 +158,15 @@ def truncate_watchlist(
     return [dict(row) for _, row in sorted(ranked[:limit])]
 
 
-def latest_entry_depths(conn: sqlite3.Connection, symbols: Sequence[str]) -> dict[str, int]:
-    depths: dict[str, int] = {}
-    for symbol in symbols:
-        row = conn.execute(
-            "SELECT id, parent_id FROM signals WHERE symbol=? AND tag='enter' "
-            'ORDER BY created_at DESC, id DESC LIMIT 1',
-            (symbol,),
-        ).fetchone()
-        latest = row
-        visited: set[str] = set()
-        while latest and latest['id'] not in visited:
-            visited.add(latest['id'])
-            parent_id = latest['parent_id']
-            if not parent_id:
-                break
-            latest = conn.execute(
-                'SELECT id, parent_id FROM signals WHERE id=? AND tag=?',
-                (parent_id, 'enter'),
-            ).fetchone()
-        stop_triggered = bool(latest and conn.execute(
-            "SELECT 1 FROM signals WHERE parent_id=? AND tag='stop' AND status='TRIGGERED' LIMIT 1",
-            (latest['id'],),
-        ).fetchone())
-        depths[symbol] = len(visited) if stop_triggered else max(0, len(visited) - 1)
-    return depths
-
-
 def latest_entry_parent_ids(conn: sqlite3.Connection, symbols: Sequence[str]) -> dict[str, str | None]:
     parents: dict[str, str | None] = {}
     for symbol in symbols:
         row = conn.execute(
-            "SELECT parent_id FROM signals WHERE symbol=? AND tag='enter' "
+            "SELECT id FROM signals WHERE symbol=? AND tag='enter' AND status='TRIGGERED' "
             'ORDER BY created_at DESC, id DESC LIMIT 1',
             (symbol,),
         ).fetchone()
-        parents[symbol] = row['parent_id'] if row else None
+        parents[symbol] = str(row['id']) if row else f'pool:{symbol}'
     return parents
 
 
@@ -251,11 +225,12 @@ def build_market_input(
     regulator_list: Sequence[str] = (),
     lhb_dumpers: Sequence[str] = (),
     tail_prices: Mapping[str, float] | None = None,
-    entry_depths: Mapping[str, int] | None = None,
     entry_parent_ids: Mapping[str, str | None] | None = None,
     active_retest: set[str] | None = None,
     recent_stops: Mapping[str, Mapping[str, int]] | None = None,
     same_ma_cooldown_days: int = 2,
+    two_source_deviation_max: float = 0.005,
+    quote_sanity_enabled: bool = True,
     deep_pullback_ratio: float = 0.95,
     watchlist_limit: int | None = None,
     priority_order: Sequence[str] = ('holding', 'index', 'sector', 'candidate'),
@@ -337,6 +312,19 @@ def build_market_input(
         if est_close is None:
             rejected.append({'symbol': symbol, 'reason': 'insufficient_closes'})
             continue
+        quote_high = _numeric(latest_stock, '最高', 'high', 'High')
+        quote_low = _numeric(latest_stock, '最低', 'low', 'Low')
+        if quote_sanity_enabled and quote_high is not None and quote_low is not None:
+            quote = check_quote_sanity(
+                est_close,
+                open_price=_numeric(latest_stock, '开盘', 'open', 'Open'),
+                high=quote_high,
+                low=quote_low,
+                prev_close=_numeric(latest_stock, '昨收', 'prev_close', 'previous_close'),
+            )
+            if not quote.ok:
+                rejected.append({'symbol': symbol, 'reason': quote.reason})
+                continue
         regulated = symbol in set(regulator_list)
         bad_lhb, lhb_reason = lhb_decision(lhb, symbol, lhb_dumpers)
         breakout_hit, breakout_price = volume_breakout_decision(rows, est_close)
@@ -406,7 +394,6 @@ def build_market_input(
             assignments.append({
                 'symbol': symbol,
                 'strategy_id': strategy_id,
-                'entry_depth': int((entry_depths or {}).get(symbol) or 0),
                 'parent_id': (entry_parent_ids or {}).get(symbol),
                 'closes': plan_closes,
                 'est_close': est_close,
@@ -441,8 +428,9 @@ def load_risk_config(config_path: str | Path) -> dict[str, Any]:
         'lhb_dumpers': raw.get('lhb_dumpers') or [],
         'watchlist_limit': raw.get('watchlist_limit'),
         'priority': raw.get('priority') or ['holding', 'index', 'sector', 'candidate'],
-        'same_ma_cooldown_days': int(raw.get('selector', {}).get('same_ma_cooldown_days', 2)),
-        'deep_pullback_ratio': float(raw.get('selector', {}).get('deep_pullback_ratio', 0.95)),
+        'same_ma_cooldown_days': int(raw.get('reentry_rules', {}).get('same_ma_cooldown_days', 2)),
+        'stats': raw.get('stats') or {},
+        'guard': raw.get('guard') or {},
         'retest_window_days': int(raw.get('selector', {}).get('retest_window_days', 3)),
         'retest_volume_min': float(raw.get('selector', {}).get('retest_volume_min', 1.2)),
         'holidays': load_holidays(raw.get('holidays')),
@@ -468,7 +456,6 @@ def fetch_market_input(
         ).fetchall()
     ]
     symbols = [row['symbol'] for row in pool_rows]
-    entry_depths = latest_entry_depths(conn, symbols)
     entry_parent_ids = latest_entry_parent_ids(conn, symbols)
     stock_klines = {symbol: akshare.stock_kline(symbol, trade_date=trade_date, limit=60) for symbol in symbols}
     themes = sorted({row['theme_label'] for row in pool_rows} - {'unknown'})
@@ -484,13 +471,13 @@ def fetch_market_input(
         lhb_dumpers=config['lhb_dumpers'],
         tail_prices=load_tail_prices(conn, trade_date),
         now=date.fromisoformat(trade_date),
-        entry_depths=entry_depths,
         active_retest=active_retest_symbols(conn),
         recent_stops=recent_stop_counts(
             conn, trade_date, config['same_ma_cooldown_days'], config['holidays']
         ),
         same_ma_cooldown_days=config['same_ma_cooldown_days'],
-        deep_pullback_ratio=config['deep_pullback_ratio'],
+        two_source_deviation_max=float(config.get('guard', {}).get('two_source_deviation_max', 0.005)),
+        quote_sanity_enabled=config.get('guard', {}).get('quote_sanity', 'enabled') == 'enabled',
         entry_parent_ids=entry_parent_ids,
         watchlist_limit=(
             int(config.get('watchlist_limit'))

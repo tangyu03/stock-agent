@@ -4,6 +4,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
+import math
+import math
 
 
 def _parse_date(value: Any) -> date | None:
@@ -83,4 +85,92 @@ def check_volume_caliber(
         deviation = abs(kline_volume_ratio - volume_ratio) / volume_ratio
         if deviation > cross_caliber_tolerance:
             return DirtyDataDecision(False, 'volume_caliber_cross_check')
+    return DirtyDataDecision(True)
+
+
+def check_quote_sanity(
+    price: float | None,
+    *,
+    open_price: float | None = None,
+    high: float | None = None,
+    low: float | None = None,
+    prev_close: float | None = None,
+) -> DirtyDataDecision:
+    values = [price, open_price, high, low, prev_close]
+    if any(value is None for value in (price, high, low)):
+        return DirtyDataDecision(False, 'missing_quote')
+    if any(value is not None and (not math.isfinite(float(value)) or float(value) <= 0) for value in values):
+        return DirtyDataDecision(False, 'invalid_number')
+    price_f, high_f, low_f = float(price), float(high), float(low)
+    if high_f < low_f:
+        return DirtyDataDecision(False, 'high_low_conflict')
+    if not low_f <= price_f <= high_f:
+        return DirtyDataDecision(False, 'price_outside_range')
+    if open_price is not None and not low_f <= float(open_price) <= high_f:
+        return DirtyDataDecision(False, 'open_outside_range')
+    if prev_close is not None:
+        change_pct = abs(price_f / float(prev_close) - 1) * 100
+        if change_pct > 20:
+            return DirtyDataDecision(False, 'price_change_exceeds_limit')
+    return DirtyDataDecision(True)
+
+
+def check_two_source(
+    primary: float | None,
+    secondary: float | None,
+    *,
+    max_deviation: float = 0.005,
+) -> DirtyDataDecision:
+    if primary is None or secondary is None:
+        return DirtyDataDecision(False, 'missing_source')
+    primary_f, secondary_f = float(primary), float(secondary)
+    if not math.isfinite(primary_f) or not math.isfinite(secondary_f) or primary_f <= 0 or secondary_f <= 0:
+        return DirtyDataDecision(False, 'invalid_source_value')
+    deviation = abs(primary_f - secondary_f) / max(primary_f, secondary_f)
+    if deviation > max_deviation:
+        return DirtyDataDecision(False, 'two_source_deviation')
+    return DirtyDataDecision(True)
+
+
+def check_quote_sanity(
+    price: float | None,
+    *,
+    open_price: float | None = None,
+    high: float | None = None,
+    low: float | None = None,
+    prev_close: float | None = None,
+) -> DirtyDataDecision:
+    values = [price, open_price, high, low, prev_close]
+    if any(value is None for value in (price, high, low)):
+        return DirtyDataDecision(False, 'missing_quote')
+    if any(value is not None and (not math.isfinite(float(value)) or float(value) <= 0) for value in values):
+        return DirtyDataDecision(False, 'invalid_number')
+    price_f, high_f, low_f = float(price), float(high), float(low)
+    if high_f < low_f:
+        return DirtyDataDecision(False, 'high_low_conflict')
+    if not low_f <= price_f <= high_f:
+        return DirtyDataDecision(False, 'price_outside_range')
+    if open_price is not None and not low_f <= float(open_price) <= high_f:
+        return DirtyDataDecision(False, 'open_outside_range')
+    if prev_close is not None:
+        change_pct = abs(price_f / float(prev_close) - 1) * 100
+        if change_pct > 20:
+            return DirtyDataDecision(False, 'price_change_exceeds_limit')
+    return DirtyDataDecision(True)
+
+
+def check_two_source(
+    primary: float | None,
+    secondary: float | None,
+    *,
+    max_deviation: float = 0.005,
+) -> DirtyDataDecision:
+    if primary is None or secondary is None:
+        return DirtyDataDecision(False, 'missing_source')
+    primary_f, secondary_f = float(primary), float(secondary)
+    if not math.isfinite(primary_f) or not math.isfinite(secondary_f) or primary_f <= 0 or secondary_f <= 0:
+        return DirtyDataDecision(False, 'invalid_source_value')
+    deviation = abs(primary_f - secondary_f) / max(primary_f, secondary_f)
+    if deviation > max_deviation:
+        return DirtyDataDecision(False, 'two_source_deviation')
     return DirtyDataDecision(True)

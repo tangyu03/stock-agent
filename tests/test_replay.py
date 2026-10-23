@@ -38,6 +38,7 @@ def test_replay_generates_and_orders_without_network():
         SignalTag.STOP,
         SignalTag.STOP,
         SignalTag.PROFIT,
+        SignalTag.PROFIT,
         SignalTag.T,
         SignalTag.T,
         SignalTag.ENTER,

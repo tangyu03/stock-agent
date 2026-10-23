@@ -30,12 +30,12 @@ def create_retest_confirm(
     return stop_signal.model_copy(update={
         'id': f'{stop_signal.id}-retest',
         'tag': SignalTag.RETEST_CONFIRM,
-        'side': stop_signal.side,
+        'side': SignalSide.NEUTRAL,
         'zone_low': float(retest_zone[0]),
         'zone_high': float(retest_zone[1]),
         'status': SignalStatus.ACTIVE,
         'status_reason': '',
-        'valid_policy': SignalValidPolicy.INTRADAY,
+        'valid_policy': SignalValidPolicy.FIXED_WINDOW,
         'created_at': created_at,
         'parent_id': stop_signal.parent_id or stop_signal.id,
         'closed_at': None,
@@ -84,6 +84,11 @@ def settle_retest(
 
 
 def stop_break_qualifier(stop_signal: Signal) -> BreakQualifier:
+    if stop_signal.break_qualifier:
+        try:
+            return BreakQualifier(stop_signal.break_qualifier)
+        except ValueError:
+            pass
     for part in reversed(stop_signal.status_reason.split(':')):
         try:
             return BreakQualifier(part)

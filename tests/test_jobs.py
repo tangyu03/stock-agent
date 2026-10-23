@@ -24,11 +24,10 @@ def test_strong_to_weak_invalidates_active_buys():
     assert rows[0].status_reason == 'auction_weak'
 
 
-def test_buy_needs_second_cycle_but_stop_is_single_point():
-    assert confirm_touch(_signal(), 10.5, False)[1] == 'waiting_second_cycle'
-    assert confirm_touch(_signal(), 10.5, True)[1] == 'buy_confirmed'
-    assert confirm_touch(_signal(SignalTag.STOP, parent_id='evt-0'), 10.5, False)[1] == 'stop_single_point'
-    assert confirm_touch(_signal(), 12.0, True)[1] == 'not_in_zone'
+def test_buy_and_stop_are_single_point():
+    assert confirm_touch(_signal(), 10.5)[1] == 'entry_single_point'
+    assert confirm_touch(_signal(SignalTag.STOP, parent_id='evt-0'), 10.5)[1] == 'stop_single_point'
+    assert confirm_touch(_signal(), 12.0)[1] == 'not_in_zone'
 
 
 def test_settle_expires_intraday_and_creates_retest():

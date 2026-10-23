@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from ..models.context_mark import ContextMark
+from ..models.event_calendar import EventCalendar
+from ..models.signal import Signal, SignalRole, SignalStatus
 
 def _text(value: Any) -> str:
     return str(value if value is not None else '').strip()
@@ -185,7 +188,10 @@ def render_report(
     report_date: str,
     market: Mapping[str, Any],
     positions: list[Mapping[str, Any]],
+    signal_rows: list[Signal] | None = None,
 ) -> str:
+    if signal_rows is not None:
+        return render_signal_report(report_date, market, signal_rows)
     lines = [f'【{report_date} 复盘】', render_header(market)]
     ev_negative = render_ev_negative(market)
     if ev_negative:
@@ -221,6 +227,114 @@ def render_report(
     if index_points:
         lines.append(index_points)
     lines.extend(['【明日计划】：', render_plan(market, market.get('t_symbols') or ())])
+    closing = render_closing(market, market.get('receipt_coverage'))
+    if closing:
+        lines.append(closing)
+    lines.append('个人观点，仅供参考。')
+    return '\n'.join(lines)
+
+
+def _signal_name(signal: Signal, names: Mapping[str, str]) -> str:
+    return names.get(signal.symbol) or signal.symbol
+
+
+def _signal_line(signal: Signal, names: Mapping[str, str]) -> str:
+    window = ''
+    if signal.trigger_window_start and signal.trigger_window_end:
+        window = f"｜触发窗口 {signal.trigger_window_start.strftime('%H:%M')}-{signal.trigger_window_end.strftime('%H:%M')}"
+    qualifier = f"｜{signal.break_qualifier}" if signal.break_qualifier else ''
+    return (
+        f"{_signal_name(signal, names)} {signal.strategy_id} "
+        f"{_price(signal.zone_low)}–{_price(signal.zone_high)}"
+        f"{window}{qualifier}"
+    )
+
+
+def _signal_line_with_market(signal: Signal, market: Mapping[str, Any], names: Mapping[str, str]) -> str:
+    line = _signal_line(signal, names)
+    assignments = {
+        str(row.get('symbol') or ''): row
+        for row in (market.get('assignments') or [])
+    }
+    price = assignments.get(signal.symbol, {}).get('est_close')
+    if price is not None:
+        line += f"｜现价 {_price(float(price))}"
+    return line
+
+
+def _render_context_marks(marks: Iterable[ContextMark]) -> str:
+    rows = list(marks)
+    if not rows:
+        return ''
+    lines = ['【环境】：']
+    for mark in rows:
+        triggered = f"｜最近触发 {mark.triggered_at:%H:%M}" if mark.triggered_at else ''
+        lines.append(
+            f"{mark.context_type.value} {mark.code} {_price(mark.level_low)}–{_price(mark.level_high)}"
+            f" {mark.label}{triggered}"
+        )
+    return '\n'.join(lines)
+
+
+def _render_event_calendar(events: Iterable[EventCalendar]) -> str:
+    rows = list(events)
+    if not rows:
+        return ''
+    lines = ['【事件】：']
+    for event in rows:
+        lines.append(f"{event.due_time:%H:%M} {event.code} {event.label}")
+    return '\n'.join(lines)
+
+
+def render_signal_report(
+    report_date: str,
+    market: Mapping[str, Any],
+    signals: list[Signal],
+) -> str:
+    names = {str(code): str(name) for code, name in (market.get('name_map') or {}).items()}
+    entries = [signal for signal in signals if signal.signal_role is SignalRole.ENTRY and signal.status is SignalStatus.ACTIVE]
+    protected = [signal for signal in signals if signal.signal_role in {SignalRole.STOP, SignalRole.PROFIT, SignalRole.T} and signal.status is SignalStatus.ACTIVE]
+    breaks = [
+        signal for signal in signals
+        if signal.signal_role is SignalRole.STOP
+        and signal.status is SignalStatus.TRIGGERED
+        and signal.closed_at and signal.closed_at.date().isoformat() == report_date
+    ]
+    observations = [signal for signal in signals if signal.signal_role is SignalRole.RETEST_CONFIRM and signal.status is SignalStatus.ACTIVE]
+    judgments = [
+        signal for signal in signals
+        if signal.signal_role is SignalRole.RETEST_CONFIRM
+        and signal.status in {SignalStatus.TRIGGERED, SignalStatus.EXPIRED, SignalStatus.INVALIDATED}
+        and signal.closed_at and signal.closed_at.date().isoformat() == report_date
+    ]
+    lines = [f'【{report_date} 交易计划】', render_header(market)]
+    context_marks = [ContextMark.model_validate(row) for row in (market.get('context_marks') or [])]
+    context_text = _render_context_marks(context_marks)
+    if context_text:
+        lines.append(context_text)
+    event_text = _render_event_calendar(market.get('event_calendar') or [])
+    if event_text:
+        lines.append(event_text)
+    execution_review = list(market.get('execution_review') or [])
+    if execution_review:
+        lines.append(render_execution_review(execution_review))
+    ev_negative = render_ev_negative(market)
+    if ev_negative:
+        lines.append(ev_negative)
+    if bool(market.get('zero_plan_day')):
+        lines.append('【明日零预案】：不开新仓；破位定性取消延迟判决。')
+    lines.append(f'【候选】（{len(entries)} 条，不合并同票多策略）：')
+    lines.extend([_signal_line_with_market(signal, market, names) for signal in entries] or ['无'])
+    protected_symbols = {signal.symbol for signal in observations}
+    shown_protection = [signal for signal in protected if signal.symbol not in protected_symbols]
+    lines.append(f'【池内票】（{len(shown_protection)} 条保护行）：')
+    lines.extend([_signal_line_with_market(signal, market, names) for signal in shown_protection] or ['无'])
+    lines.append(f'【破位】（{len(breaks)} 条）：')
+    lines.extend([_signal_line_with_market(signal, market, names) for signal in breaks] or ['无'])
+    lines.append(f'【观察区】（{len(observations)} 条）：')
+    lines.extend([_signal_line_with_market(signal, market, names) for signal in observations] or ['无'])
+    lines.append(f'【判决区】（{len(judgments)} 条）：')
+    lines.extend([_signal_line_with_market(signal, market, names) for signal in judgments] or ['无'])
     closing = render_closing(market, market.get('receipt_coverage'))
     if closing:
         lines.append(closing)

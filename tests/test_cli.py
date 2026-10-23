@@ -12,10 +12,10 @@ def _prepare(db_path: Path) -> None:
     conn = get_connection()
     conn.execute(
         '''INSERT INTO signals (
-            id, symbol, strategy_id, side, tag, zone_low, zone_high, premise,
+            id, symbol, strategy_id, side, tag, role, zone_low, zone_high, premise,
             trend, valid_policy, status, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
-        ('evt-1', '300001', 'strategy-a', 'BUY', 'enter', 10.0, 10.2, '{}', 'UP', 'intraday', 'TRIGGERED', '2026-01-01T00:00:00+00:00'),
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        ('evt-1', '300001', 'strategy-a', 'BUY', 'enter', 'entry', 10.0, 10.2, '{}', 'UP', 'intraday', 'TRIGGERED', '2026-01-01T00:00:00+00:00'),
     )
     conn.execute(
         'INSERT INTO journal (signal_id, from_status, to_status, reason, price, confirmed, created_at) VALUES (?,?,?,?,?,?,?)',
@@ -34,7 +34,7 @@ def test_cli_receipt_stats_holdings_and_pool():
         main(['--db', str(db_path), 'receipt', 'evt-1', '--verdict', 'executed', '--size-filled', '100'])
         main(['--db', str(db_path), 'veto', 'evt-1'])
         report = stats_report()
-        assert report['signal_quality']['strategy-a']['confirmed'] == 1
+        assert report['signal_quality']['strategy-a']['triggered'] == 1
         assert report['behavior']['receipt_coverage'] == 1.0
         main(['--db', str(db_path), 'holdings'])
         main(['--db', str(db_path), 'pool'])

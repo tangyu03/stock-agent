@@ -2,19 +2,19 @@ strategies:
   - id: first_move_5d
     side: BUY
     premise: 热门题材 + 5日线上行 + 未进监管 + 榜不烂
-    y: { type: ma_tomorrow, n: 5, when: tail_30min }
+    y: { type: ma_tomorrow, n: 5, when: tail_snapshot }
     z: { type: ma_break, n: 5 }
     w: { type: pressure_zone, action: sell_part }
   - id: first_move_10d
     side: BUY
     premise: 热门题材 + 回调深但10日线方向未死 + 未进监管
-    y: { type: ma_tomorrow, n: 10, when: tail_30min }
+    y: { type: ma_tomorrow, n: 10, when: tail_snapshot }
     z: { type: ma_break, n: 10 }
     w: { type: pressure_zone, action: sell_part }
   - id: first_move_drift
     side: BUY
     premise: 热门题材 + 5日线正在下移 + 尾盘突破明日5日线位置
-    y: { type: ma_tomorrow, n: 5, direction: descending }
+    y: { type: ma_tomorrow, n: 5, direction: descending, when: tail_snapshot }
     z: { type: ma_break, n: 5 }
     w: { type: pressure_zone, action: sell_part }
   - id: first_board_dip

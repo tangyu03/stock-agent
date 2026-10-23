@@ -2,12 +2,20 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from ..models.signal import Signal, SignalTag, SignalTrend, SignalValidPolicy
+from ..models.signal import (
+    Signal,
+    SignalRole,
+    SignalSide,
+    SignalStatus,
+    SignalTag,
+    SignalTrend,
+    SignalValidPolicy,
+)
 
 
 class PushPriority(str, Enum):
@@ -98,6 +106,13 @@ def _signal(
         strategy_id=strategy_id,
         side=side,
         tag=tag,
+        role={
+            SignalTag.ENTER: SignalRole.ENTRY,
+            SignalTag.STOP: SignalRole.STOP,
+            SignalTag.PROFIT: SignalRole.PROFIT,
+            SignalTag.T: SignalRole.T,
+            SignalTag.RETEST_CONFIRM: SignalRole.RETEST_CONFIRM,
+        }[tag],
         zone_low=float(zone[0]),
         zone_high=float(zone[1]),
         trend=trend,
@@ -116,23 +131,63 @@ def generate_entry(
     created_at: datetime,
     trade_date: date | None = None,
     parent_id: str | None = None,
+    existing_signals: Iterable[Signal] | None = None,
 ) -> list[Signal]:
     validate_strategy(strategy)
     trade_date = trade_date or created_at.date()
     enter_id = f'{trade_date.isoformat()}-{symbol}-{strategy.id}'
     trend = SignalTrend.UP
+    trigger_window = (
+        (time(14, 30), time(15, 0))
+        if str(strategy.y.get('when') or '') == 'tail_snapshot'
+        else None
+    )
     enter = _signal(
         enter_id, strategy.id, symbol, 'BUY', SignalTag.ENTER,
         entry_zone, trend, created_at,
         parent_id,
     )
+    if trigger_window is not None:
+        enter = enter.model_copy(update={
+            'trigger_window_start': trigger_window[0],
+            'trigger_window_end': trigger_window[1],
+        })
+    existing = list(existing_signals or [])
+    existing_stop = next(
+        (
+            signal for signal in existing
+            if signal.symbol == symbol
+            and signal.signal_role is SignalRole.STOP
+            and signal.status is SignalStatus.ACTIVE
+        ),
+        None,
+    )
+    existing_profit = next(
+        (
+            signal for signal in existing
+            if signal.symbol == symbol
+            and signal.signal_role is SignalRole.PROFIT
+            and signal.status is SignalStatus.ACTIVE
+        ),
+        None,
+    )
     stop = _signal(
         f'{enter_id}-z', strategy.id, symbol, 'SELL', SignalTag.STOP,
         stop_zone, trend, created_at, enter_id, SignalValidPolicy.UNTIL_STOPPED,
     )
-    profit = _signal(
-        f'{enter_id}-w', strategy.id, symbol, 'SELL', SignalTag.PROFIT,
-        profit_zone, trend, created_at, enter_id,
+    if existing_stop is not None:
+        stop = existing_stop.model_copy(update={'parent_id': enter.id})
+    profit = (
+        existing_profit.model_copy(update={
+            'parent_id': enter.id,
+            'zone_low': profit_zone[0],
+            'zone_high': profit_zone[1],
+        })
+        if existing_profit is not None
+        else _signal(
+            f'{enter_id}-w', strategy.id, symbol, 'SELL', SignalTag.PROFIT,
+            profit_zone, trend, created_at, enter_id,
+        )
     )
     return [enter, stop, profit]
 
@@ -156,38 +211,22 @@ def generate_holding_rows(
     if trend is SignalTrend.UP:
         rows.extend([
             _signal(
+                f'{created_at.date().isoformat()}-{symbol}-profit', 'holding',
+                symbol, 'SELL', SignalTag.PROFIT, resistance_zone, trend,
+                created_at, parent_id, SignalValidPolicy.UNTIL_STOPPED,
+            ),
+            _signal(
                 f'{created_at.date().isoformat()}-{symbol}-t-buy', 'holding',
                 symbol, 'BUY', SignalTag.T, support_zone, trend, created_at, parent_id,
+                SignalValidPolicy.SAME_DAY,
             ),
             _signal(
                 f'{created_at.date().isoformat()}-{symbol}-t-sell', 'holding',
                 symbol, 'SELL', SignalTag.T, resistance_zone, trend, created_at, parent_id,
+                SignalValidPolicy.SAME_DAY,
             ),
         ])
     return rows
-
-
-def generate_context_row(
-    symbol: str,
-    zone: tuple[float, float],
-    created_at: datetime,
-) -> Signal:
-    tag = SignalTag.INDEX_CONTEXT if symbol.startswith(('sh', 'sz')) else SignalTag.SECTOR_CONTEXT
-    return _signal(
-        f'{created_at.date().isoformat()}-{symbol}-context', 'market_context',
-        symbol, 'BUY', tag, zone, SignalTrend.UP, created_at,
-    )
-
-
-def generate_time_trigger_row(
-    symbol: str,
-    zone: tuple[float, float],
-    created_at: datetime,
-) -> Signal:
-    return _signal(
-        f'{created_at.date().isoformat()}-{symbol}-time-trigger', 'calendar',
-        symbol, 'BUY', SignalTag.TIME_TRIGGER, zone, SignalTrend.UP, created_at,
-    )
 
 
 def apply_size_hints(
@@ -204,10 +243,6 @@ def apply_size_hints(
         else:
             updated.append(signal)
     return updated
-
-
-def can_reenter(parent_chain: Iterable[str], max_depth: int = 2) -> bool:
-    return len(list(parent_chain)) < max_depth
 
 
 def order_for_push(signals: Iterable[Signal]) -> list[Signal]:

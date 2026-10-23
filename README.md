@@ -24,7 +24,7 @@ python -m pointtable.cli --db pointtable/data/pointtable.db pool-add --date 2026
 python -m pointtable.cli --db pointtable/data/pointtable.db pool-audit
 python -m pointtable.cli --db pointtable/data/pointtable.db migration-status
 python -m pointtable.cli --db pointtable/data/pointtable.db auction --date 2026-10-22 --pattern neutral
-python -m pointtable.cli --db pointtable/data/pointtable.db watch --price 10.1 --second-cycle --volume-ratio 1.3 --broken-id <signal_id>
+python -m pointtable.cli --db pointtable/data/pointtable.db watch --prices-json prices.json --context-prices-json context-prices.json --volume-ratio 1.3 --broken-id <signal_id>
 python -m pointtable.cli --db pointtable/data/pointtable.db settle --market-json pointtable/data/evening-2026-10-22.json --close-prices-json close.json --volume-ratios-json volume.json --break-contexts-json break.json
 python -m pointtable.cli --db pointtable/data/pointtable.db restore --close-price 10.1
 python -m pointtable.cli --db pointtable/data/pointtable.db evening --input evening.json
@@ -68,9 +68,11 @@ python -m pointtable.cli --db pointtable/data/pointtable.db report --date 2026-1
 
 `settle` 的观察哨窗口、放量站回阈值和节假日默认读取 `config.yaml`；上面三个 JSON 文件可覆盖收盘价、量比和破位上下文。`watch` 会自动使用同一 `retest_volume_min`。同票多策略不去重；活跃 `retest_confirm` 期间不生成该票 BUY。
 
-`market-input` 会回溯最新 ENTER 链：没有触发 STOP 时用 `first_move_5d`；触发后下一档切 `first_move_10d` 并携带旧 ENTER 作为 `parent_id`；达到两层链深后输出 `reentry_limit` 拒绝。
+`market-input` 不再计算链深。最新 `TRIGGERED` ENTER 作为 `parent_id`；没有可关联的已触发 ENTER 时统一回退到 `pool:<symbol>`。
 
-个股 K 线经过 `DataFreshnessGuard` 检查；监管和龙虎榜结果会写入每只池内票的 `premise_facts`。
+个股 K 线经过 `DataFreshnessGuard` 和报价清洁检查；监管和龙虎榜结果会写入每只池内票的 `premise_facts`。`context_marks` 保存指数/板块区间触发时间，`event_calendar` 承接尾盘 `ma_tomorrow` 提示，二者都不再伪装成 signals。
+
+报告按 signals 投影：候选、池内票保护行、破位、观察区、判决区互不折叠；同票多策略不合并，并显示名称和现价。
 
 `pool.role` 区分 `holding/index/sector/candidate`；旧库自动补列，存量默认 `holding`。`holdings` 和报告只读取 `holding`，`market-input` 会按 `watchlist_limit` 和 priority 截断全部池内票。
 

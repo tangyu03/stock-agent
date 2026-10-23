@@ -27,8 +27,8 @@ def test_hit_creates_confirmed_journal():
         _signal(), TransitionEvent.HIT, 'buy_hit', 10.5, TransitionConfirmation.CONFIRMED
     )
     assert updated.status is SignalStatus.TRIGGERED
-    assert updated.closed_at is None
-    assert journal.confirmed is TransitionConfirmation.CONFIRMED
+    assert updated.closed_at is not None
+    assert journal.record_type.value == 'transition'
 
 
 def test_terminal_states_close_and_cannot_transition():

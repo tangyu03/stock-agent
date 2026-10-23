@@ -29,15 +29,18 @@ priority:
 
 holidays: []
 
-stop_loss:
-  default_n: 5
-  profit_switch_n: 10
-  profit_threshold_pct: 15
-  receipt_min_coverage: 0.5
+reentry_rules:
+  same_ma_cooldown_days: 2
+
+stats:
+  entry_reachability_mode: tail_approx
+  tail_approx_tolerance: 0.003
+
+guard:
+  two_source_deviation_max: 0.005
+  quote_sanity: enabled
 
 selector:
-  same_ma_cooldown_days: 2
-  deep_pullback_ratio: 0.95
   retest_window_days: 3
   retest_volume_min: 1.2
 

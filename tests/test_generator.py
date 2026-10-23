@@ -61,7 +61,7 @@ def test_holding_rows_follow_trend_rules():
     down = generate_holding_rows(
         '300001', SignalTrend.DOWN, (9.0, 9.2), (10.0, 10.2), (11.0, 11.2), 'evt-1', now
     )
-    assert [row.tag for row in up] == [SignalTag.STOP, SignalTag.T, SignalTag.T]
+    assert [row.tag for row in up] == [SignalTag.STOP, SignalTag.PROFIT, SignalTag.T, SignalTag.T]
     assert [row.tag for row in down] == [SignalTag.STOP]
 
 

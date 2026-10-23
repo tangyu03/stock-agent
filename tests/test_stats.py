@@ -1,18 +1,35 @@
 import pytest
 
-from pointtable.stats import behavior, signal_quality
+from pointtable.stats import behavior, signal_quality, signal_reachability
 
 
-def test_signal_quality_uses_confirmed_only_for_expectancy():
+def test_signal_quality_uses_triggered_rows_and_reachability():
     rows = [
         {'strategy_id': 'a', 'status': 'TRIGGERED', 'confirmed': True, 'hypothetical_pnl_pct': 2.0},
         {'strategy_id': 'a', 'status': 'TRIGGERED', 'confirmed': False, 'hypothetical_pnl_pct': 100.0},
         {'strategy_id': 'a', 'status': 'ACTIVE', 'confirmed': False},
     ]
-    report = signal_quality(rows)['a']
-    assert report['confirmed'] == 1
-    assert report['confirmed_expectancy'] == 2.0
+    market_rows = [{'symbol': '300001', 'est_close': 10.2, 'low': 10.0, 'high': 10.3}]
+    quality_rows = [
+        {**row, 'symbol': '300001', 'tag': 'enter', 'role': 'entry', 'zone_low': 10.0, 'zone_high': 10.2}
+        for row in rows
+    ]
+    report = signal_quality(quality_rows, market_rows)['a']
+    assert report['mechanical_expectancy'] == 51.0
+    assert report['reachability']['reachable'] == 3
     assert not report['ev_negative']
+
+
+def test_reachability_marks_tail_miss_unreachable():
+    rows = [
+        {'symbol': '300001', 'strategy_id': 'a', 'tag': 'enter', 'role': 'entry',
+         'zone_low': 10.0, 'zone_high': 10.2, 'status': 'TRIGGERED'},
+    ]
+    market_rows = [{'symbol': '300001', 'est_close': 9.5, 'low': 9.8, 'high': 10.1}]
+    report = signal_reachability(rows, market_rows)['a']
+    assert report['reachable'] == 0
+    assert report['daily_reachable'] == 1
+    assert report['unreachable'] == 1
 
 
 def test_behavior_reports_insufficient_coverage_by_none():

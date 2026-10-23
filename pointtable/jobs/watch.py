@@ -7,13 +7,14 @@ from typing import Any
 from ..core.generator import order_for_push
 from ..core.lifecycle import JournalEntry, TransitionConfirmation, TransitionEvent, transition
 from ..core.volume import Activity, BreakQualifier, active_or_passive, break_qualifier
-from ..models.signal import Signal, SignalSide, SignalStatus, SignalTag
+from ..models.signal import Signal, SignalRole, SignalSide, SignalStatus, SignalTag
 
 
 def confirm_touch(
     signal: Signal,
     price: float,
-    second_cycle: bool,
+    *,
+    now: datetime | None = None,
     volume_ratio: float | None = None,
     retest_volume_min: float = 1.2,
 ) -> tuple[Signal | None, str]:
@@ -30,11 +31,19 @@ def confirm_touch(
     in_zone = signal.zone_low <= price <= signal.zone_high
     if not in_zone:
         return None, 'not_in_zone'
+    if (
+        signal.signal_role is SignalRole.ENTRY
+        and signal.trigger_window_start is not None
+        and signal.trigger_window_end is not None
+    ):
+        current_time = (now or datetime.now()).time()
+        if not signal.trigger_window_start <= current_time <= signal.trigger_window_end:
+            return None, 'outside_trigger_window'
+    if signal.signal_role is SignalRole.ENTRY:
+        return signal, 'entry_single_point'
     if signal.side is SignalSide.SELL or signal.tag is SignalTag.STOP:
         return signal, 'stop_single_point'
-    if second_cycle or (volume_ratio is not None and volume_ratio >= 1.2):
-        return signal, 'buy_confirmed'
-    return None, 'waiting_second_cycle'
+    return signal, 'single_point'
 
 
 def watch_signals(signals: Iterable[Signal], price: float, second_cycle: bool) -> list[Signal]:
@@ -92,21 +101,21 @@ def stop_break_decision(context: Mapping[str, Any] | None) -> tuple[BreakQualifi
 def process_touch(
     signal: Signal,
     price: float,
-    second_cycle: bool,
-    volume_ratio: float | None = None,
+    *,
     now: datetime | None = None,
+    volume_ratio: float | None = None,
     retest_volume_min: float = 1.2,
 ) -> tuple[Signal | None, JournalEntry | None, str]:
     touched, reason = confirm_touch(
-        signal, price, second_cycle, volume_ratio, retest_volume_min
+        signal,
+        price,
+        now=now,
+        volume_ratio=volume_ratio,
+        retest_volume_min=retest_volume_min,
     )
     if touched is None:
         return None, None, reason
-    confirmation = (
-        TransitionConfirmation.CONFIRMED
-        if signal.side is SignalSide.BUY
-        else TransitionConfirmation.TOUCHED_ONLY
-    )
+    confirmation = TransitionConfirmation.TOUCHED_ONLY
     event = (
         TransitionEvent.PREMISE_BROKEN
         if reason == 'retest_pass'

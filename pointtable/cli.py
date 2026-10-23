@@ -8,7 +8,12 @@ from pathlib import Path
 
 import yaml
 
-from .db.session import get_connection, init_db, set_database_path
+from .db.session import (
+    get_connection,
+    init_db,
+    load_event_calendar,
+    set_database_path,
+)
 from .jobs.cutover import expire_legacy_signals, formal_push_ready, switch_push_mode
 from .core.generator import TSizeChoice, apply_t_size_choice
 from .core.sector import load_theme_map
@@ -90,15 +95,6 @@ def add_pool_entry(
 def stats_report(performance: dict | None = None) -> dict:
     conn = get_connection()
     signals = [dict(row) for row in conn.execute('SELECT id, strategy_id, tag, status FROM signals')]
-    confirmed = {
-        row['signal_id']
-        for row in conn.execute(
-            "SELECT DISTINCT signal_id FROM journal WHERE to_status='TRIGGERED' AND confirmed='confirmed'"
-        )
-    }
-    for row in signals:
-        row['confirmed'] = row['id'] in confirmed
-        row['verdict'] = None
     receipts = [dict(row) for row in conn.execute('SELECT signal_id, verdict FROM receipts')]
     receipt_by_signal = {row['signal_id']: row['verdict'] for row in reversed(receipts)}
     for row in signals:
@@ -156,62 +152,39 @@ def build_report(
     report_date: str,
     market: dict[str, Any] | None = None,
 ) -> str:
-    rows = get_connection().execute(
-        '''
-        SELECT symbol, theme_label FROM pool
-        WHERE date = (SELECT MAX(date) FROM pool WHERE date <= ?)
-        ORDER BY symbol
-        ''',
-        (report_date,),
-    ).fetchall()
+    from .jobs.routines import signal_from_row
+    from .notify.render import render_report
+
+    signal_rows = [
+        signal_from_row(row)
+        for row in get_connection().execute(
+            '''
+            SELECT * FROM signals
+            WHERE created_at LIKE ? OR (closed_at IS NOT NULL AND closed_at LIKE ?)
+            ORDER BY created_at, id
+            ''',
+            (report_date + '%', report_date + '%'),
+        ).fetchall()
+    ]
     portfolio_path = Path(__file__).parents[1] / 'legacy' / 'config' / 'portfolio.yaml'
     portfolio = yaml.safe_load(portfolio_path.read_text(encoding='utf-8')) or {}
     name_by_symbol = {
         str(item.get('code')): str(item.get('name') or '')
         for item in portfolio.get('stocks') or []
     }
-    assignment_by_symbol = {
-        str(row.get('symbol') or ''): row
-        for row in (market or {}).get('assignments') or []
-    }
-    positions = []
-    for row in rows:
-        assignment = assignment_by_symbol.get(row['symbol'], {})
-        name = name_by_symbol.get(row['symbol']) or row['symbol']
-        positions.append({
-            'name': row['symbol'] + '（' + name + '，' + row['theme_label'] + '）',
-            'theme': row['theme_label'],
-            'current_price': assignment.get('est_close'),
-        })
-    signal_rows = get_connection().execute(
-        'SELECT * FROM signals WHERE created_at LIKE ? ORDER BY created_at, id',
-        (report_date + '%',),
-    ).fetchall()
     by_symbol: dict[str, list[Any]] = {}
-    if signal_rows:
-        from .jobs.routines import signal_from_row
-
-        for signal_row in signal_rows:
-            signal = signal_from_row(signal_row)
-            by_symbol.setdefault(signal.symbol, []).append(signal)
-        for position in positions:
-            symbol = position['name'].split('（')[0]
-            for signal in by_symbol.get(symbol, []):
-                if signal.tag.value == 'enter':
-                    position['entry_low'] = signal.zone_low
-                    position['entry_high'] = signal.zone_high
-                if signal.tag.value == 'stop':
-                    position['stop_low'] = signal.zone_low
-                    position['stop_high'] = signal.zone_high
-                elif signal.tag.value == 'profit':
-                    position['profit_low'] = signal.zone_low
-                    position['profit_high'] = signal.zone_high
-                elif signal.tag.value == 't' and signal.side.value == 'BUY':
-                    position['t_buy_low'] = signal.zone_low
-                    position['t_buy_high'] = signal.zone_high
-                elif signal.tag.value == 't' and signal.side.value == 'SELL':
-                    position['t_sell_low'] = signal.zone_low
+    for signal in signal_rows:
+        by_symbol.setdefault(signal.symbol, []).append(signal)
     market_for_report = dict((market or {}).get('market') or market or {})
+    market_for_report['assignments'] = list((market or {}).get('assignments') or [])
+    market_for_report['name_map'] = name_by_symbol
+    market_for_report['context_marks'] = [
+        dict(row) for row in get_connection().execute(
+            'SELECT * FROM context_marks WHERE date=? ORDER BY context_type, code',
+            (report_date,),
+        ).fetchall()
+    ]
+    market_for_report['event_calendar'] = load_event_calendar(get_connection(), report_date)
     market_for_report['execution_review'] = today_execution_review(get_connection(), report_date)
     market_for_report['ev_negative_strategies'] = sorted({
         signal.strategy_id
@@ -219,7 +192,7 @@ def build_report(
         for signal in signals
         if signal.premise.get('ev_negative')
     })
-    return evening_report(report_date, market_for_report, positions)
+    return render_report(report_date, market_for_report, [], signal_rows)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -258,12 +231,14 @@ def build_parser() -> argparse.ArgumentParser:
     auction.add_argument('--date', required=True)
     auction.add_argument('--pattern', choices=[item.value for item in AuctionPattern], required=True)
     watch = commands.add_parser('watch')
-    watch.add_argument('--price', type=float, required=True)
+    watch.add_argument('--price', type=float)
     watch.add_argument('--second-cycle', action='store_true')
     watch.add_argument('--volume-ratio', type=float)
     watch.add_argument('--date')
     watch.add_argument('--broken-id', action='append', default=[])
     watch.add_argument('--context-json', type=Path)
+    watch.add_argument('--prices-json', type=Path)
+    watch.add_argument('--context-prices-json', type=Path)
     watch.add_argument('--retest-volume-min', type=float)
     settle = commands.add_parser('settle')
     settle.add_argument('--now')
@@ -389,6 +364,14 @@ def main(argv: list[str] | None = None) -> int:
                 if args.retest_volume_min is not None
                 else risk_config['retest_volume_min']
             ),
+            prices=(
+                json.loads(args.prices_json.read_text(encoding='utf-8'))
+                if args.prices_json else None
+            ),
+            context_prices=(
+                json.loads(args.context_prices_json.read_text(encoding='utf-8'))
+                if args.context_prices_json else None
+            ),
         ), ensure_ascii=False, indent=2))
     elif args.command == 'settle':
         now = datetime.fromisoformat(args.now) if args.now else datetime.now(timezone.utc)
@@ -399,6 +382,8 @@ def main(argv: list[str] | None = None) -> int:
         close_prices = json.loads(args.close_prices_json.read_text(encoding='utf-8')) if args.close_prices_json else None
         volume_ratios = json.loads(args.volume_ratios_json.read_text(encoding='utf-8')) if args.volume_ratios_json else None
         break_contexts = json.loads(args.break_contexts_json.read_text(encoding='utf-8')) if args.break_contexts_json else None
+        market_payload = json.loads(args.market_json.read_text(encoding='utf-8')) if args.market_json else {}
+        market_fields = market_payload.get('market') if isinstance(market_payload.get('market'), dict) else market_payload
         holidays = json.loads(args.holidays_json.read_text(encoding='utf-8')) if args.holidays_json else None
         risk_config = load_risk_config(Path(__file__).parents[1] / 'config' / 'config.yaml')
         print(json.dumps(run_settle(
@@ -419,6 +404,8 @@ def main(argv: list[str] | None = None) -> int:
                 else risk_config['retest_volume_min']
             ),
             holidays=set(holidays) if holidays is not None else risk_config['holidays'],
+            market_tier=str(market_fields.get('tier') or 'NORMAL'),
+            index_trend=str(market_fields.get('index_trend') or 'UP'),
         ), ensure_ascii=False, indent=2))
     elif args.command == 'restore':
         print(json.dumps(run_restore(get_connection(), args.close_price), ensure_ascii=False, indent=2))

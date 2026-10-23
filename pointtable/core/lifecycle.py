@@ -44,7 +44,7 @@ def transition(
         raise ValueError('price must not be negative')
     timestamp = now or datetime.now()
     target = _TRANSITIONS[event]
-    terminal = target in {SignalStatus.EXPIRED, SignalStatus.INVALIDATED}
+    terminal = target in {SignalStatus.TRIGGERED, SignalStatus.EXPIRED, SignalStatus.INVALIDATED}
     updated = signal.model_copy(
         update={
             'status': target,

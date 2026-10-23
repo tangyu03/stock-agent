@@ -9,11 +9,11 @@ from pointtable.data import akshare
 from pointtable.cli import main
 from pointtable.db.session import get_connection, init_db, save_journal, save_signals, set_database_path
 from pointtable.models.journal import JournalEntry, TransitionConfirmation
-from pointtable.jobs.evening import build_context_rows, build_evening_signals, market_tier, zero_plan_day
+from pointtable.jobs.evening import build_context_marks, build_evening_signals, market_tier, zero_plan_day
 from pointtable.jobs.routines import run_auction, run_restore, run_settle, run_watch
 from pointtable.jobs.routines import run_evening
 from pointtable.jobs.market_pipeline import build_market_input, lhb_decision
-from pointtable.jobs.market_pipeline import latest_entry_depths, truncate_watchlist
+from pointtable.jobs.market_pipeline import latest_entry_parent_ids, truncate_watchlist
 from pointtable.jobs.tail_snapshot import capture_tail_snapshots, load_tail_prices
 from pointtable.jobs.scheduler import Routine, next_routine
 from pointtable.jobs.plan_builder import build_pool_plan, build_pool_plans
@@ -21,10 +21,7 @@ from pointtable.core.generator import (
     TSizeChoice,
     apply_size_hints,
     apply_t_size_choice,
-    can_reenter,
-    generate_context_row,
     generate_entry,
-    generate_time_trigger_row,
     Strategy,
 )
 from pointtable.core.auction import AuctionPattern
@@ -98,16 +95,19 @@ def test_index_kline_appends_spot_for_missing_trade_date():
 
 def test_generator_context_time_trigger_and_size_hints():
     now = datetime(2026, 1, 1, tzinfo=UTC)
-    assert generate_context_row('sh000001', (3000, 3010), now).tag is SignalTag.INDEX_CONTEXT
-    assert generate_context_row('new_energy', (3000, 3010), now).tag is SignalTag.SECTOR_CONTEXT
-    assert generate_time_trigger_row('300001', (10, 11), now).tag is SignalTag.TIME_TRIGGER
+    marks = build_context_marks(
+        [{'symbol': 'sh000001', 'zone': (3000, 3010)}],
+        [{'symbol': 'new_energy', 'zone': (100, 110)}],
+        now.date(), now,
+    )
+    assert [mark.context_type.value for mark in marks] == ['index', 'sector']
     rows = apply_size_hints([
         _signal(size_hint=10),
         _signal(side='SELL', tag=SignalTag.STOP, size_hint=10, parent_id='p'),
     ], 'low')
     assert rows[0].size_hint == 5
     assert rows[1].size_hint == 10
-    assert not can_reenter(['a', 'b'])
+    assert rows[0].size_hint == 5
 
 
 def test_generate_entry_links_reentry_parent():
@@ -128,10 +128,10 @@ def test_generate_entry_links_reentry_parent():
 
 def test_watch_process_touch_and_premise():
     now = datetime(2026, 1, 1, tzinfo=UTC)
-    updated, journal, reason = process_touch(_signal(), 10.5, True, now=now)
+    updated, journal, reason = process_touch(_signal(), 10.5, now=now)
     assert updated.status is SignalStatus.TRIGGERED
-    assert journal is not None and journal.confirmed.value == 'confirmed'
-    assert reason == 'buy_confirmed'
+    assert journal is not None and journal.record_type.value == 'transition'
+    assert reason == 'entry_single_point'
     invalid, _ = invalidate_premise(_signal(), now)
     assert invalid.status is SignalStatus.INVALIDATED
     assert qualify_break(volume_ratio=0.5, active_delta=0, stock_triggered=True, sector_triggered=False, index_triggered=False).value == 'EXECUTE_NOW'
@@ -164,7 +164,7 @@ def test_evening_pipeline_and_market_fuse():
         'LOW', now,
     )
     assert [row.tag for row in rows] == [SignalTag.ENTER, SignalTag.STOP, SignalTag.PROFIT]
-    assert build_context_rows([{'symbol': 'sh000001', 'zone': (3000, 3010)}], [], now)[0].tag is SignalTag.INDEX_CONTEXT
+    assert build_context_marks([{'symbol': 'sh000001', 'zone': (3000, 3010)}], [], now.date(), now)[0].code == 'sh000001'
     assert market_tier(8000) == 'LOW'
     assert zero_plan_day(8000, 'down')
     assert not zero_plan_day(8000, 'up')
@@ -284,11 +284,12 @@ def test_evening_generates_holding_rows(tmp_db):
     input_path.write_text(json.dumps(payload), encoding='utf-8')
     try:
         result = run_evening(get_connection(), input_path)
-        assert len(result['signal_ids']) == 3
+        assert len(result['signal_ids']) == 4
         rows = [row['tag'] for row in get_connection().execute(
             'SELECT tag FROM signals ORDER BY id'
         ).fetchall()]
-        assert rows == ['stop', 't', 't']
+        assert set(rows) == {'stop', 'profit', 't'}
+        assert rows.count('t') == 2
     finally:
         set_database_path(Path('unused'))
         input_path.unlink(missing_ok=True)
@@ -391,14 +392,21 @@ def test_report_uses_pool_rows(tmp_db):
         'INSERT INTO pool (date, symbol, theme_label) VALUES (?,?,?)',
         ('2026-01-01', '002975', 'AI'),
     )
+    signal = _signal().model_copy(update={
+        'id': '2026-01-01-002975-first_move_5d',
+        'symbol': '002975',
+        'strategy_id': 'first_move_5d',
+    })
+    conn.commit()
+    save_signals(conn, [signal])
     conn.commit()
     assert main(['--db', str(tmp_db), 'report', '--date', '2026-01-01']) == 0
     output_path = Path.cwd() / 'test_report.md'
     try:
         assert main(['--db', str(tmp_db), 'report', '--date', '2026-01-01', '--output', str(output_path)]) == 0
         text = output_path.read_text(encoding='utf-8')
-        assert '【2026-01-01 复盘】' in text
-        assert '002975（博杰股份，AI）' in text
+        assert '【2026-01-01 交易计划】' in text
+        assert '博杰股份 first_move_5d 10–11' in text
     finally:
         output_path.unlink(missing_ok=True)
 
@@ -510,7 +518,7 @@ def test_tail_snapshot_appends_missing_close_for_tomorrow_line(tmp_db):
     assert payload['stop_zones']['300001'][1] == 13.0
 
 
-def test_latest_entry_depths_follows_parent_chain(tmp_db):
+def test_latest_entry_parent_prefers_triggered_enter(tmp_db):
     set_database_path(tmp_db)
     init_db()
     conn = get_connection()
@@ -519,19 +527,20 @@ def test_latest_entry_depths_follows_parent_chain(tmp_db):
         'id': 'enter-1',
         'parent_id': 'enter-0',
         'strategy_id': 'first_move_10d',
+        'status': SignalStatus.TRIGGERED,
     })
     save_signals(conn, [base, reentry])
     conn.commit()
-    assert latest_entry_depths(conn, ['300001']) == {'300001': 1}
+    assert latest_entry_parent_ids(conn, ['300001']) == {'300001': 'enter-1'}
 
 
-def test_latest_entry_depth_waits_for_triggered_stop(tmp_db):
+def test_latest_entry_parent_falls_back_to_pool(tmp_db):
     set_database_path(tmp_db)
     init_db()
     conn = get_connection()
     base = _signal().model_copy(update={'id': 'enter-0'})
     save_signals(conn, [base])
-    assert latest_entry_depths(conn, ['300001']) == {'300001': 0}
+    assert latest_entry_parent_ids(conn, ['300001']) == {'300001': 'pool:300001'}
     stop = _signal(SignalTag.STOP, side='SELL', parent_id='enter-0').model_copy(update={
         'id': 'stop-0',
         'valid_policy': SignalValidPolicy.UNTIL_STOPPED,
@@ -539,7 +548,7 @@ def test_latest_entry_depth_waits_for_triggered_stop(tmp_db):
         'created_at': datetime(2026, 1, 2, tzinfo=UTC),
     })
     save_signals(conn, [stop])
-    assert latest_entry_depths(conn, ['300001']) == {'300001': 1}
+    assert latest_entry_parent_ids(conn, ['300001']) == {'300001': 'pool:300001'}
 
 
 def test_lhb_decision_matches_code_and_dumpers():

@@ -14,10 +14,10 @@ def _prepare(db_path: Path) -> None:
     conn = get_connection()
     conn.execute(
         '''INSERT INTO signals (
-            id, symbol, strategy_id, side, tag, zone_low, zone_high, premise,
+            id, symbol, strategy_id, side, tag, role, zone_low, zone_high, premise,
             trend, valid_policy, status, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
-        ('2026-01-01-300001-first', '300001', 'first_move_5d', 'BUY', 'enter', 10.0, 10.2, '{}', 'UP', 'intraday', 'ACTIVE', '2026-01-01T00:00:00+00:00'),
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        ('2026-01-01-300001-first', '300001', 'first_move_5d', 'BUY', 'enter', 'entry', 10.0, 10.2, '{}', 'UP', 'intraday', 'ACTIVE', '2026-01-01T00:00:00+00:00'),
     )
     conn.commit()
 
@@ -40,17 +40,17 @@ def test_cutover_expires_legacy_signals_once(tmp_db):
     conn = get_connection()
     conn.execute(
         '''INSERT INTO signals (
-            id, symbol, strategy_id, side, tag, zone_low, zone_high, premise,
+            id, symbol, strategy_id, side, tag, role, zone_low, zone_high, premise,
             trend, valid_policy, status, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
-        ('old-triggered', '300002', 'first_move_5d', 'BUY', 'enter', 10.0, 10.2, '{}', 'UP', 'intraday', 'TRIGGERED', '2025-12-31T00:00:00+00:00'),
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        ('old-triggered', '300002', 'first_move_5d', 'BUY', 'enter', 'entry', 10.0, 10.2, '{}', 'UP', 'intraday', 'TRIGGERED', '2025-12-31T00:00:00+00:00'),
     )
     conn.execute(
         '''INSERT INTO signals (
-            id, symbol, strategy_id, side, tag, zone_low, zone_high, premise,
+            id, symbol, strategy_id, side, tag, role, zone_low, zone_high, premise,
             trend, valid_policy, status, status_reason, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        ('old-expired', '300003', 'first_move_5d', 'BUY', 'enter', 10.0, 10.2, '{}', 'UP', 'intraday', 'EXPIRED', 'manual', '2025-12-30T00:00:00+00:00'),
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        ('old-expired', '300003', 'first_move_5d', 'BUY', 'enter', 'entry', 10.0, 10.2, '{}', 'UP', 'intraday', 'EXPIRED', 'manual', '2025-12-30T00:00:00+00:00'),
     )
     conn.commit()
     now = datetime(2026, 1, 2, tzinfo=UTC)
