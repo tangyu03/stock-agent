@@ -1,25 +1,22 @@
 
+# 文档二：破位-反抽-再进场链 · 技术细节（v2.0）
 
-# 破位-反抽-再进场逻辑 · 局部修正指导文档（完整版）
+> 本文聚焦一条链的实现细节，是文档一 §7 的展开。状态机层次以文档一 §6 为准：**链是 parent_id 接力，不是状态机；状态机只有单信号四状态。** 涉及文件：volume.py、watch.py、settle.py、selector.py、generator.py、config.yaml。
 
-## 背景
+## 0. 背景与目标
 
-这条链路覆盖一只票从"持有"到"破位"到"重新进场"的完整循环，对应懂哥操作链：破位定性 → 等反抽判决 → 判决后按价格位置重新选策略进场。涉及文件：**volume.py、watch.py、settle.py、selector.py、generator.py、config.yaml**。不动状态机、不动表结构。
+覆盖一只票从持有到破位、到反抽观察、到重新进场的完整循环。一句话：**止损触发（卖）→ 反抽观察（判）→ 观察期结案（撤或纠错）→ 价格走到下一档均线 → 三个前置检查通过（买）**。
 
-整条链的状态流转一句话：**STOP 触发（卖）→ retest_confirm 观察（判）→ 判决落地（撤或纠错）→ 价格走到下一档均线 → selector 前提重新检查（买）**。四个环节各管一段，互不越界。
+四个环节各管一段，互不越界：
 
-## 问题
+| 环节 | 实现文件 | 职责 |
+|---|---|---|
+| 破位定性 | volume.py + watch.py | 四路输出，只写 journal reason 和推送文案 |
+| 收盘定生死 | settle.py | 四路分支决定生不生成 retest_confirm |
+| 反抽观察判定 | watch.py + settle.py | retest_confirm 三终态 |
+| 判决后选股 | generator.py + selector.py | 三个前置检查，价格位置出策略 |
 
-1. 定性四路只接了两路（漏 LIMIT_EXEMPT 和 DIVERGENCE）。
-2. DELAY_OBSERVE 的"收盘定生死"没有执行者。
-3. 观察哨窗口和量条件没有配置项。
-4. 纠错提醒两条触发路径没统一。
-5. **策略选择仍是 if-elif-else 耦合链，再入场 depth 被误用为策略参数。**
-6. **反抽期间与新买点生成之间的边界没写死：什么时候策略管道对一只票关闭、什么时候重新开放。**
-
-## 建议改法
-
-### 一、破位定性（volume.py + watch.py）
+## 1. 破位当天定性（volume.py + watch.py）
 
 ```python
 # volume.py —— 纯函数，四路输出
@@ -33,120 +30,132 @@ def break_qualifier(change_pct, drive, vgear, sector_triggered, index_triggered)
     return "DELAY_OBSERVE"
 
 # watch.py —— STOP 单点触碰即 TRIGGERED（不变），随后调用 break_qualifier
-# EXECUTE_NOW   → 立即推"破位，撤"
-# DELAY_OBSERVE → 推"缩量破位，疑似被动，收盘定生死"
-# DIVERGENCE    → 推"下跌但外盘占优，有承接，看不懂，收盘复核"
-# LIMIT_EXEMPT  → 不定性，推送注明"封板附近失真"
 # 定性只写 journal reason 和推送文案，不改状态机
 ```
 
-### 二、收盘定生死（settle.py 新增）
+## 2. 收盘定生死（settle.py）
 
 ```python
 for stop in today_triggered_stops:
-    q = stop.qualifier
+    q = stop.status_reason
     if q in ("DELAY_OBSERVE", "DIVERGENCE"):
         if close < stop.zone_low:
-            create_retest_confirm(stop)      # 收盘仍破 → 立观察哨
+            create_retest_confirm(stop)      # 收盘仍破 → 生成 retest_confirm
         else:
-            push_correction_notice(stop)     # 收盘收复 → 当日假破位，纠错提醒，不立哨
+            push_correction_notice(stop)     # 收盘收复 → 纠错提醒，不生成
     elif q == "EXECUTE_NOW":
-        create_retest_confirm(stop)          # 当天走了也立哨：给纠错留门
-    # LIMIT_EXEMPT → 不立哨，次日 evening 正常生成新 STOP
+        create_retest_confirm(stop)          # 当天执行也生成：给纠错留门
+    # LIMIT_EXEMPT → 不生成，次日晚上正常生成新 STOP
 ```
 
-### 三、观察哨：retest_confirm（settle.py 生成 + watch.py 判定）
+**四条硬约束**：EXECUTE_NOW 也生成；DELAY/DIVERGENCE 同一段逻辑双向；LIMIT_EXEMPT 不生成；生成时 zone 取原 STOP 的 zone（原支撑，现为压力），parent_id 指向原 enter 或 `holding:<symbol>`，有效期取 `retest_window_days`。
 
-生成规格：区间 = 原 STOP 的 zone（原支撑，现在是压力）；parent_id 指向原 enter（或 `holding:<symbol>`）；有效期 `config.retest_window_days`（默认 3 个交易日）。
+## 3. retest_confirm：生成、判定、终态
 
-watch 对观察哨的三种结局判定：
+**生成规格**：zone = 原 STOP 的 zone；parent_id = 原 enter 或 `holding:<symbol>`；valid_policy 按 `retest_window_days`（默认3交易日）；tag = retest_confirm。
+
+**三种终态各有结案时刻，不是固定 T+3**：
+
+| 终态 | 判定 | 结案时刻 | 判定者 |
+|---|---|---|---|
+| TRIGGERED | 盘中摸进区间、收盘未站上区间上沿 | 盘中某次 watch 轮询（事件） | watch |
+| INVALIDATED | 收盘站上区间上沿且量比 ≥ `retest_volume_min` | 盘中最后一次 watch 或收盘判定 | watch |
+| EXPIRED | 窗口到期，价格从没摸进区间 | 到期日收盘后清点 | settle |
 
 ```python
-# 结局一：摸到过不去 → 确认破位
+# watch
 if price_in_zone and close < zone_high:
-    transition(retest, "hit")                # reason=retest_fail，推"反抽过不去，确认破位，撤"
-
-# 结局二：放量站回 → 假破位
-if close >= zone_high and volume_ratio >= cfg.retest_volume_min:   # 默认1.2
-    transition(retest, "premise_broken")     # reason=retest_pass
-    push_correction_notice(retest)           # "收复止损位，可按纪律纠错。追不追，是你。"
-
-# 结局三：到期没摸回来 → 连反抽都没有
-# settle 到期置 EXPIRED；"利润或纪律"二选一留给用户，系统不代答
+    transition(retest, "hit")                # TRIGGERED，reason=retest_fail
+if close >= zone_high and volume_ratio >= cfg.retest_volume_min:
+    transition(retest, "premise_broken")     # INVALIDATED，reason=retest_pass
+    push_correction_notice(retest)
+# settle：到期置 EXPIRED
 ```
 
-纠错提醒统一走 `push_correction_notice()`：破位当日盘中收复（watch 发现）和跨日放量站回（结局二）是同一件事在两个时刻的触发，文案一致，都不迁移原 STOP 状态、都不发新买点。
+**观察期存续期间**：generator 检查一挡掉该票，候选区物理为空。**“当日结案”查法**：`status in 终态 且 closed_at 日期 = 报告日期`。
 
-### 四、策略解耦：selector.py（新增，替换原 if-elif-else）
+## 4. 纠错提醒统一
 
-每个策略是一个独立的前提检查纯函数，输入只有事实字段（均线、斜率、量比、突破价、首板标注等），不 import data/db/notify：
+两条路径共用一个函数 `push_correction_notice()`：
+
+- 破位当日盘中收复（watch 发现）→ 调用；
+- retest_confirm 放量站回（watch 判 INVALIDATED）→ 调用。
+
+**统一语义**：文案一致、不迁移原 STOP 状态、不发新买点、不生成新信号。买回是人的动作。
+
+## 5. 策略选择解耦（selector.py）
+
+每个策略是一个独立的前提检查纯函数，输入只有事实字段，不 import data/db/notify：
 
 ```python
-def check_first_move_5d(facts) -> bool:      # 5日线上行 + 未进监管 + 榜不烂
-def check_first_move_10d(facts) -> bool:     # 回调深但10日线方向未死
-def check_first_move_drift(facts) -> bool:   # 5日线下移 + 尾盘突破明日5日线位置
-def check_volume_breakout(facts) -> bool:    # 放量站上关键位 + 收阳
-def check_first_board_dip(facts) -> bool:    # 首板(人工标注,仅标注日次日有效) + 有支撑
+def check_first_move_5d(facts) -> bool: ...
+def check_first_move_10d(facts) -> bool: ...
+def check_first_move_drift(facts) -> bool: ...
+def check_volume_breakout(facts) -> bool: ...
+def check_first_board_dip(facts) -> bool: ...
 
-# generator 收集全部满足的策略，无优先级排序
 candidates = [sid for sid, check in CHECKS.items() if check(facts)]
 ```
 
-**同票不用去重，都推送消息**
+**生成层不做任何合并**：一只票同时满足几个策略，就输出几条候选，全部推送。不按重叠度去重，不设优先级，不标 merged_from。`dedup_zone_overlap` 配置已删除。
 
-### 五、两条链的咬合点：策略管道何时对一只票关闭、何时开放
-
-这是解耦版最需要写死的一段——它替代了原来 depth 参数的全部职能：
+## 6. 判决后重新选股：三个前置检查（替代 depth）
 
 ```python
-# generator 对每只 pool 票生成 BUY 前，按序过三道闸：
-
-# 闸一：观察哨存续检查
-# 该 symbol 有 ACTIVE 的 retest_confirm → 不产出任何 BUY
-# 语义：破位判决未落地，反抽不是买点
+# 检查一：观察期存续 → 不出买点
 if has_active_retest_confirm(symbol):
     skip_buy()
 
-# 闸二：同档位冷却（防"同一根线上反复打脸"）
-# journal 中同 symbol 同均线档位，近 config.same_ma_cooldown_days（默认2日）内
-# 已有两次 STOP TRIGGERED → 该档位策略冷却
-# 注意：冷却的是"档位"不是"票"——5日线冷却不影响10日线前提满足时出信号
-if same_ma_stop_count(symbol, ma_n=5, days=cfg.same_ma_cooldown_days) >= 2:
-    exclude(["first_move_5d", "first_move_drift"])   # 5日线家族冷却
+# 检查二：同均线档位近 N 日两次 STOP → 该均线家族暂停
+# 暂停的是“均线档位”不是“票”；5日线暂停不影响10日线
+if same_ma_stop_count(symbol, ma_n=5, days=cfg.reentry_rules.same_ma_cooldown_days) >= 2:
+    exclude(["first_move_5d", "first_move_drift"])
 
-# 闸三：判决后重新开放
-# 观察哨已关闭（TRIGGERED/EXPIRED/INVALIDATED 任一终态）→ 管道重新开放
-# 价格此时在哪根均线附近，哪个策略的前提自然满足，就出哪个策略
-# "破5卖→10日再买"不是编排出来的，是价格位置的必然结果：
-# 你在5日线止损出来，价格就处于"回调深"状态，check_first_move_10d 自然为真
+# 检查三：观察期结案 + 价格位置
+# 结案（TRIGGERED/EXPIRED/INVALIDATED 任一终态）→ 选股恢复
+# 价格在哪根均线附近，哪个策略前提自然满足就出哪个
+# “破5卖→10日再买”是价格位置的必然结果，不是编排
 ```
 
-用一张表确认三种典型路径下系统行为正确：
+三条典型路径：
 
-| 路径 | 闸一 | 闸二 | 结果 |
+| 路径 | 检查一 | 检查二 | 结果 |
 |---|---|---|---|
-| 破5 → 反抽摸不过 → 确认破位 → 跌到10日线 | 观察哨关闭后开放 | 5日线档冷却中 | **first_move_10d 前提满足 → 新买点** ✓ |
-| 破5 → 放量站回 → 人纠错买回 | 观察哨 INVALIDATED 后开放 | 无两次止损记录 | 管道开放，但当时价格在5日线上方远离均线，无前提满足 → **不出信号，等** ✓ |
-| 破5 → 观察哨存续中价格横跳 | 存续中 | — | **零 BUY 输出** ✓（反抽不是买点） |
+| 破5 → 反抽摸不过 → 确认破位 → 跌到10日线 | 结案后放行 | 5日线档暂停中 | **10日线先手前提满足 → 新买点** ✓ |
+| 破5 → 放量站回 → 人纠错买回 | 结案后放行 | 无两次止损记录 | 管道开放，但价格远离均线 → **不出信号，等** ✓ |
+| 破5 → 观察期里价格横跳 | 存续中挡住 | — | **零买点输出** ✓ |
 
-### 六、config.yaml 新增项
+## 7. config.yaml 新增项
 
 ```yaml
 retest_window_days: 3        # 观察哨有效期（交易日）
-retest_volume_min: 1.2       # "放量站回"的量比下限
-same_ma_cooldown_days: 2     # 同档位止损冷却窗口
-dedup_zone_overlap: 0.7      # 同票多策略去重的 zone 重叠度阈值
+retest_volume_min: 1.2       # 放量站回量比下限（工程近似，C级）
+reentry_rules:
+  same_ma_cooldown_days: 2   # 同均线档位两次止损后冷却窗口
 ```
 
-## 验收
+**已删除**：`dedup_zone_overlap`。
 
-破位链：缩量破位收盘收复 → 纠错提醒无观察哨；收盘仍破 → 观察哨生成；封板日破位 → LIMIT_EXEMPT 不定性不立哨。
+## 8. 废弃项
 
-观察哨三结局：过不去 TRIGGERED / 放量站回 INVALIDATED＋纠错 / 到期 EXPIRED，各一条用例。
+| 废弃项 | 说明 |
+|---|---|
+| depth 参数 | 不再用于策略选择或再入场深度控制；相关 config、签名、调用点清理 |
+| `dedup_zone_overlap` | 生成层不合并 |
+| “闸门”叫法 | 统一为“前置检查/条件” |
 
-解耦：五策略各一条正向用例；事实不足输出 no_strategy；同票双策略重叠>70% 只留先手并标 merged_from。
+## 9. 验收
 
-咬合：观察哨存续期 selector 对该票零输出；观察哨关闭且价格到位后 first_move_10d 自动出现；同均线两次止损后5日线家族冷却、10日线不受影响。
+**破位链**：缩量收盘仍破→生成 retest_confirm；缩量收盘收复→只发纠错不生成；分歧收盘仍破→生成；分歧收盘收复→纠错不生成；EXECUTE_NOW 当天执行→仍生成；LIMIT_EXEMPT→不生成、次日正常生成 STOP。
 
-全程无状态机非法迁移（test_lifecycle 既有用例全绿）。
+**retest_confirm 三终态**：TRIGGERED / INVALIDATED＋纠错 / EXPIRED 各一条，且验证结案日按 `closed_at` 查。
 
+**纠错统一**：两条路径文案一致、不迁移状态、不发买点。
+
+**策略解耦**：五策略各一条正向；事实不足 no_strategy；同票多策略全部输出全部推送、无合并。
+
+**三个前置检查**：观察期存续零输出；结案且价格到位 first_move_10d 出现；同均线两次止损后 5日线家族暂停、10日线不受影响；depth 删除后无残留调用。
+
+**回归**：无状态机非法迁移，test_lifecycle 全绿。
+
+---

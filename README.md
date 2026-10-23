@@ -101,3 +101,21 @@ python -X utf8 -m pytest -q -p no:tmpdir -p no:cacheprovider --ignore=legacy --i
 ```
 
 验收重点：均线锚点误差小于 0.5%，影子期无漏报，切流后旧信号全量失效，两层统计可正常产出。
+
+
+以下是图片中提取的文字内容：
+
+现在（10/23 早上）生成 10/23 交易计划，用 10/22 作为行情基准日：
+
+python -X utf8 -m pointtable.cli --db pointtable/data/pointtable.db market-input --date 2026-10-22 --output pointtable/data/evening-2026-10-22.json
+
+python -X utf8 -m pointtable.cli --db pointtable/data/pointtable.db evening --input pointtable/data/evening-2026-10-22.json
+
+python -X utf8 -m pointtable.cli --db pointtable/data/pointtable.db report --date 2026-10-22 --market-json pointtable/data/evening-2026-10-22.json --output reports/2026-10-23-plan.md
+
+说明：
+
+- market-input 拉取 10/22 及以前的数据，生成计划输入。
+- evening 把计划信号写入数据库。
+- report 生成计划报告。
+- 输出文件名用 2026-10-23-plan.md，但 --date 必须是 2026-10-22，否则读不到对应的计划信号。
