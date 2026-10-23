@@ -54,9 +54,10 @@ def build_pool_plan(
     y = _strategy_part(strategy, 'y')
     z = _strategy_part(strategy, 'z')
     w = _strategy_part(strategy, 'w')
+    ma_source = closes[:-1] if closes and abs(closes[-1] - est_close) < 1e-9 else closes
     y_type = str(y.get('type'))
     if y_type == 'ma_tomorrow':
-        line = ma_tomorrow(closes, int(y['n']), est_close)
+        line = ma_tomorrow(ma_source, int(y['n']), est_close)
         entry_zone = _zone(line, zone_width_pct)
         stop_zone = _break_zone(line, zone_width_pct)
     elif y_type == 'pullback':
@@ -71,7 +72,7 @@ def build_pool_plan(
         n = int(z.get('n', 5))
         if len(closes) < n - 1:
             return {}
-        stop_level = ma_tomorrow(closes, n, est_close)
+        stop_level = ma_tomorrow(ma_source, n, est_close)
         stop_zone = _break_zone(stop_level, zone_width_pct)
     else:
         raise ValueError(f'unsupported strategy y type: {y_type}')

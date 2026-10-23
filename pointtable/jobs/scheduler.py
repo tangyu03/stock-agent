@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from enum import Enum
 
+from ..core.calendar import is_trading_day
+
 
 class Routine(str, Enum):
     AUCTION = 'auction'
@@ -30,12 +32,12 @@ class ScheduledRoutine:
     run_at: datetime
 
 
-def next_routine(now: datetime) -> ScheduledRoutine:
+def next_routine(now: datetime, holidays: set | None = None) -> ScheduledRoutine:
     if now.tzinfo is None:
         raise ValueError('now must be timezone-aware')
     candidate_date = now.date()
     while True:
-        if candidate_date.weekday() < 5:
+        if is_trading_day(candidate_date, holidays):
             for routine in Routine:
                 scheduled = datetime.combine(
                     candidate_date, FIXED_TIMES[routine], tzinfo=now.tzinfo

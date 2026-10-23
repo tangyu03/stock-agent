@@ -23,8 +23,8 @@ _TRANSITIONS = {
     TransitionEvent.EOD: SignalStatus.EXPIRED,
     TransitionEvent.PREMISE_BROKEN: SignalStatus.INVALIDATED,
     TransitionEvent.HUMAN_VETO: SignalStatus.INVALIDATED,
-    TransitionEvent.RETEST_PASS: SignalStatus.TRIGGERED,
-    TransitionEvent.RETEST_FAIL: SignalStatus.INVALIDATED,
+    TransitionEvent.RETEST_PASS: SignalStatus.INVALIDATED,
+    TransitionEvent.RETEST_FAIL: SignalStatus.TRIGGERED,
     TransitionEvent.AUCTION_WEAK: SignalStatus.INVALIDATED,
     TransitionEvent.LHB_VETO: SignalStatus.INVALIDATED,
 }

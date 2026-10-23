@@ -41,7 +41,7 @@ def test_settle_expires_intraday_and_creates_retest():
     stop = rows[0].model_copy(update={'tag': SignalTag.STOP, 'side': 'SELL'})
     retest = create_retest_confirm(stop, (10.0, 10.2), now)
     assert retest.tag is SignalTag.RETEST_CONFIRM
-    assert retest.parent_id == stop.id
+    assert retest.parent_id == (stop.parent_id or stop.id)
 
 
 def test_trend_flip_rolls_stop_and_invalidates_t_buy():

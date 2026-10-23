@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+logger = logging.getLogger(__name__)
+
 from ..core.lhb import evaluate_lhb
+from ..core.calendar import is_trading_day, load_holidays
 from ..core.ma import ma_tomorrow
 from ..core.trend import classify_trend, moving_average
 from ..core.sector import load_theme_map
+from ..core.selector import COOLDOWN_STOP_COUNT, MA_FAMILY, cooled_out, select_strategies
 from ..data.guard import DataFreshnessGuard
 from ..models.signal import SignalTrend
 
@@ -71,6 +76,39 @@ def _zone(rows: Sequence[Mapping[str, Any]], lookback: int) -> tuple[float, floa
 
 def _break_zone(level: float, width_pct: float) -> tuple[float, float]:
     return round(level * (1 - width_pct), 6), round(level, 6)
+
+
+def volume_breakout_decision(
+    rows: Sequence[Mapping[str, Any]],
+    est_close: float,
+    *,
+    volume_ratio_threshold: float = 1.5,
+) -> tuple[bool, float | None]:
+    ordered = _sorted_rows(rows)
+    if len(ordered) < 6 or est_close <= 0:
+        return False, None
+    prior = ordered[:-1]
+    prior_highs = [_numeric(row, '最高', 'high', 'High') for row in prior]
+    prior_closes = [_numeric(row, '收盘', 'close', 'Close') for row in prior]
+    prior_volumes = [_numeric(row, '成交量', 'volume', 'Volume') for row in prior[-5:]]
+    valid_prior_highs = [value for value in prior_highs if value is not None and value > 0]
+    if not valid_prior_highs:
+        return False, None
+    key_level = max(valid_prior_highs)
+    prior_close = next((value for value in reversed(prior_closes) if value is not None and value > 0), None)
+    if not prior_volumes or any(value is None or value <= 0 for value in prior_volumes):
+        return False, key_level
+    latest = ordered[-1]
+    latest_volume = _numeric(latest, '成交量', 'volume', 'Volume')
+    latest_open = _numeric(latest, '开盘', 'open', 'Open')
+    if latest_volume is None or latest_volume <= 0:
+        return False, key_level
+    bullish = est_close > prior_close if latest_open is None else est_close > latest_open
+    avg_volume = sum(prior_volumes) / len(prior_volumes)
+    return (
+        bool(bullish and est_close > key_level and latest_volume >= avg_volume * volume_ratio_threshold),
+        key_level,
+    )
 
 
 def lhb_decision(
@@ -158,6 +196,51 @@ def latest_entry_parent_ids(conn: sqlite3.Connection, symbols: Sequence[str]) ->
     return parents
 
 
+def active_retest_symbols(conn: sqlite3.Connection) -> set[str]:
+    return {
+        str(row['symbol'])
+        for row in conn.execute(
+            "SELECT DISTINCT symbol FROM signals WHERE tag='retest_confirm' AND status='ACTIVE'"
+        ).fetchall()
+    }
+
+
+def recent_stop_counts(
+    conn: sqlite3.Connection,
+    trade_date: str,
+    window_days: int = 2,
+    holidays: set[date] | None = None,
+) -> dict[str, dict[str, int]]:
+    if window_days < 0:
+        raise ValueError('window_days must not be negative')
+    current = date.fromisoformat(trade_date)
+    counted = 0
+    while counted < max(0, window_days - 1):
+        current -= timedelta(days=1)
+        if is_trading_day(current, holidays):
+            counted += 1
+    threshold = current.isoformat()
+    rows = conn.execute(
+        '''
+        SELECT s.symbol, p.strategy_id AS strategy_id, COUNT(*) AS hits
+        FROM journal j
+        JOIN signals s ON s.id = j.signal_id
+        LEFT JOIN signals p ON p.id = s.parent_id
+        WHERE s.tag='stop' AND s.status='TRIGGERED'
+          AND j.to_status='TRIGGERED' AND j.created_at >= ?
+        GROUP BY s.symbol, p.strategy_id
+        ''',
+        (threshold + 'T00:00:00',),
+    ).fetchall()
+    counts: dict[str, dict[str, int]] = {}
+    for row in rows:
+        symbol = str(row['symbol'])
+        strategy_id = str(row['strategy_id'] or 'unknown')
+        family = MA_FAMILY.get(strategy_id, strategy_id)
+        counts.setdefault(symbol, {})[family] = int(row['hits'])
+    return counts
+
+
 def build_market_input(
     pool_rows: Sequence[Mapping[str, Any]],
     index_rows: Sequence[Mapping[str, Any]],
@@ -170,13 +253,24 @@ def build_market_input(
     tail_prices: Mapping[str, float] | None = None,
     entry_depths: Mapping[str, int] | None = None,
     entry_parent_ids: Mapping[str, str | None] | None = None,
+    active_retest: set[str] | None = None,
+    recent_stops: Mapping[str, Mapping[str, int]] | None = None,
+    same_ma_cooldown_days: int = 2,
+    deep_pullback_ratio: float = 0.95,
     watchlist_limit: int | None = None,
     priority_order: Sequence[str] = ('holding', 'index', 'sector', 'candidate'),
     now: date | None = None,
+    holidays: set[date] | None = None,
 ) -> dict[str, Any]:
     theme_map = load_theme_map(Path(__file__).parents[1] / 'config' / 'theme_map.yaml')
     closes = _closes(index_rows)
     if len(closes) < 20:
+        logger.warning(
+            'index closes insufficient: rows=%s first=%s last=%s',
+            len(index_rows),
+            index_rows[0] if index_rows else None,
+            index_rows[-1] if index_rows else None,
+        )
         raise ValueError('index klines must contain at least 20 closes')
     latest = _latest(index_rows) or {}
     amount_yi = _amount_yi(_value(latest, 'amount', '成交额'))
@@ -199,17 +293,14 @@ def build_market_input(
     guard = DataFreshnessGuard(max_staleness_days=5)
     if watchlist_limit is not None and watchlist_limit < len(pool_rows):
         pool_rows = truncate_watchlist(pool_rows, watchlist_limit, priority_order)
-    depths = entry_depths or {}
     assignments: list[dict[str, Any]] = []
     rejected: list[dict[str, str]] = []
     stop_zones: dict[str, tuple[float, float]] = {}
     for pool_row in pool_rows:
         symbol = str(pool_row.get('symbol') or '')
-        entry_depth = int(depths.get(symbol) or 0)
-        if entry_depth >= 2:
-            rejected.append({'symbol': symbol, 'reason': 'reentry_limit'})
+        if symbol in (active_retest or set()):
+            rejected.append({'symbol': symbol, 'reason': 'active_retest_confirm'})
             continue
-        strategy_id = 'first_move_10d' if entry_depth == 1 else 'first_move_5d'
         theme = theme_map.get(symbol) or str(pool_row.get('theme_label') or 'unknown')
         rows = stock_klines.get(symbol, [])
         if not rows:
@@ -243,31 +334,87 @@ def build_market_input(
         else:
             est_close = None
             plan_closes = []
-        ma_n = 10 if entry_depth == 1 else 5
-        if est_close is None or len(plan_closes) < ma_n - 1:
+        if est_close is None:
             rejected.append({'symbol': symbol, 'reason': 'insufficient_closes'})
             continue
-        stop_line = ma_tomorrow(plan_closes, ma_n, est_close)
-        stop_zones[symbol] = _break_zone(stop_line, 0.01)
         regulated = symbol in set(regulator_list)
         bad_lhb, lhb_reason = lhb_decision(lhb, symbol, lhb_dumpers)
+        breakout_hit, breakout_price = volume_breakout_decision(rows, est_close)
         support_zone = _zone(rows, 5)
         resistance_zone = _zone(rows, 20)
-        assignments.append({
-            'symbol': symbol,
-            'strategy_id': strategy_id,
-            'entry_depth': entry_depth,
-            'parent_id': (entry_parent_ids or {}).get(symbol),
-            'closes': plan_closes,
-            'est_close': est_close,
-            'support': support_zone[0] if support_zone else None,
-            'resistance': resistance_zone[1] if resistance_zone else None,
-            'premise_facts': {
-                'hot_theme': theme != 'unknown',
-                'not_regulated': not regulated,
-                'lhb_ok': not bad_lhb,
-            },
+        common_facts = {
+            'hot_theme': theme != 'unknown',
+            'not_regulated': not regulated,
+            'lhb_ok': not bad_lhb,
+        }
+        stock_highs = [
+            value
+            for value in (
+                _numeric(row, '最高', 'high', 'High')
+                for row in _sorted_rows(rows)[-10:]
+            )
+            if value is not None and value > 0
+        ]
+        high_10 = max(stock_highs, default=0.0)
+        ma5_now = moving_average(stock_closes, 5)
+        ma5_prev = moving_average(stock_closes[:-1], 5)
+        ma10_now = moving_average(stock_closes, 10)
+        ma10_prev = moving_average(stock_closes[:-1], 10)
+        first_board_raw = pool_row.get('first_board_date') or latest_stock.get('first_board_date')
+        first_board = False
+        if first_board_raw:
+            try:
+                first_board_date = date.fromisoformat(str(first_board_raw)[:10])
+                next_day = first_board_date + timedelta(days=1)
+                while not is_trading_day(next_day, holidays):
+                    next_day += timedelta(days=1)
+                first_board = bool(
+                    (pool_row.get('first_board') or latest_stock.get('first_board'))
+                    and now == next_day
+                )
+            except ValueError:
+                first_board = False
+        selected = select_strategies({
+            **common_facts,
+            'ma5_rising': ma5_now is not None and ma5_prev is not None and ma5_now > ma5_prev,
+            'deep_pullback': high_10 > 0 and est_close <= high_10 * deep_pullback_ratio,
+            'ma10_alive': ma10_now is not None and ma10_prev is not None and ma10_now >= ma10_prev,
+            'ma5_falling': ma5_now is not None and ma5_prev is not None and ma5_now < ma5_prev,
+            'drift_breakout': (
+                ma5_now is not None
+                and est_close >= ma_tomorrow(
+                    plan_closes[:-1] if plan_closes and abs(plan_closes[-1] - est_close) < 1e-9 else plan_closes,
+                    5,
+                    est_close,
+                )
+            ),
+            'first_board': first_board,
+            'near_support': bool(support_zone and est_close <= support_zone[0] * 1.02),
+            'volume_breakout': breakout_hit,
         })
+        selected = cooled_out(selected, (recent_stops or {}).get(symbol, {}), same_ma_cooldown_days)
+        if not selected:
+            rejected.append({'symbol': symbol, 'reason': 'no_strategy'})
+            continue
+        for strategy_id in selected:
+            ma_n = 10 if strategy_id == 'first_move_10d' else 5
+            if len(plan_closes) < ma_n - 1:
+                continue
+            stop_source = plan_closes[:-1] if plan_closes and abs(plan_closes[-1] - est_close) < 1e-9 else plan_closes
+            stop_line = ma_tomorrow(stop_source, ma_n, est_close)
+            stop_zones[symbol] = _break_zone(stop_line, 0.01)
+            assignments.append({
+                'symbol': symbol,
+                'strategy_id': strategy_id,
+                'entry_depth': int((entry_depths or {}).get(symbol) or 0),
+                'parent_id': (entry_parent_ids or {}).get(symbol),
+                'closes': plan_closes,
+                'est_close': est_close,
+                'support': support_zone[0] if support_zone else None,
+                'resistance': resistance_zone[1] if resistance_zone else None,
+                'breakout_price': breakout_price,
+                'premise_facts': common_facts,
+            })
     return {
         'trade_date': str(now) if now else str(_value(_latest(index_rows) or {}, 'trade_date', '日期', 'date') or ''),
         'market_tier': market_tier,
@@ -294,6 +441,11 @@ def load_risk_config(config_path: str | Path) -> dict[str, Any]:
         'lhb_dumpers': raw.get('lhb_dumpers') or [],
         'watchlist_limit': raw.get('watchlist_limit'),
         'priority': raw.get('priority') or ['holding', 'index', 'sector', 'candidate'],
+        'same_ma_cooldown_days': int(raw.get('selector', {}).get('same_ma_cooldown_days', 2)),
+        'deep_pullback_ratio': float(raw.get('selector', {}).get('deep_pullback_ratio', 0.95)),
+        'retest_window_days': int(raw.get('selector', {}).get('retest_window_days', 3)),
+        'retest_volume_min': float(raw.get('selector', {}).get('retest_volume_min', 1.2)),
+        'holidays': load_holidays(raw.get('holidays')),
     }
 
 
@@ -333,11 +485,20 @@ def fetch_market_input(
         tail_prices=load_tail_prices(conn, trade_date),
         now=date.fromisoformat(trade_date),
         entry_depths=entry_depths,
+        active_retest=active_retest_symbols(conn),
+        recent_stops=recent_stop_counts(
+            conn, trade_date, config['same_ma_cooldown_days'], config['holidays']
+        ),
+        same_ma_cooldown_days=config['same_ma_cooldown_days'],
+        deep_pullback_ratio=config['deep_pullback_ratio'],
         entry_parent_ids=entry_parent_ids,
         watchlist_limit=(
             int(config.get('watchlist_limit'))
             if config.get('watchlist_limit') is not None
             else None
         ),
-        priority_order=None,
+        priority_order=(
+            config['priority'] if config.get('priority') else None
+        ),
+        holidays=config['holidays'],
     )

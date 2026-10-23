@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from ..core.lifecycle import JournalEntry, TransitionConfirmation, TransitionEvent, transition
+from ..core.calendar import trading_days_between
+from ..core.volume import BreakQualifier
 from ..models.signal import Signal, SignalSide, SignalStatus, SignalTag, SignalValidPolicy
 
 
@@ -35,7 +37,7 @@ def create_retest_confirm(
         'status_reason': '',
         'valid_policy': SignalValidPolicy.INTRADAY,
         'created_at': created_at,
-        'parent_id': stop_signal.id,
+        'parent_id': stop_signal.parent_id or stop_signal.id,
         'closed_at': None,
     })
 
@@ -65,17 +67,56 @@ def apply_trend_flip(
 
 def settle_retest(
     retest_signal: Signal,
-    recovered: bool,
+    passed: bool,
     price: float | None = None,
     now: datetime | None = None,
 ) -> tuple[Signal, JournalEntry]:
-    event = TransitionEvent.RETEST_FAIL if recovered else TransitionEvent.RETEST_PASS
-    reason = 'retest_fail' if recovered else 'retest_pass'
+    event = TransitionEvent.PREMISE_BROKEN if passed else TransitionEvent.HIT
+    reason = 'retest_pass' if passed else 'retest_fail'
     return transition(
         retest_signal,
         event,
         reason,
         price,
-        TransitionConfirmation.CONFIRMED,
+        TransitionConfirmation.CONFIRMED if not passed else TransitionConfirmation.TOUCHED_ONLY,
         now,
     )
+
+
+def stop_break_qualifier(stop_signal: Signal) -> BreakQualifier:
+    for part in reversed(stop_signal.status_reason.split(':')):
+        try:
+            return BreakQualifier(part)
+        except ValueError:
+            continue
+    return BreakQualifier.DELAY_OBSERVE
+
+
+def expire_retest(
+    retest_signal: Signal,
+    now: datetime,
+    window_days: int = 3,
+    holidays: set | None = None,
+) -> tuple[Signal, JournalEntry] | None:
+    if retest_signal.status is not SignalStatus.ACTIVE:
+        return None
+    if window_days < 0:
+        raise ValueError('retest window_days must not be negative')
+    elapsed = trading_days_between(
+        retest_signal.created_at.date(), now.date(), holidays
+    )
+    if elapsed < window_days:
+        return None
+    return transition(
+        retest_signal,
+        TransitionEvent.EOD,
+        'retest_window_expired',
+        confirmed=TransitionConfirmation.TOUCHED_ONLY,
+        now=now,
+    )
+
+
+def correction_notice(signal: Signal, trigger: str) -> str:
+    if trigger == 'retest_pass':
+        return f"{signal.symbol}：放量站回止损区，假破位确认。可按纪律纠错；追不追，是你。"
+    return f"{signal.symbol}：收盘收复止损区，当日假破位。仅纠错提醒，不立观察哨。"

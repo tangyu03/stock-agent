@@ -13,7 +13,7 @@ from .cutover import formal_push_ready, push_mode
 
 
 MIGRATION_REASON = 'system_migration'
-STABLE_DAYS = 7
+STABLE_DAYS = 0
 LEGACY_RETENTION_DAYS = 30
 
 

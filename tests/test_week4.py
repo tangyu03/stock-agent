@@ -106,8 +106,8 @@ def test_migration_status_reports_ready_state(tmp_db):
             today=__import__('datetime').date(2026, 10, 22),
         )
         assert result['ready'] is True
-        assert result['stable_period']['days_remaining'] == 7
-        assert result['stable_period']['target_on'] == '2026-10-29'
+        assert result['stable_period']['days_remaining'] == 0
+        assert result['stable_period']['target_on'] == '2026-10-22'
         assert result['pool_audit']['counts'] == {'mapped': 1, 'mismatch': 0, 'unmapped': 0}
     finally:
         set_database_path(Path('unused'))

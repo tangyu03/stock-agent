@@ -161,12 +161,51 @@ def render_closing(market: Mapping[str, Any], receipt_coverage: float | None) ->
     return ''
 
 
+def render_execution_review(rows: Iterable[Mapping[str, Any]]) -> str:
+    items = list(rows)
+    if not items:
+        return '【今日执行回顾】：今日无 TRIGGERED 信号。'
+    lines = ['【今日执行回顾】：']
+    for row in items:
+        verdict = _text(row.get('verdict')) or '未回执'
+        difference = _text(row.get('difference'))
+        suffix = f'，差异：{difference}' if difference else ''
+        lines.append(f"{_text(row.get('symbol'))} {_text(row.get('strategy_id'))} {_text(row.get('tag'))} {_price(row.get('zone_low'))}–{_price(row.get('zone_high'))} 回执：{verdict}{suffix}")
+    return '\n'.join(lines)
+
+
+def render_ev_negative(market: Mapping[str, Any]) -> str:
+    strategies = list(market.get('ev_negative_strategies') or [])
+    if not strategies:
+        return ''
+    return '【EV_NEG 记录】：' + '、'.join(str(item) for item in strategies) + '（仅记录，不推送预警）。'
+
+
 def render_report(
     report_date: str,
     market: Mapping[str, Any],
     positions: list[Mapping[str, Any]],
 ) -> str:
     lines = [f'【{report_date} 复盘】', render_header(market)]
+    ev_negative = render_ev_negative(market)
+    if ev_negative:
+        lines.append(ev_negative)
+    execution_review = list(market.get('execution_review') or [])
+    if execution_review:
+        lines.append(render_execution_review(execution_review))
+    if bool(market.get('zero_plan_day')):
+        protected = [position for position in positions if position.get('stop_low') is not None]
+        lines.append(f'【持仓】（{len(protected)}只，零预案日仅展示保护行）：')
+        lines.extend([render_position(position) for position in protected])
+        index_points = render_index_points(market)
+        if index_points:
+            lines.append(index_points)
+        lines.append('【明日计划】：明日零预案，不开新仓。')
+        closing = render_closing(market, market.get('receipt_coverage'))
+        if closing:
+            lines.append(closing)
+        lines.append('个人观点，仅供参考。')
+        return '\n'.join(lines)
     indexed = list(enumerate(positions))
     ordered = sorted(
         indexed,

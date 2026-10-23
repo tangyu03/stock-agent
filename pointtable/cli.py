@@ -12,9 +12,12 @@ from .db.session import get_connection, init_db, set_database_path
 from .jobs.cutover import expire_legacy_signals, formal_push_ready, switch_push_mode
 from .core.generator import TSizeChoice, apply_t_size_choice
 from .core.sector import load_theme_map
+from .core.calendar import load_holidays
 from .core.auction import AuctionPattern
 from .jobs.routines import run_auction, run_evening, run_restore, run_settle, run_watch
+from .jobs.execution_review import today_execution_review
 from .jobs.market_pipeline import fetch_market_input
+from .jobs.market_pipeline import load_risk_config
 from .jobs.scheduler import next_routine
 from .jobs.tail_snapshot import capture_tail_snapshots
 from .jobs.tail_snapshot import load_tail_prices
@@ -84,7 +87,7 @@ def add_pool_entry(
     return cursor.rowcount
 
 
-def stats_report() -> dict:
+def stats_report(performance: dict | None = None) -> dict:
     conn = get_connection()
     signals = [dict(row) for row in conn.execute('SELECT id, strategy_id, tag, status FROM signals')]
     confirmed = {
@@ -101,11 +104,14 @@ def stats_report() -> dict:
     for row in signals:
         row['verdict'] = receipt_by_signal.get(row['id'])
     pool_rows = [dict(row) for row in conn.execute('SELECT symbol, theme_label FROM pool GROUP BY symbol')]
+    behavior_data = behavior(signals)
+    if performance:
+        behavior_data['restore_violations'] = (performance.get('restore') or {}).get('violations')
     return {
         'signal_quality': signal_quality(signals),
-        'correction_hit_rate': correction_hit_rate(signals),
+        'correction_hit_rate': performance.get('correction_hit_rate') if performance else None,
         'stop_outcomes': stop_outcomes(signals),
-        'behavior': behavior(signals),
+        'behavior': behavior_data,
         'pool_quality': pool_quality(pool_rows, []),
     }
 
@@ -181,10 +187,10 @@ def build_report(
         'SELECT * FROM signals WHERE created_at LIKE ? ORDER BY created_at, id',
         (report_date + '%',),
     ).fetchall()
+    by_symbol: dict[str, list[Any]] = {}
     if signal_rows:
         from .jobs.routines import signal_from_row
 
-        by_symbol: dict[str, list[Any]] = {}
         for signal_row in signal_rows:
             signal = signal_from_row(signal_row)
             by_symbol.setdefault(signal.symbol, []).append(signal)
@@ -206,6 +212,13 @@ def build_report(
                 elif signal.tag.value == 't' and signal.side.value == 'SELL':
                     position['t_sell_low'] = signal.zone_low
     market_for_report = dict((market or {}).get('market') or market or {})
+    market_for_report['execution_review'] = today_execution_review(get_connection(), report_date)
+    market_for_report['ev_negative_strategies'] = sorted({
+        signal.strategy_id
+        for signals in by_symbol.values()
+        for signal in signals
+        if signal.premise.get('ev_negative')
+    })
     return evening_report(report_date, market_for_report, positions)
 
 
@@ -220,7 +233,9 @@ def build_parser() -> argparse.ArgumentParser:
     receipt.add_argument('--size-filled', type=int)
     veto = commands.add_parser('veto')
     veto.add_argument('signal_id')
-    commands.add_parser('stats')
+    stats = commands.add_parser('stats')
+    stats.add_argument('--date')
+    stats.add_argument('--window', type=int, default=5)
     commands.add_parser('holdings')
     commands.add_parser('pool')
     pool_add = commands.add_parser('pool-add')
@@ -249,11 +264,17 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument('--date')
     watch.add_argument('--broken-id', action='append', default=[])
     watch.add_argument('--context-json', type=Path)
+    watch.add_argument('--retest-volume-min', type=float)
     settle = commands.add_parser('settle')
     settle.add_argument('--now')
     settle.add_argument('--stop-zones-json', type=Path)
     settle.add_argument('--close-prices-json', type=Path)
     settle.add_argument('--market-json', type=Path)
+    settle.add_argument('--volume-ratios-json', type=Path)
+    settle.add_argument('--break-contexts-json', type=Path)
+    settle.add_argument('--retest-window-days', type=int)
+    settle.add_argument('--retest-volume-min', type=float)
+    settle.add_argument('--holidays-json', type=Path)
     restore = commands.add_parser('restore')
     restore.add_argument('--close-price', type=float, required=True)
     restore_check = commands.add_parser('restore-check')
@@ -298,7 +319,12 @@ def main(argv: list[str] | None = None) -> int:
         inserted = add_receipt(args.signal_id, verdict, getattr(args, 'size_filled', None), _now())
         print(json.dumps({'signal_id': args.signal_id, 'verdict': verdict, 'inserted': inserted}, ensure_ascii=False))
     elif args.command == 'stats':
-        print(json.dumps(stats_report(), ensure_ascii=False, indent=2))
+        performance = None
+        if args.date:
+            from .jobs.performance import pool_performance_report
+
+            performance = pool_performance_report(get_connection(), args.date, window=args.window)
+        print(json.dumps(stats_report(performance), ensure_ascii=False, indent=2))
     elif args.command == 'holdings':
         print(json.dumps([dict(row) for row in list_holdings()], ensure_ascii=False, indent=2))
     elif args.command == 'pool':
@@ -349,6 +375,7 @@ def main(argv: list[str] | None = None) -> int:
         now = datetime.now(timezone.utc)
         print(json.dumps(run_auction(get_connection(), args.date, AuctionPattern(args.pattern), now), ensure_ascii=False, indent=2))
     elif args.command == 'watch':
+        risk_config = load_risk_config(Path(__file__).parents[1] / 'config' / 'config.yaml')
         print(json.dumps(run_watch(
             get_connection(), args.price, args.second_cycle,
             datetime.now(timezone.utc), args.volume_ratio, args.date,
@@ -356,6 +383,11 @@ def main(argv: list[str] | None = None) -> int:
             break_context=(
                 json.loads(args.context_json.read_text(encoding='utf-8'))
                 if args.context_json else None
+            ),
+            retest_volume_min=(
+                args.retest_volume_min
+                if args.retest_volume_min is not None
+                else risk_config['retest_volume_min']
             ),
         ), ensure_ascii=False, indent=2))
     elif args.command == 'settle':
@@ -365,7 +397,29 @@ def main(argv: list[str] | None = None) -> int:
         if stop_zones and args.market_json and not args.stop_zones_json:
             stop_zones = stop_zones.get('stop_zones')
         close_prices = json.loads(args.close_prices_json.read_text(encoding='utf-8')) if args.close_prices_json else None
-        print(json.dumps(run_settle(get_connection(), now, stop_zones, close_prices), ensure_ascii=False, indent=2))
+        volume_ratios = json.loads(args.volume_ratios_json.read_text(encoding='utf-8')) if args.volume_ratios_json else None
+        break_contexts = json.loads(args.break_contexts_json.read_text(encoding='utf-8')) if args.break_contexts_json else None
+        holidays = json.loads(args.holidays_json.read_text(encoding='utf-8')) if args.holidays_json else None
+        risk_config = load_risk_config(Path(__file__).parents[1] / 'config' / 'config.yaml')
+        print(json.dumps(run_settle(
+            get_connection(),
+            now,
+            stop_zones,
+            close_prices,
+            volume_ratios,
+            break_contexts,
+            retest_window_days=(
+                args.retest_window_days
+                if args.retest_window_days is not None
+                else risk_config['retest_window_days']
+            ),
+            retest_volume_min=(
+                args.retest_volume_min
+                if args.retest_volume_min is not None
+                else risk_config['retest_volume_min']
+            ),
+            holidays=set(holidays) if holidays is not None else risk_config['holidays'],
+        ), ensure_ascii=False, indent=2))
     elif args.command == 'restore':
         print(json.dumps(run_restore(get_connection(), args.close_price), ensure_ascii=False, indent=2))
     elif args.command == 'restore-check':
@@ -405,7 +459,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == 'evening':
         print(json.dumps(run_evening(get_connection(), args.input), ensure_ascii=False, indent=2))
     elif args.command == 'next-routine':
-        scheduled = next_routine(datetime.now().astimezone())
+        config_path = Path(__file__).parents[0] / 'config' / 'config.yaml'
+        holidays = load_holidays(yaml.safe_load(config_path.read_text(encoding='utf-8')).get('holidays'))
+        scheduled = next_routine(datetime.now().astimezone(), holidays)
         print(json.dumps({
             'routine': scheduled.routine.value,
             'run_at': scheduled.run_at.isoformat(timespec='seconds'),

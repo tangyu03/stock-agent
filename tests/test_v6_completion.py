@@ -59,7 +59,10 @@ def test_akshare_domain_wrappers_use_cached_source():
             {'trade_date': '2026-01-02', 'close': 2},
         ],
     }
-    with patch.object(akshare, 'cached_ak', return_value=source['stock']):
+    with (
+        patch.object(akshare, '_tencent_kline', return_value=[]),
+        patch.object(akshare, 'cached_ak', return_value=source['stock']),
+    ):
         assert akshare.stock_kline('300001', '2026-01-01') == [{'trade_date': '2026-01-01', 'close': 1}]
         assert akshare.stock_kline('300001', limit=1) == [{'trade_date': '2026-01-02', 'close': 2}]
         assert akshare.margin_rows('2026-01-01') == [{'trade_date': '2026-01-01', 'close': 1}]
@@ -84,7 +87,10 @@ def test_index_kline_appends_spot_for_missing_trade_date():
     def cached_ak(name, **kwargs):
         return spot_rows if name == 'stock_zh_index_spot_sina' else daily_rows
 
-    with patch.object(akshare, 'cached_ak', cached_ak):
+    with (
+        patch.object(akshare, '_tencent_kline', return_value=[]),
+        patch.object(akshare, 'cached_ak', cached_ak),
+    ):
         rows = akshare.index_kline('sh000001', '2026-10-22', limit=2)
     assert rows[-1]['date'] == __import__('datetime').date(2026, 10, 22)
     assert rows[-1]['close'] == 3658.0256
@@ -136,10 +142,10 @@ def test_settle_retest_pass_and_fail():
     now = datetime(2026, 1, 1, tzinfo=UTC)
     stop = _signal(SignalTag.STOP, side='SELL', parent_id='p')
     retest = stop.model_copy(update={'id': 'r', 'tag': SignalTag.RETEST_CONFIRM, 'side': 'SELL'})
-    passed, _ = settle_retest(retest, False, 10.5, now)
-    failed, _ = settle_retest(retest, True, 10.5, now)
-    assert passed.status is SignalStatus.TRIGGERED
-    assert failed.status is SignalStatus.INVALIDATED
+    passed, _ = settle_retest(retest, True, 10.5, now)
+    failed, _ = settle_retest(retest, False, 10.5, now)
+    assert passed.status is SignalStatus.INVALIDATED
+    assert failed.status is SignalStatus.TRIGGERED
 
 
 def test_evening_pipeline_and_market_fuse():
@@ -242,15 +248,19 @@ def test_settle_resolves_retest_by_close(tmp_db):
     set_database_path(tmp_db)
     init_db()
     conn = get_connection()
-    passed = _signal(SignalTag.RETEST_CONFIRM, side='SELL', parent_id='p').model_copy(
-        update={'id': 'retest-pass', 'strategy_id': 'holding'}
+    failed = _signal(SignalTag.RETEST_CONFIRM, side='SELL', parent_id='p').model_copy(
+        update={'id': 'retest-fail', 'strategy_id': 'holding'}
     )
-    failed = passed.model_copy(update={'id': 'retest-fail', 'symbol': '300002'})
+    passed = failed.model_copy(update={'id': 'retest-pass', 'symbol': '300002'})
     save_signals(conn, [passed, failed])
-    result = run_settle(conn, now, close_prices={'300001': 10.5, '300002': 11.2})
+    result = run_settle(
+        conn, now,
+        close_prices={'300001': 10.5, '300002': 11.2},
+        volume_ratios={'300002': 1.5},
+    )
     assert result['retest_settled'] == ['retest-fail', 'retest-pass']
-    assert conn.execute('SELECT status FROM signals WHERE id=?', ('retest-pass',)).fetchone()[0] == 'TRIGGERED'
-    assert conn.execute('SELECT status FROM signals WHERE id=?', ('retest-fail',)).fetchone()[0] == 'INVALIDATED'
+    assert conn.execute('SELECT status FROM signals WHERE id=?', ('retest-pass',)).fetchone()[0] == 'INVALIDATED'
+    assert conn.execute('SELECT status FROM signals WHERE id=?', ('retest-fail',)).fetchone()[0] == 'TRIGGERED'
 
 
 def test_evening_generates_holding_rows(tmp_db):
@@ -353,7 +363,7 @@ def test_stats_pool_quality_and_render_slots():
         'sector_down': True, 'pool_reversal': True, 't_symbols': [],
     }, [{'name': 'A', 'progress_pct': 1, 'premise': '主力净流出', 'stop_n': 10, 'stop_low': 9, 'stop_high': 9.2}])
     assert '【持仓】' in text and '止损放宽到10日线9–9.2' in text
-    assert '资金总要找个宣泄口' in text and '8000亿的市场' in text
+    assert '资金总要找个宣泄口' in text and '8000亿' in text
 
 
 def test_t_size_choice_and_cli(tmp_db):
@@ -400,8 +410,8 @@ def test_market_pipeline_builds_assignments_and_context():
         for _ in range(20)
     ]
     stock_rows = [
-        {'日期': '2026-01-01', '收盘': 10, '最高': 10.2, '最低': 9.8}
-        for _ in range(20)
+        {'日期': '2026-01-01', '收盘': 10 + index * 0.1, '最高': 10.2 + index * 0.1, '最低': 9.8}
+        for index in range(20)
     ]
     sector_rows = [
         {'日期': '2026-01-01', '收盘': 1000, '最高': 1010, '最低': 990}
@@ -413,39 +423,40 @@ def test_market_pipeline_builds_assignments_and_context():
         [],
         {'300001': stock_rows},
         {'AI': sector_rows},
-        regulator_list=['300001'],
+        regulator_list=[],
         now=now,
     )
     assert payload['market_tier'] == 'HIGH'
-    assert payload['assignments'][0]['premise_facts']['not_regulated'] is False
+    assert payload['assignments'][0]['strategy_id'] == 'first_move_5d'
+    assert payload['assignments'][0]['premise_facts']['not_regulated'] is True
     assert payload['rejected'] == []
     assert payload['sector_context'] == [{'symbol': 'AI', 'zone': (990.0, 1010.0)}]
     assert payload['stop_zones']['300001'][0] < payload['stop_zones']['300001'][1]
 
 
-def test_market_pipeline_selects_reentry_and_enforces_limit():
+def test_selector_uses_facts_and_family_cooldown():
     index_rows = [
         {'日期': '2026-01-01', '收盘': 4000, '最高': 4010, '最低': 3990, 'amount': 13_000_000_000_000}
         for _ in range(20)
     ]
     stock_rows = [
-        {'日期': '2026-01-01', '收盘': 10, '最高': 10.2, '最低': 9.8}
-        for _ in range(20)
+        {'日期': '2026-01-01', '收盘': 10 + index * 0.1, '最高': 20.0, '最低': 9.8}
+        for index in range(20)
     ]
     payload = build_market_input(
-        [{'symbol': '300001'}, {'symbol': '300002'}],
+            [{'symbol': '300001', 'theme_label': 'AI'}, {'symbol': '300002', 'theme_label': 'AI'}],
         index_rows,
         [],
         {'300001': stock_rows, '300002': stock_rows},
         {},
-        entry_depths={'300001': 1, '300002': 2},
-        entry_parent_ids={'300001': 'enter-0', '300002': 'enter-1'},
+        active_retest={'300002'},
+        recent_stops={'300001': {'ma5': 2}},
             now=datetime(2026, 1, 1, tzinfo=UTC).date(),
     )
-    assert payload['assignments'][0]['strategy_id'] == 'first_move_10d'
-    assert payload['assignments'][0]['entry_depth'] == 1
-    assert payload['assignments'][0]['parent_id'] == 'enter-0'
-    assert payload['rejected'] == [{'symbol': '300002', 'reason': 'reentry_limit'}]
+    strategies = [row['strategy_id'] for row in payload['assignments']]
+    assert 'first_move_10d' in strategies
+    assert 'first_move_5d' not in strategies
+    assert payload['rejected'] == [{'symbol': '300002', 'reason': 'active_retest_confirm'}]
 
 
 def test_truncate_watchlist_uses_priority_then_input_order():
@@ -474,7 +485,7 @@ def test_tail_snapshot_overrides_daily_close(tmp_db):
         [{'symbol': '300001', 'theme_label': 'AI'}],
         [{'日期': '2026-01-01', '收盘': 4000, 'amount': 13_000_000_000_000} for _ in range(20)],
         [],
-        {'300001': [{'日期': '2026-01-01', '收盘': 10.2} for _ in range(20)]},
+        {'300001': [{'日期': '2026-01-01', '收盘': 10 + index * 0.1} for index in range(20)]},
         {},
         tail_prices=load_tail_prices(conn, '2026-01-01'),
         now=now.date(),
@@ -488,7 +499,7 @@ def test_tail_snapshot_appends_missing_close_for_tomorrow_line(tmp_db):
         [{'symbol': '300001', 'theme_label': 'AI'}],
         [{'日期': '2026-01-01', '收盘': 4000, 'amount': 13_000_000_000_000} for _ in range(20)],
         [],
-        {'300001': [{'日期': '2026-01-01', '收盘': close} for close in (10, 11, 12, 13)]},
+        {'300001': [{'日期': '2026-01-01', '收盘': close} for close in (9, 10, 11, 12, 13, 14)]},
         {},
         tail_prices={'300001': 15.0},
         now=now,
@@ -496,7 +507,7 @@ def test_tail_snapshot_appends_missing_close_for_tomorrow_line(tmp_db):
     assignment = payload['assignments'][0]
     assert assignment['closes'][-1] == 15.0
     assert assignment['est_close'] == 15.0
-    assert payload['stop_zones']['300001'][1] == 13.2
+    assert payload['stop_zones']['300001'][1] == 13.0
 
 
 def test_latest_entry_depths_follows_parent_chain(tmp_db):

@@ -18,7 +18,7 @@ def test_passive_break_waits_for_close():
 
 def test_divergence_and_limit_up_are_explicit_paths():
     assert break_qualifier(2.0, 100.0, divergence=True).qualifier is BreakQualifier.DIVERGENCE
-    assert break_qualifier(0.5, 0.0, limit_up=True).qualifier is BreakQualifier.EXECUTE_NOW
+    assert break_qualifier(0.5, 0.0, limit_up=True).qualifier is BreakQualifier.LIMIT_EXEMPT
 
 
 def test_two_level_context_check():

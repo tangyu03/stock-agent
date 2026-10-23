@@ -8,6 +8,7 @@ class BreakQualifier(str, Enum):
     EXECUTE_NOW = 'EXECUTE_NOW'
     DELAY_OBSERVE = 'DELAY_OBSERVE'
     DIVERGENCE = 'DIVERGENCE'
+    LIMIT_EXEMPT = 'LIMIT_EXEMPT'
 
 
 class Activity(str, Enum):
@@ -31,7 +32,7 @@ def break_qualifier(
     if volume_ratio < 0 or active_delta < 0:
         raise ValueError('volume_ratio and active_delta must not be negative')
     if limit_up:
-        return BreakDecision(BreakQualifier.EXECUTE_NOW, 'limit_up_exempt')
+        return BreakDecision(BreakQualifier.LIMIT_EXEMPT, 'limit_up_price_distortion')
     if divergence:
         return BreakDecision(BreakQualifier.DIVERGENCE, 'divergence_needs_close')
     if volume_ratio >= 1.2 and active_delta > 0:

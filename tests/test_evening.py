@@ -9,5 +9,5 @@ def test_evening_report_wires_receipt_coverage():
         0.6,
     )
     assert '【10.21 复盘】' in text
-    assert '侥幸交税' in text
+    assert '明日零预案' in text
     assert '市场永远是对的' in text

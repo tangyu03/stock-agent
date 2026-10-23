@@ -44,7 +44,7 @@ pointtable/
 │   │   ├── restore_check.py    # 14:30起 T复原倒计时
 │   │   └── settle.py           # 15:05 清点（valid_policy、retest_confirm、T连坐、Z滚动）
 │   ├── notify/
-│   │   ├── push.py             # 通道 + 按钮（veto/execute/ignore/T档）
+│   │   ├── push.py             # 人工单向推送；回执走 CLI
 │   │   └── render.py           # 槽位报告（P1-P7/N1-N3/A1-A4/C1 + 措辞库 + 降级规则）
 │   ├── stats.py                # 两层报表（信号质量层 + 行为层）
 │   └── cli.py                  # receipt / veto / stats / holdings / pool
@@ -149,7 +149,7 @@ pointtable/
 - 持仓票每晚生成规则（UP/DOWN 分支）
 - TRIGGERED 确认语义（BUY 双周期/STOP 单点）
 - 破位两步确认（retest_confirm）
-- size_hint 三修饰器
+- size_hint 两修饰器（LOW 减半、T_BUY CLI 落库）
 - 账户熔断→市场熔断（零预案日）
 - render 槽位规范 + 措辞库 + 降级规则（非两融标的、回执覆盖率闸）
 
@@ -175,7 +175,7 @@ pointtable/
 ### 第 3 周：jobs + 报告 + 统计
 12. jobs/ 五文件挂上（evening 含零预案判定；watch 含确认语义/两级定性/STOP 排序/纠错提醒；settle 含 valid_policy 清点/retest_confirm/T 连坐/Z 滚动）。
 13. notify/render.py 槽位实现（P1-P7/N1-N3/A1-A4/C1 + 措辞库 dict + 降级规则 + 空槽跳过）。
-14. notify/push.py 通道照抄旧配置（按钮交互一字不改）。
+14. notify/push.py 通道照抄旧配置；只保留人工 push-file，无按钮回传。
 15. stats.py 两层报表（信号质量层含 EV_NEG/池子质量报表；行为层含纪律执行率/做T增值/复原违规）。
 - **验收**：test_ordering 通过（同 tick STOP 排头部）；报告样本人工过一遍措辞（对齐 moban.md 槽位表）。
 
@@ -194,7 +194,7 @@ pointtable/
 | llm_client.py / block_trade.py / skill_wrapper.py + skills/（19文件）的实际引用与用途 | 已裁决：保留 |
 | ths_cache 乱码文件删除前引用核查 | 已裁决：`data/ths_cache/` 归档，不迁入新链路 |
 | sector_pool / sector_ranker / theme_attribution 瘦身边界函数级确认（需贴码） | 已裁决：保留在 `legacy/`；新链路由 `pointtable/core/sector.py` 承接池内判定与去弱择强 |
-| 旧表→新表字段映射明细（15张逐一） | 已完成：见 `MIGRATION_MAPPING.md` |
+| 旧表→新表字段映射明细（15张旧表映射到 5 张新表） | 已完成：见 `MIGRATION_MAPPING.md` |
 | 测试文件逐模块映射表 | 已完成：见 `MIGRATION_MAPPING.md` |
 
 ### 切流状态
@@ -203,10 +203,10 @@ pointtable/
 - 推送模式已切换为 `formal`。
 - 迁移前 83 个 `ACTIVE/TRIGGERED` 信号已置为 `EXPIRED(reason=system_migration)`，并在 `journal` 记录审计。
 - `python -m src.main` 已删除，当前唯一入口是 `python -m pointtable.cli`。
-- 后续进入 7 个自然日切流后稳定性观察；`--legacy` 保留一个月用于回查。
-- 每日执行 `migration-status` 检查推送模式、迁移审计、旧信号冻结、池子归属和稳定期进度；2026-10-22 切流的目标完成日为 2026-10-29，旧源码回查保留到 2026-11-22。
+- 用户已裁决跳过 7 个自然日稳定观察，直接进入后续 v6.1 项；`--legacy` 保留一个月用于回查。
+- 每日执行 `migration-status` 检查推送模式、迁移审计、旧信号冻结和池子归属；2026-10-22 切流已完成，旧源码回查保留到 2026-11-22。
 
 ## 九、最终形态一句话
 
-**88 个源文件 → 约 26 个（含 models 层），15 张表 → 4 张，14 个 YAML → 3 个（strategies/config/theme_map）。删掉的全是"决策层官僚"（评分、组合、调度、分型帝国、全市场扫描），留下的全是"测量工具+点位+环境事实+懂哥的板块语言"（量比、换手分位、主动差、破位三问、四状态信号、主线/轮动/退潮、去弱择强）。**
+**88 个源文件 → 约 26 个（含 models 层），15 张旧表 → 5 张新表（signals/journal/receipts/pool/tail_snapshots），14 个 YAML → 3 个（strategies/config/theme_map）。删掉的全是"决策层官僚"（评分、组合、调度、分型帝国、全市场扫描），留下的全是"测量工具+点位+环境事实+懂哥的板块语言"（量比、换手分位、主动差、破位三问、四状态信号、主线/轮动/退潮、去弱择强）。**
 

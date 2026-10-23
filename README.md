@@ -8,6 +8,7 @@
 
 - 新主链路在 `pointtable/`：四领域模型、四表 schema、点位生成器、生命周期、任务、报告、推送和统计。
 - 保留 `theme_map`、`pointtable/data/akshare.py` 安全封装、`DataFreshnessGuard` 和脏数据闸门；决策层评分、调度、组合、回测引擎已移除。
+- 指数与股票 K 线优先走腾讯日线；东财、新浪保留为兜底。腾讯请求强制 `trust_env=False`，避免 Windows 系统代理把请求注入到 `127.0.0.1:9`。
 - 旧源码冻结在 `legacy/`，只作一个月回查归档，不参与新链路。
 - `pushplus.mode` 默认 `shadow`：普通推送走 `test_token`；`cutover --yes` 会切回 `formal` 并走正式 token。正式链路入口只有 `python -m pointtable.cli`，旧的 `python -m src.main` 已删除。
 
@@ -24,7 +25,7 @@ python -m pointtable.cli --db pointtable/data/pointtable.db pool-audit
 python -m pointtable.cli --db pointtable/data/pointtable.db migration-status
 python -m pointtable.cli --db pointtable/data/pointtable.db auction --date 2026-10-22 --pattern neutral
 python -m pointtable.cli --db pointtable/data/pointtable.db watch --price 10.1 --second-cycle --volume-ratio 1.3 --broken-id <signal_id>
-python -m pointtable.cli --db pointtable/data/pointtable.db settle --market-json pointtable/data/evening-2026-10-22.json --close-prices-json close.json
+python -m pointtable.cli --db pointtable/data/pointtable.db settle --market-json pointtable/data/evening-2026-10-22.json --close-prices-json close.json --volume-ratios-json volume.json --break-contexts-json break.json
 python -m pointtable.cli --db pointtable/data/pointtable.db restore --close-price 10.1
 python -m pointtable.cli --db pointtable/data/pointtable.db evening --input evening.json
 python -m pointtable.cli --db pointtable/data/pointtable.db market-input --date 2026-10-22 --output evening.json
@@ -65,6 +66,8 @@ python -m pointtable.cli --db pointtable/data/pointtable.db report --date 2026-1
 
 `evening --input` 额外支持 `holdings` 数组；每行需要 `symbol`、`parent_id`、`trend`、`stop_zone`、`support_zone`、`resistance_zone`。UP 趋势生成 STOP/T_BUY/T_SELL，DOWN 趋势只生成 STOP，`volatility_exceeded=true` 会跳过 T 行。
 
+`settle` 的观察哨窗口、放量站回阈值和节假日默认读取 `config.yaml`；上面三个 JSON 文件可覆盖收盘价、量比和破位上下文。`watch` 会自动使用同一 `retest_volume_min`。同票多策略不去重；活跃 `retest_confirm` 期间不生成该票 BUY。
+
 `market-input` 会回溯最新 ENTER 链：没有触发 STOP 时用 `first_move_5d`；触发后下一档切 `first_move_10d` 并携带旧 ENTER 作为 `parent_id`；达到两层链深后输出 `reentry_limit` 拒绝。
 
 个股 K 线经过 `DataFreshnessGuard` 检查；监管和龙虎榜结果会写入每只池内票的 `premise_facts`。
@@ -89,7 +92,7 @@ python -m pointtable.cli --db pointtable/data/pointtable.db cutover --yes
 python -m pointtable.cli --db pointtable/data/pointtable.db --legacy
 ```
 
-迁移后每日检查 `migration-status`；它会核对正式推送、迁移审计、旧信号冻结、池子板块归属，以及 7 天稳定期进度。2026-10-22 切流后的目标日期是 2026-10-29，旧源码回查保留到 2026-11-22。
+迁移后检查 `migration-status`；它会核对正式推送、迁移审计、旧信号冻结和池子板块归属。用户已裁决跳过 7 天稳定观察；2026-10-22 切流已完成，旧源码回查保留到 2026-11-22。
 
 ## 测试
 

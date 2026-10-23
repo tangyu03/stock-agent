@@ -37,6 +37,6 @@ def test_plan_and_report_shape():
     market = {'amount_yi': 8900, 'tier': 'LOW', 'index_level': 3731, 'zero_plan_day': True, 't_symbols': ['A']}
     text = render_report('10.21', market, [{'name': 'A'}])
     assert '【10.21 复盘】' in text
-    assert '开盘先看3731' in text
+    assert '开盘先看3731' not in text
     assert '不开新仓' in text
     assert '少动就是赢' in text

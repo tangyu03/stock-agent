@@ -15,7 +15,18 @@ def confirm_touch(
     price: float,
     second_cycle: bool,
     volume_ratio: float | None = None,
+    retest_volume_min: float = 1.2,
 ) -> tuple[Signal | None, str]:
+    if signal.tag is SignalTag.RETEST_CONFIRM:
+        if (
+            price >= signal.zone_high
+            and volume_ratio is not None
+            and volume_ratio >= retest_volume_min
+        ):
+            return signal, 'retest_pass'
+        if signal.zone_low <= price < signal.zone_high:
+            return signal, 'retest_fail'
+        return None, 'not_in_zone'
     in_zone = signal.zone_low <= price <= signal.zone_high
     if not in_zone:
         return None, 'not_in_zone'
@@ -42,6 +53,10 @@ def qualify_break(
     limit_up: bool = False,
 ) -> BreakQualifier:
     decision = break_qualifier(volume_ratio, active_delta, divergence, limit_up)
+    if decision.qualifier is BreakQualifier.LIMIT_EXEMPT:
+        return BreakQualifier.LIMIT_EXEMPT
+    if decision.qualifier is BreakQualifier.DIVERGENCE:
+        return BreakQualifier.DIVERGENCE
     if decision.qualifier is BreakQualifier.EXECUTE_NOW:
         return BreakQualifier.EXECUTE_NOW
     activity = active_or_passive(stock_triggered, sector_triggered, index_triggered)
@@ -61,6 +76,8 @@ def stop_break_decision(context: Mapping[str, Any] | None) -> tuple[BreakQualifi
     )
     if decision.qualifier is BreakQualifier.EXECUTE_NOW:
         return decision.qualifier, decision.reason
+    if decision.qualifier in {BreakQualifier.LIMIT_EXEMPT, BreakQualifier.DIVERGENCE}:
+        return decision.qualifier, decision.reason
     activity = active_or_passive(
         bool(context.get('stock_triggered', False)),
         bool(context.get('sector_triggered', False)),
@@ -78,8 +95,11 @@ def process_touch(
     second_cycle: bool,
     volume_ratio: float | None = None,
     now: datetime | None = None,
+    retest_volume_min: float = 1.2,
 ) -> tuple[Signal | None, JournalEntry | None, str]:
-    touched, reason = confirm_touch(signal, price, second_cycle, volume_ratio)
+    touched, reason = confirm_touch(
+        signal, price, second_cycle, volume_ratio, retest_volume_min
+    )
     if touched is None:
         return None, None, reason
     confirmation = (
@@ -87,8 +107,13 @@ def process_touch(
         if signal.side is SignalSide.BUY
         else TransitionConfirmation.TOUCHED_ONLY
     )
+    event = (
+        TransitionEvent.PREMISE_BROKEN
+        if reason == 'retest_pass'
+        else TransitionEvent.HIT
+    )
     updated, journal = transition(
-        signal, TransitionEvent.HIT, reason, price, confirmation, now
+        signal, event, reason, price, confirmation, now
     )
     return updated, journal, reason
 
