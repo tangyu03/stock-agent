@@ -1,2 +1,0 @@
-﻿_DIVERGENCE_PATTERN = "放量下跌分歧型"
-line2 "quoted"

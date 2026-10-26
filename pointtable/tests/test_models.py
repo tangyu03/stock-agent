@@ -54,7 +54,7 @@ def test_journal_and_receipt_models_are_immutable_by_contract():
     now = datetime.now(timezone.utc)
     journal = JournalEntry(signal_id="s1", from_status="ACTIVE", to_status="TRIGGERED", created_at=now)
     receipt = ReceiptEntry(signal_id="s1", verdict="executed", created_at=now)
-    assert journal.confirmed.value == "touched_only"
+    assert journal.record_type.value == "transition"
     assert receipt.verdict.value == "executed"
 
 

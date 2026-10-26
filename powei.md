@@ -44,11 +44,11 @@ for stop in today_triggered_stops:
         else:
             push_correction_notice(stop)
     elif q == "EXECUTE_NOW":
-        create_retest_confirm(stop)
+        save_correction_anchor(stop)
     # LIMIT_EXEMPT → 不生成，次日晚上正常生成新 STOP
 ```
 
-**四条硬约束**：EXECUTE_NOW 也生成；DELAY/DIVERGENCE 同一段双向；LIMIT_EXEMPT 不生成；生成时 zone 取原 STOP 的 zone，parent 指向原 enter 或 `pool:<symbol>`，valid_policy=fixed_window，window_days 从 config 快照。
+**四条硬约束**：EXECUTE_NOW 不生成，只保存原止损区间纠错锚点；DELAY/DIVERGENCE 同一段双向；LIMIT_EXEMPT 不生成；DELAY/DIVERGENCE 生成时 zone 取原 STOP 的 zone，parent 指向原 enter 或 `pool:<symbol>`，valid_policy=fixed_window，window_days 从 config 快照。
 
 ## 3. retest_confirm 三终态
 
@@ -62,7 +62,7 @@ for stop in today_triggered_stops:
 
 ## 4. 纠错提醒统一
 
-`push_correction_notice()`：破位当日盘中收复（watch）和 retest_confirm 放量站回（watch 判 INVALIDATED）共用。文案一致、不迁移原 STOP 状态、不发新买点。
+纠错提醒有三类触发：破位当日盘中/收盘收复（watch/settle）、`retest_confirm` 放量站回（watch/settle 判 INVALIDATED）、`EXECUTE_NOW` 破位后次日反抽回原止损区间（watch）。它们只推提醒，不迁移原 STOP 状态、不发新买点、不生成新信号。
 
 ## 5. 策略选择解耦（selector.py）
 
@@ -91,20 +91,7 @@ if same_ma_stop_count(symbol, ma_n=5, days=cfg.reentry_rules.same_ma_cooldown_da
 
 ## 7. entry 时间窗与触发（新增）
 
-**ma_tomorrow 系 entry 的触发窗口 = 14:30–15:00**（tail_snapshot 时刻到收盘）：
 
-```python
-def watch_entry(entry, price, now):
-    # 窗口检查
-    if entry.trigger_window_start is not None:
-        if not (entry.trigger_window_start <= now.time() <= entry.trigger_window_end):
-            return  # 窗口外忽略，不记 touched_only，不推送
-    # 窗口内单点触碰即触发
-    if entry.zone_low <= price <= entry.zone_high:
-        transition(entry, "hit", reason="hit")
-```
-
-**first_board_dip / volume_breakout 的 entry 无 trigger_window，全天有效。**
 
 ## 8. generator 的三条额外规则（A4 / A5）
 
@@ -171,7 +158,7 @@ guard:
 
 ## 12. 验收
 
-**破位链**：缩量收盘仍破→生成；缩量收盘收复→只发纠错；分歧收盘仍破→生成；分歧收盘收复→纠错不生成；EXECUTE_NOW→仍生成；LIMIT_EXEMPT→不生成；**熔断日 DELAY/DIVERGENCE 视同 EXECUTE_NOW**。
+**破位链**：缩量收盘仍破→生成；缩量收盘收复→只发纠错；分歧收盘仍破→生成；分歧收盘收复→纠错不生成；EXECUTE_NOW→不生成，后续反抽回原线只推纠错提醒；LIMIT_EXEMPT→不生成；**熔断日 DELAY/DIVERGENCE 视同 EXECUTE_NOW，也不生成**。
 
 **break_qualifier**：写入 signals + journal record_type=qualifier；settle 能读到。
 

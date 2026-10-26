@@ -5,12 +5,20 @@ from pathlib import Path
 import pytest
 
 from pointtable.core.volume import BreakQualifier
-from pointtable.db.session import get_connection, init_db, save_journal, save_signals, set_database_path
+from pointtable.db.session import (
+    get_connection,
+    init_db,
+    load_market_snapshots,
+    save_journal,
+    save_signals,
+    set_database_path,
+)
 from pointtable.jobs.performance import pool_performance_report, five_day_performance
 from pointtable.jobs.restore_check import find_unpaired_t_buy
-from pointtable.jobs.routines import run_evening, run_watch, signal_from_row
+from pointtable.jobs.routines import run_evening, run_settle, run_watch, signal_from_row
+from pointtable.cli import stats_report
 from pointtable.jobs.watch import stop_break_decision
-from pointtable.models.journal import JournalEntry, TransitionConfirmation
+from pointtable.models.journal import JournalEntry
 from pointtable.models.signal import Signal, SignalSide, SignalStatus, SignalTag, SignalTrend, SignalValidPolicy
 
 
@@ -85,6 +93,29 @@ def test_stop_break_decision_and_context_does_not_change_transition(tmp_db):
     assert 'DELAY_OBSERVE' in row.status_reason
 
 
+def test_watch_loads_next_day_entry_created_on_prior_day(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    signal = Signal(
+        id='2026-01-01-300001-entry',
+        symbol='300001',
+        strategy_id='volume_breakout',
+        side=SignalSide.BUY,
+        tag=SignalTag.ENTER,
+        zone_low=10.0,
+        zone_high=10.2,
+        trend=SignalTrend.UP,
+        valid_policy=SignalValidPolicy.NEXT_DAY,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    save_signals(conn, [signal])
+    result = run_watch(
+        conn, 10.1, False, datetime(2026, 1, 2, tzinfo=UTC), trade_date='2026-01-02',
+    )
+    assert result['touched'] == [signal.id]
+
+
 def test_find_unpaired_t_buy_rules(tmp_db):
     buy = _signal()
     sell = _signal('2026-01-01-300001-t-sell', 'SELL')
@@ -142,7 +173,6 @@ def test_five_day_performance_and_pool_report(tmp_db):
         to_status='TRIGGERED',
         reason='stop_single_point',
         price=10.5,
-        confirmed=TransitionConfirmation.TOUCHED_ONLY,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     ))
     conn.commit()
@@ -154,6 +184,14 @@ def test_five_day_performance_and_pool_report(tmp_db):
     assert report['performance'][0]['symbol'] == '300001'
     assert report['pool_quality']['measured'] == 1
     assert report['correction_hit_rate'] == 0.0
+    assert report['stop_tracking'] == [{
+        'signal_id': '2026-01-01-300001-stop',
+        'zone_low': 9.0,
+        'zone_high': 11.0,
+        'trigger_time': '2026-01-01T00:00:00+00:00',
+        'sell_fly': False,
+        'loss_avoided': True,
+    }]
 
 
 def test_run_evening_marks_ev_negative_strategy(tmp_db):
@@ -175,7 +213,6 @@ def test_run_evening_marks_ev_negative_strategy(tmp_db):
             to_status='TRIGGERED',
             reason='buy_confirmed',
             price=10.5,
-            confirmed=TransitionConfirmation.CONFIRMED,
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
         ))
     conn.commit()
@@ -199,3 +236,63 @@ def test_run_evening_marks_ev_negative_strategy(tmp_db):
         "SELECT * FROM signals WHERE id='2026-01-01-300001-t-buy'",
     ).fetchone())
     assert saved.premise['ev_negative'] is True
+
+
+def test_evening_persists_market_snapshot_and_stats_uses_reachability(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    payload = {
+        'trade_date': '2026-01-01',
+        'created_at': '2026-01-01T15:30:00+08:00',
+        'assignments': [{
+            'symbol': '300001',
+            'strategy_id': 'first_move_5d',
+            'closes': [10.0, 10.0, 10.0, 10.0],
+            'est_close': 10.2,
+            'low': 10.0,
+            'high': 10.5,
+            'volume_ratio': 1.5,
+            'premise_facts': {'hot': True, 'not_regulated': True},
+        }],
+    }
+    payload_path = Path.cwd() / 'test_evening_market_snapshot.json'
+    payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+    try:
+        run_evening(conn, payload_path)
+        rows = load_market_snapshots(conn, '2026-01-01')
+        assert rows == [{
+            'trade_date': '2026-01-01',
+            'symbol': '300001',
+            'est_close': 10.2,
+            'low': 10.0,
+            'high': 10.5,
+            'volume_ratio': 1.5,
+            'two_source_anomaly': False,
+        }]
+        report = stats_report(date='2026-01-01')
+        first_move = report['signal_quality']['first_move_5d']
+        assert first_move['reachability']['audited'] >= 1
+        assert first_move['reachability']['daily_reachable'] >= 1
+    finally:
+        payload_path.unlink(missing_ok=True)
+
+
+def test_zone_snapshots_persist_initial_and_rolled_stop(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    stop = _stop()
+    save_signals(conn, [stop])
+    initial = conn.execute(
+        'SELECT zone_low, zone_high FROM zone_snapshots WHERE signal_id=?',
+        (stop.id,),
+    ).fetchall()
+    assert [(row['zone_low'], row['zone_high']) for row in initial] == [(9.0, 11.0)]
+    now = datetime(2026, 1, 2, tzinfo=UTC)
+    run_settle(conn, now, stop_zones={'300001': (9.5, 9.8)})
+    rolled = conn.execute(
+        'SELECT zone_low, zone_high FROM zone_snapshots WHERE signal_id=? ORDER BY effective_at',
+        (stop.id,),
+    ).fetchall()
+    assert [(row['zone_low'], row['zone_high']) for row in rolled] == [(9.0, 11.0), (9.5, 9.8)]

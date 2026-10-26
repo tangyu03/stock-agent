@@ -3,7 +3,6 @@ from datetime import UTC, datetime
 import pytest
 
 from pointtable.core.lifecycle import TransitionEvent, transition
-from pointtable.models.journal import TransitionConfirmation
 from pointtable.models.signal import Signal, SignalStatus, SignalTag, SignalTrend, SignalValidPolicy
 
 
@@ -22,9 +21,9 @@ def _signal() -> Signal:
     )
 
 
-def test_hit_creates_confirmed_journal():
+def test_hit_creates_transition_journal():
     updated, journal = transition(
-        _signal(), TransitionEvent.HIT, 'buy_hit', 10.5, TransitionConfirmation.CONFIRMED
+        _signal(), TransitionEvent.HIT, 'buy_hit', 10.5
     )
     assert updated.status is SignalStatus.TRIGGERED
     assert updated.closed_at is not None

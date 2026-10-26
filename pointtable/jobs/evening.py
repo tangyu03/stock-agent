@@ -131,6 +131,7 @@ def build_holding_rows(
             (float(resistance_zone[0]), float(resistance_zone[1])),
             str(parent_id),
             created_at,
+            'trailing' if holding.get('trailing') else 'fixed',
         )
         if holding.get('volatility_exceeded'):
             generated = [row for row in generated if row.tag is not SignalTag.T]

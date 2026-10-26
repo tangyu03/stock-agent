@@ -84,8 +84,8 @@ def test_migration_status_reports_ready_state(tmp_db):
     init_db()
     conn = get_connection()
     conn.execute(
-        "INSERT INTO journal (signal_id, from_status, to_status, reason, confirmed, created_at) "
-        "VALUES ('s1','ACTIVE','EXPIRED','system_migration','confirmed','2026-10-22T00:00:00+00:00')"
+        "INSERT INTO journal (signal_id, from_status, to_status, reason, record_type, created_at) "
+        "VALUES ('s1','ACTIVE','EXPIRED','system_migration','transition','2026-10-22T00:00:00+00:00')"
     )
     conn.execute(
         "INSERT INTO pool (date, symbol, theme_label) VALUES ('2026-10-22','300001','AI')"

@@ -115,23 +115,6 @@ def check_quote_sanity(
     return DirtyDataDecision(True)
 
 
-def check_two_source(
-    primary: float | None,
-    secondary: float | None,
-    *,
-    max_deviation: float = 0.005,
-) -> DirtyDataDecision:
-    if primary is None or secondary is None:
-        return DirtyDataDecision(False, 'missing_source')
-    primary_f, secondary_f = float(primary), float(secondary)
-    if not math.isfinite(primary_f) or not math.isfinite(secondary_f) or primary_f <= 0 or secondary_f <= 0:
-        return DirtyDataDecision(False, 'invalid_source_value')
-    deviation = abs(primary_f - secondary_f) / max(primary_f, secondary_f)
-    if deviation > max_deviation:
-        return DirtyDataDecision(False, 'two_source_deviation')
-    return DirtyDataDecision(True)
-
-
 def check_quote_sanity(
     price: float | None,
     *,

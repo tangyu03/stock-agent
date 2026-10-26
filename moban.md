@@ -225,7 +225,7 @@ profit 行按 moban.md 另行渲染；size_hint 的 T_BUY t-size 结果附在 T 
 
 天孚通信 stop 211.5（EXECUTE_NOW）
   板块行无触发，指数行无触发，个股独跌+量比1.8
-  今日执行依据：主动放量算跌破。当天走，观察哨照立（给纠错留门）
+  今日执行依据：主动放量算跌破。当天走，不立观察哨。
 
 深科达 stop 68.0（DELAY_OBSERVE）
   板块“半导体设备”13:42已触发（context_marks triggered_at），疑似被带崩
@@ -243,9 +243,10 @@ profit 行按 moban.md 另行渲染；size_hint 的 T_BUY t-size 结果附在 T 
   板块“半导体设备”已触发，疑似被带崩
   熔断日破位定性取消延迟判决：当日按 EXECUTE_NOW 处理，不等收盘
 
-天孚通信 stop 211.5（DIVERGENCE → 熔断日视同 EXECUTE_NOW）
-  跌但外盘占优，有承接
-  熔断日取消延迟判决：当日按 EXECUTE_NOW 处理
+纠错提醒：天孚通信 stop 211.5（EXECUTE_NOW 破位日 10.21）
+今日价格反抽回 211.0，接近原止损线 211.5
+主动放量破位定性不变；若你当日未走，此处是纠错参考。追不追，是你。
+[push_correction_notice, scene=after_execute_now]
 ```
 
 **当日收复纠错提醒（统一文案）**：
@@ -348,7 +349,8 @@ profit 行按 moban.md 另行渲染；size_hint 的 T_BUY t-size 结果附在 T 
 | 入场同生 | ENTRY 生成 | generator | 止损与买点同生 | A | 同生一条 | — |
 | 池内票生成 | 趋势 | evening | UP 挂 T；DOWN 无 BUY；**观察哨存续期暂停** | A | **test_reentry_checks** | — |
 | stop 定性 | 触及止损 | volume + watch | 四路输出 | A | 四路各一条 | 封板数据失真 |
-| EXECUTE_NOW→retest | 当天执行 | settle | 也生成 retest_confirm | B | 当天执行仍生成 | — |
+| EXECUTE_NOW→不生成 | 当天执行 | settle | 不生成 retest_confirm，当天走 | A | 不调用 create_retest_confirm | — |
+| EXECUTE_NOW 后反抽回原线 | 前序 stop 是 EXECUTE_NOW | watch | 纠错提醒（无新信号） | B | 反抽回原线推提醒一条 | — |
 | DELAY/DIVERGENCE→retest | 收盘<zone_low | settle | 与收复分支互斥 | A | 仍破/收复各一条 | — |
 | 熔断日 DELAY/DIVERGENCE | LOW+指数DOWN | settle | 视同 EXECUTE_NOW | B | **test_settle_branches** | — |
 | DELAY/DIVERGENCE→纠错 | 收盘收复 | settle | 统一纠错函数 | A | 两条路径文案一致 | — |
@@ -375,5 +377,5 @@ profit 行按 moban.md 另行渲染；size_hint 的 T_BUY t-size 结果附在 T 
 - **判决区只显示当天刚结案的**。
 - **pool 是关注范围，不是持仓清单**：同一只票可同时在候选区和池内票区出现，不折叠。
 - **unreachable 指标可信度依赖两源同源**：guard 加两源对账；异常日不纳入审计。
-
+- EXECUTE_NOW 破位当天走、不立哨；若未走，反抽回原止损线附近只推纠错提醒，不生成 retest_confirm、不进观察区、不进判决区。
 ---

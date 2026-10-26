@@ -122,12 +122,9 @@ def _migrate_journal(source: sqlite3.Connection, conn: sqlite3.Connection) -> di
             trigger = {}
         price = trigger.get("price") or trigger.get("current_price")
         to_status = str(row["to_status"] or "").lower()
-        confirmed = (
-            "confirmed" if to_status in {"triggered", "filled", "sig_target", "time_exit"} else "touched_only"
-        )
         cursor = conn.execute(
             """INSERT OR IGNORE INTO journal (
-                signal_id, from_status, to_status, reason, price, confirmed, created_at
+                signal_id, from_status, to_status, reason, price, record_type, created_at
             ) VALUES (?,?,?,?,?,?,?)""",
             (
                 str(row["event_id"]),
@@ -135,7 +132,7 @@ def _migrate_journal(source: sqlite3.Connection, conn: sqlite3.Connection) -> di
                 str(row["to_status"] or "unknown"),
                 str(row["reason"] or ""),
                 float(price) if price not in (None, "") else None,
-                confirmed,
+                "transition",
                 _iso(row["created_at"]) or "1970-01-01 00:00:00",
             ),
         )

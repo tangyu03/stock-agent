@@ -11,23 +11,42 @@ def signal_reachability(
     *,
     tail_approx_tolerance: float = 0.003,
 ) -> dict[str, dict[str, Any]]:
+    market_by_date_symbol = {
+        (str(row.get('trade_date')), str(row['symbol'])): row
+        for row in market_rows
+        if row.get('symbol') is not None and row.get('trade_date') is not None
+    }
     market_by_symbol = {
         str(row['symbol']): row
         for row in market_rows
         if row.get('symbol') is not None
     }
+
+    def market_for_row(row: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        return market_by_date_symbol.get(
+            (str(row.get('created_at') or '')[:10], str(row.get('symbol'))),
+            market_by_symbol.get(str(row.get('symbol'))),
+        )
+
     grouped: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for row in rows:
         grouped[str(row.get('strategy_id'))].append(row)
     report: dict[str, dict[str, Any]] = {}
     for strategy_id, items in grouped.items():
         total = len(items)
+        audited_items = [
+            row for row in items
+            if (market := market_for_row(row)) is not None
+            and not market.get('two_source_anomaly')
+            and not row.get('audit_excluded')
+        ]
         reachable = 0
         daily_reachable = 0
         unreachable = 0
         for row in items:
-            market = market_by_symbol.get(str(row.get('symbol')))
-            if market is None:
+            row_date = str(row.get('created_at') or '')[:10]
+            market = market_for_row(row)
+            if market is None or market.get('two_source_anomaly') or row.get('audit_excluded'):
                 continue
             zone_low = float(row.get('zone_low') or 0)
             zone_high = float(row.get('zone_high') or 0)
@@ -59,12 +78,14 @@ def signal_reachability(
                 unreachable += 1
         report[strategy_id] = {
             'total': total,
+            'audited': len(audited_items),
+            'audit_excluded': total - len(audited_items),
             'reachable': reachable,
-            'touch_rate': reachable / total if total else 0.0,
+            'touch_rate': reachable / len(audited_items) if audited_items else 0.0,
             'daily_reachable': daily_reachable,
-            'daily_touch_rate': daily_reachable / total if total else 0.0,
+            'daily_touch_rate': daily_reachable / len(audited_items) if audited_items else 0.0,
             'unreachable': unreachable,
-            'unreachable_rate': unreachable / total if total else 0.0,
+            'unreachable_rate': unreachable / len(audited_items) if audited_items else 0.0,
         }
     return report
 
@@ -81,7 +102,27 @@ def signal_quality(
     report: dict[str, dict[str, Any]] = {}
     for strategy_id, items in grouped.items():
         total = len(items)
-        triggered = [row for row in items if str(row.get('status')) == 'TRIGGERED']
+        market_by_date_symbol = {
+            (str(row.get('trade_date')), str(row['symbol'])): row
+            for row in market_rows
+            if row.get('symbol') is not None and row.get('trade_date') is not None
+        }
+        market_by_symbol = {
+            str(row['symbol']): row
+            for row in market_rows
+            if row.get('symbol') is not None
+        }
+        triggered = []
+        for row in items:
+            if str(row.get('status')) != 'TRIGGERED':
+                continue
+            row_date = str(row.get('created_at') or '')[:10]
+            market = market_by_date_symbol.get((row_date, str(row.get('symbol'))))
+            if market is None:
+                market = market_by_symbol.get(str(row.get('symbol')))
+            if row.get('audit_excluded') or (market or {}).get('two_source_anomaly'):
+                continue
+            triggered.append(row)
         pnl_values = [float(row.get('hypothetical_pnl_pct') or 0) for row in triggered]
         expectancy = sum(pnl_values) / len(pnl_values) if pnl_values else None
         rolling_values = pnl_values[-50:]

@@ -233,6 +233,31 @@ def check_first_move_drift(facts) -> bool: ...
 - context_marks 生成；
 - time_trigger 行。
 
+
+**同 symbol 同时刻只有一条 ACTIVE stop**：
+
+```python
+def ensure_stop_for_enter(enter):
+    existing = find_active_stop(enter.symbol)
+    if existing:
+        # 不新建，把 enter 记为该 stop 的关联锚点
+        existing.parent_id = enter.id
+        # 不记 zone_update；zone 由池内票每晚规则维护
+    else:
+        create_stop_with_zone_from_Z(enter)   # Z/W 同生
+```
+
+**观察哨存续期暂停 stop/profit/t 生成**：
+
+```python
+def generate_holding_rows(symbol):
+    if has_active_retest_confirm(symbol):
+        return []       # 观察期存续，保护语义由 retest_confirm 承担
+    if in_post_judgment_gap(symbol):   # 判决后至新 enter 前
+        return []       # 价格未到下一档均线，没有保护对象
+    return build_stop_t_profit(symbol)
+```
+
 **池内票每晚生成规则（含 A5 过渡规则）**：
 
 | 情形 | 生成/更新 |
@@ -357,6 +382,21 @@ TRANSITIONS = {
 - **entry**：单点触碰即触发，**但受 trigger_window 约束**——ma_tomorrow 系仅 14:30–15:00 接受触发，窗口外触碰直接忽略、不记 touched_only、不推送；first_board_dip / volume_breakout 全天有效；
 - 防重复推送由状态机终态保证——TRIGGERED 不可逆。
 
+**ma_tomorrow 系 entry 的触发窗口 = 14:30–15:00**（tail_snapshot 时刻到收盘）：
+
+```python
+def watch_entry(entry, price, now):
+    # 窗口检查
+    if entry.trigger_window_start is not None:
+        if not (entry.trigger_window_start <= now.time() <= entry.trigger_window_end):
+            return  # 窗口外忽略，不记 touched_only，不推送
+    # 窗口内单点触碰即触发
+    if entry.zone_low <= price <= entry.zone_high:
+        transition(entry, "hit", reason="hit")
+```
+
+**first_board_dip / volume_breakout 的 entry 无 trigger_window，全天有效。**
+
 ### 6.2 第二层：因果链
 
 - 边由 parent_id 表示：stop/profit/t/retest_confirm 指向最近一次 TRIGGERED 的 enter；无则 `pool:<symbol>`；
@@ -367,6 +407,7 @@ TRANSITIONS = {
 ### 6.3 第三层：报告槽位投影
 
 `report --date` 只读不写，按 §8 投影。
+
 
 ## 7. 破位-反抽-再进场链的因果规则
 
@@ -387,18 +428,22 @@ STOP 单点触碰即 TRIGGERED，随后 `break_qualifier` 四路输出，**定�
 
 ```python
 for stop in today_triggered_stops:
-    q = stop.break_qualifier          # 读 break_qualifier 字段，不读 status_reason
+    q = stop.break_qualifier
     if q in ("DELAY_OBSERVE", "DIVERGENCE"):
         if close < stop.zone_low:
-            create_retest_confirm(stop)      # 收盘仍破 → 生成
+            create_retest_confirm(stop)      # 收盘仍破 → 生成观察哨
         else:
-            push_correction_notice(stop)     # 收盘收复 → 纠错提醒，不生成
-    elif q == "EXECUTE_NOW":
-        create_retest_confirm(stop)          # 当天执行也生成：给纠错留门
+            push_correction_notice(stop)     # 收盘收复 → 纠错提醒
+    # EXECUTE_NOW → 不生成 retest_confirm。市场已定性确认跌破，当天走。
+    #              后续反抽回原止损线，由 watch 单独推纠错提醒（不是 retest_confirm）。
     # LIMIT_EXEMPT → 不生成，次日晚上正常生成新 STOP
 ```
 
-**四条硬约束**：EXECUTE_NOW 也生成；DELAY/DIVERGENCE 同一段逻辑双向；LIMIT_EXEMPT 不生成；生成时 zone 取原 STOP 的 zone，parent 指向原 enter 或 `pool:<symbol>`，valid_policy=fixed_window，window_days 从 config 快照。
+**四条硬约束**：
+只有 DELAY_OBSERVE / DIVERGENCE 两路立哨；EXECUTE_NOW 和 LIMIT_EXEMPT 都不立；
+DELAY/DIVERGENCE 同一段逻辑双向：收盘仍破生成、收盘收复纠错；
+生成时 zone 取原 STOP 的 zone，parent 指向原 enter 或 pool:<symbol>，valid_policy=fixed_window，window_days 从 config 快照。
+熔断日连带：熔断日 DELAY/DIVERGENCE 视同 EXECUTE_NOW → 也不立哨。
 
 ### 7.3 retest_confirm 三终态
 
@@ -412,7 +457,12 @@ for stop in today_triggered_stops:
 
 ### 7.4 纠错提醒统一
 
-两条路径共用 `push_correction_notice()`：破位当日盘中收复（watch）、retest_confirm 放量站回（watch 判 INVALIDATED）。文案一致、不迁移原 STOP 状态、不发新买点。
+push_correction_notice() 三条触发路径：
+  ① 破位当日盘中收复（DELAY/DIVERGENCE 的当天，watch 发现）
+  ② retest_confirm 放量站回（watch 判 INVALIDATED）
+
+三条共用同一函数，文案按场景分三套，但语义一致：不迁移任何状态、不生成任何新信号、不发买点。
+三条共用同一函数，文案按场景分三套，但语义一致：不迁移任何状态、不生成任何新信号、不发买点。
 
 ### 7.5 判决后重新选股：三个前置检查
 
@@ -440,7 +490,8 @@ if same_ma_stop_count(symbol, ma_n=5, days=cfg.reentry_rules.same_ma_cooldown_da
 | 池内票，观察哨存续 | 有 ACTIVE retest_confirm | **暂停生成 stop/profit/t** | — | generator |
 | 池内票，判决后至新 enter 前 | 无 ACTIVE stop 且价格未到均线 | **暂停生成** | — | generator |
 | stop TRIGGERED | 写入 break_qualifier | 记 journal record_type=qualifier | — | watch |
-| stop TRIGGERED | EXECUTE_NOW（或熔断日 DELAY/DIVERGENCE 视同） | retest_confirm | → 原 enter 或 pool | settle |
+| stop TRIGGERED | EXECUTE_NOW（或熔断日 DELAY/DIVERGENCE 视同） | 不产生 retest_confirm；当天走 | — | settle |
+| watch 检测价格反抽回原止损线 | 该 symbol 最近一次 stop 是 EXECUTE_NOW 且已 TRIGGERED | 纠错提醒（无新信号） | — | watch |
 | stop TRIGGERED | DELAY/DIVERGENCE 且收盘<zone_low | retest_confirm | 同上 | settle |
 | stop TRIGGERED | DELAY/DIVERGENCE 且收盘收复 | 纠错提醒（无新信号） | — | settle |
 | stop TRIGGERED | LIMIT_EXEMPT | 不产生 retest_confirm | — | settle |
@@ -505,7 +556,7 @@ test_ma / test_trend / test_volume / test_selector / test_lifecycle / test_order
 | 验收锚点 | 测试文件 |
 |---|---|
 | 缩量/分歧收盘仍破 → 生成 retest_confirm；收盘收复 → 只发纠错 | test_settle_branches |
-| EXECUTE_NOW 当天执行仍生成 retest_confirm | test_settle_branches |
+| EXECUTE_NOW 不生成 retest_confirm；反抽回原止损线推纠错提醒（无新信号）| test_settle_branches |
 | LIMIT_EXEMPT 不生成，次日正常生成 STOP | test_settle_branches |
 | 熔断日 DELAY/DIVERGENCE 视同 EXECUTE_NOW | test_settle_branches |
 | 纠错两条路径文案一致、不迁移状态、不发买点 | test_lifecycle |
@@ -563,21 +614,6 @@ test_ma / test_trend / test_volume / test_selector / test_lifecycle / test_order
 
 已实现：市场输入与尾盘快照、selector 按事实独立选策、volume_breakout 独立 assignment、同票多策略不去重全部推送、A0 今日执行回顾、零预案日严格报告、EV_NEG 报告记录、节假日日历、一字首开分类、`stats --date` 接线 correction/restore、破位四路定性、retest_confirm 生成/到期/放量收复判决、观察哨存续禁买、同均线家族冷却、`settle/watch` CLI 接线。
 
-**v8.1 新增待实现**：
-
-- **A1**：signals.break_qualifier 字段 + journal record_type=qualifier；settle 改读 break_qualifier；
-- **A2**：signals.trigger_window_start/end 字段；strategies.yaml 的 y.when=tail_snapshot 触发 14:30–15:00 硬窗口；watch 对 ma_tomorrow 系 entry 判窗口；test_trigger_window 用例；
-- **A3**：stats entry 可达性改尾盘近似，日 K 全天可达率并列；test_reachability 用例；
-- **A4**：generator Z/W 同生改为“确保存在并关联”，同 symbol 同时刻一条 ACTIVE stop；
-- **A5**：generator 加观察哨存续期暂停规则；
-- **B1**：role 对照表 profit 改 fixed/trailing；
-- **B2**：t 不记 zone_update，每日新建；
-- **B3**：`holding:` → `pool:` 全文替换；
-- **B4**：熔断日改写为取消延迟判决；
-- **B5**：valid_policy 语义拆分（entry 次一日 / t 当日）；
-- **B6**：context_marks.triggered_at 每次更新为最近；
-- **B7**：卖飞率 zone 定格到 closed_at；
-- **B8**：措辞改“parent 锚点＋统计分母”；
-- **C2**：guard 两源对账。
+统计链路已接入持久快照：`market_snapshots` 保存收盘价、最低/最高价、量比与两源异常；`zone_snapshots` 保存信号初始区间和 STOP 滚动更新区间。`run_evening` 落行情快照，`save_signal` 落初始区间快照，`run_settle` 在 STOP 区间更新时落新快照。`stats --date` 会消费当日行情快照计算可达性；STOP 后 5 日追踪用 `closed_at` 时点区间快照，不再读取当前区间。v8.1 的 A1-A5、B1-B8、C2 均已实现。
 
 ---

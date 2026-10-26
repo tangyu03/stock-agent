@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from ..models.journal import JournalEntry, TransitionConfirmation
+from ..models.journal import JournalEntry
 from ..models.signal import Signal, SignalStatus
 
 
@@ -35,7 +35,6 @@ def transition(
     event: TransitionEvent,
     reason: str = '',
     price: float | None = None,
-    confirmed: TransitionConfirmation = TransitionConfirmation.TOUCHED_ONLY,
     now: datetime | None = None,
 ) -> tuple[Signal, JournalEntry]:
     if signal.status in {SignalStatus.EXPIRED, SignalStatus.INVALIDATED}:
@@ -58,7 +57,6 @@ def transition(
         to_status=target.value,
         reason=reason or event.value,
         price=price,
-        confirmed=confirmed,
         created_at=timestamp,
     )
     return updated, journal

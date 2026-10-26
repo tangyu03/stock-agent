@@ -8,7 +8,7 @@ from pointtable.data.mock import MockDataSource
 from pointtable.data import akshare
 from pointtable.cli import main
 from pointtable.db.session import get_connection, init_db, save_journal, save_signals, set_database_path
-from pointtable.models.journal import JournalEntry, TransitionConfirmation
+from pointtable.models.journal import JournalEntry
 from pointtable.jobs.evening import build_context_marks, build_evening_signals, market_tier, zero_plan_day
 from pointtable.jobs.routines import run_auction, run_restore, run_settle, run_watch
 from pointtable.jobs.routines import run_evening
@@ -180,7 +180,7 @@ def test_save_signal_and_journal(tmp_db):
     conn.commit()
     save_journal(conn, JournalEntry(
         signal_id=signal.id, from_status='ACTIVE', to_status='TRIGGERED',
-        price=10.5, confirmed=TransitionConfirmation.CONFIRMED, created_at=now,
+        price=10.5, created_at=now,
     ))
     conn.commit()
     assert conn.execute('SELECT COUNT(*) FROM journal WHERE signal_id=?', (signal.id,)).fetchone()[0] == 1
@@ -406,7 +406,7 @@ def test_report_uses_pool_rows(tmp_db):
         assert main(['--db', str(tmp_db), 'report', '--date', '2026-01-01', '--output', str(output_path)]) == 0
         text = output_path.read_text(encoding='utf-8')
         assert '【2026-01-01 交易计划】' in text
-        assert '博杰股份 first_move_5d 10–11' in text
+        assert '博杰股份（002975） 5日线首动 10–11' in text
     finally:
         output_path.unlink(missing_ok=True)
 

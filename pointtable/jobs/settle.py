@@ -2,21 +2,33 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from ..core.lifecycle import JournalEntry, TransitionConfirmation, TransitionEvent, transition
+from ..core.lifecycle import JournalEntry, TransitionEvent, transition
 from ..core.calendar import trading_days_between
 from ..core.volume import BreakQualifier
 from ..models.signal import Signal, SignalSide, SignalStatus, SignalTag, SignalValidPolicy
 
 
 def expire_intraday(signals: list[Signal], now: datetime) -> list[Signal]:
+    expired_keys = [
+        id(signal)
+        for signal in signals
+        if signal.status is SignalStatus.ACTIVE
+        and signal.tag is not SignalTag.RETEST_CONFIRM
+        and (
+            signal.valid_policy is SignalValidPolicy.INTRADAY
+            or (
+                signal.valid_policy is SignalValidPolicy.NEXT_DAY
+                and now.date() > signal.created_at.date()
+            )
+        )
+    ]
     return [
         signal.model_copy(update={
             'status': SignalStatus.EXPIRED,
             'status_reason': 'eod',
             'closed_at': now,
         })
-        if signal.status is SignalStatus.ACTIVE and signal.valid_policy is SignalValidPolicy.INTRADAY
-        and signal.tag is not SignalTag.RETEST_CONFIRM
+        if id(signal) in expired_keys
         else signal
         for signal in signals
     ]
@@ -30,6 +42,7 @@ def create_retest_confirm(
     return stop_signal.model_copy(update={
         'id': f'{stop_signal.id}-retest',
         'tag': SignalTag.RETEST_CONFIRM,
+        'role': None,
         'side': SignalSide.NEUTRAL,
         'zone_low': float(retest_zone[0]),
         'zone_high': float(retest_zone[1]),
@@ -78,8 +91,7 @@ def settle_retest(
         event,
         reason,
         price,
-        TransitionConfirmation.CONFIRMED if not passed else TransitionConfirmation.TOUCHED_ONLY,
-        now,
+        now=now,
     )
 
 
@@ -116,7 +128,6 @@ def expire_retest(
         retest_signal,
         TransitionEvent.EOD,
         'retest_window_expired',
-        confirmed=TransitionConfirmation.TOUCHED_ONLY,
         now=now,
     )
 
@@ -125,3 +136,11 @@ def correction_notice(signal: Signal, trigger: str) -> str:
     if trigger == 'retest_pass':
         return f"{signal.symbol}：放量站回止损区，假破位确认。可按纪律纠错；追不追，是你。"
     return f"{signal.symbol}：收盘收复止损区，当日假破位。仅纠错提醒，不立观察哨。"
+
+
+def post_break_correction_notice(anchor: dict) -> str:
+    return (
+        f"{anchor['symbol']}：{anchor['qualifier']} 破位时 {anchor['trade_date']}，"
+        f"今日价格反抽回 {anchor['zone_low']:.3g}–{anchor['zone_high']:.3g}。"
+        "主动放量破位定性不变；若你当日未走，此处是纠错参考。追不追，是你。"
+    )

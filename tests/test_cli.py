@@ -18,8 +18,8 @@ def _prepare(db_path: Path) -> None:
         ('evt-1', '300001', 'strategy-a', 'BUY', 'enter', 'entry', 10.0, 10.2, '{}', 'UP', 'intraday', 'TRIGGERED', '2026-01-01T00:00:00+00:00'),
     )
     conn.execute(
-        'INSERT INTO journal (signal_id, from_status, to_status, reason, price, confirmed, created_at) VALUES (?,?,?,?,?,?,?)',
-        ('evt-1', 'ACTIVE', 'TRIGGERED', 'hit', 10.1, 'confirmed', '2026-01-01T10:00:00+00:00'),
+        'INSERT INTO journal (signal_id, from_status, to_status, reason, price, record_type, created_at) VALUES (?,?,?,?,?,?,?)',
+        ('evt-1', 'ACTIVE', 'TRIGGERED', 'hit', 10.1, 'transition', '2026-01-01T10:00:00+00:00'),
     )
     conn.execute('INSERT INTO pool (date, symbol, theme_label) VALUES (?,?,?)', ('2026-01-01', '300001', 'AI'))
     conn.commit()

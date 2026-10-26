@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from ..core.generator import order_for_push
-from ..core.lifecycle import JournalEntry, TransitionConfirmation, TransitionEvent, transition
+from ..core.lifecycle import JournalEntry, TransitionEvent, transition
 from ..core.volume import Activity, BreakQualifier, active_or_passive, break_qualifier
 from ..models.signal import Signal, SignalRole, SignalSide, SignalStatus, SignalTag
 
@@ -115,14 +115,13 @@ def process_touch(
     )
     if touched is None:
         return None, None, reason
-    confirmation = TransitionConfirmation.TOUCHED_ONLY
     event = (
         TransitionEvent.PREMISE_BROKEN
         if reason == 'retest_pass'
         else TransitionEvent.HIT
     )
     updated, journal = transition(
-        signal, event, reason, price, confirmation, now
+        signal, event, reason, price, now=now
     )
     return updated, journal, reason
 

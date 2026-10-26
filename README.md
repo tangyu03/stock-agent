@@ -18,6 +18,7 @@
 python -m pointtable.cli --db pointtable/data/pointtable.db receipt <signal_id> --verdict executed --size-filled 100
 python -m pointtable.cli --db pointtable/data/pointtable.db veto <signal_id>
 python -m pointtable.cli --db pointtable/data/pointtable.db stats
+python -m pointtable.cli --db pointtable/data/pointtable.db stats --date 2026-10-22
 python -m pointtable.cli --db pointtable/data/pointtable.db holdings
 python -m pointtable.cli --db pointtable/data/pointtable.db pool
 python -m pointtable.cli --db pointtable/data/pointtable.db pool-add --date 2026-10-22 --symbol 300001 --theme AI --role candidate
@@ -64,6 +65,8 @@ python -m pointtable.cli --db pointtable/data/pointtable.db evening --input poin
 python -m pointtable.cli --db pointtable/data/pointtable.db report --date 2026-10-22 --market-json pointtable/data/evening-2026-10-22.json --output reports/2026-10-22.md
 ```
 
+`run_evening` 会把 `assignments` 中的 `est_close`、最低价、最高价、量比和两源异常写入 `market_snapshots`；信号生成时会把初始区间写入 `zone_snapshots`，STOP 滚动更新时追加新区间快照。`stats --date` 用这些快照计算可达性和 STOP 后 5 日卖飞/避损，避免统计时改写历史口径。
+
 `evening --input` 额外支持 `holdings` 数组；每行需要 `symbol`、`parent_id`、`trend`、`stop_zone`、`support_zone`、`resistance_zone`。UP 趋势生成 STOP/T_BUY/T_SELL，DOWN 趋势只生成 STOP，`volatility_exceeded=true` 会跳过 T 行。
 
 `settle` 的观察哨窗口、放量站回阈值和节假日默认读取 `config.yaml`；上面三个 JSON 文件可覆盖收盘价、量比和破位上下文。`watch` 会自动使用同一 `retest_volume_min`。同票多策略不去重；活跃 `retest_confirm` 期间不生成该票 BUY。
@@ -75,6 +78,8 @@ python -m pointtable.cli --db pointtable/data/pointtable.db report --date 2026-1
 报告按 signals 投影：候选、池内票保护行、破位、观察区、判决区互不折叠；同票多策略不合并，并显示名称和现价。
 
 `pool.role` 区分 `holding/index/sector/candidate`；旧库自动补列，存量默认 `holding`。`holdings` 和报告只读取 `holding`，`market-input` 会按 `watchlist_limit` 和 priority 截断全部池内票。
+
+周末或长假后生成计划时，`market-input --date` 用最近收盘日；`report --date` 用目标交易日。例如周六/周日生成 10-26 计划：先用 `--date 2026-10-23` 生成 JSON，再用 `--date 2026-10-26` 渲染报告。
 
 ## 切流
 
@@ -97,6 +102,14 @@ python -m pointtable.cli --db pointtable/data/pointtable.db --legacy
 迁移后检查 `migration-status`；它会核对正式推送、迁移审计、旧信号冻结和池子板块归属。用户已裁决跳过 7 天稳定观察；2026-10-22 切流已完成，旧源码回查保留到 2026-11-22。
 
 ## 测试
+
+当前信号口径：
+
+- `ENTER` 默认 `NEXT_DAY`：当晚生成，次日盘前/盘中仍可触发；生成当天收盘结算不失效，次一交易日收盘结算后未触发才过期。
+- `STOP` 持续有效；`PROFIT` 可按策略配置为固定压力或 `trailing` 移动止盈提示。
+- 同票多策略不合并、不去重；报告显示名称、现价、前提、支撑/压力、突破位和破位 qualifier。
+- 两源异常只标记并从可达性/EV 审计剔除，不直接拦截当晚计划；节假日零预案日停止新 BUY。
+- `journal.confirmed/touched_only` 已移除，只保留 `record_type`。
 
 ```bash
 python -X utf8 -m pytest -q -p no:tmpdir -p no:cacheprovider --ignore=legacy --ignore=pytest-basetemp --ignore=tmp6zd291xl --ignore=tmpv7dfstrn

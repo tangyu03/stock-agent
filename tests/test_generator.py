@@ -11,7 +11,7 @@ from pointtable.core.generator import (
     premise_ok,
     validate_strategy,
 )
-from pointtable.models.signal import SignalTag, SignalTrend
+from pointtable.models.signal import SignalTag, SignalTrend, SignalValidPolicy
 
 
 def _strategy() -> Strategy:
@@ -41,6 +41,19 @@ def test_enter_generates_parent_z_and_w():
     assert [row.tag for row in rows] == [SignalTag.ENTER, SignalTag.STOP, SignalTag.PROFIT]
     assert rows[1].parent_id == rows[0].id
     assert rows[2].parent_id == rows[0].id
+    assert rows[0].valid_policy is SignalValidPolicy.NEXT_DAY
+    assert rows[0].premise['premise'] == _strategy().premise
+
+
+def test_trailing_profit_is_marked():
+    strategy = Strategy(
+        'volume_breakout', 'BUY', _strategy().premise, _strategy().y, _strategy().z,
+        {'type': 'next_resistance', 'trailing': True},
+    )
+    rows = generate_entry(
+        strategy, '300001', (10.0, 10.2), (9.0, 9.2), (12.0, 12.2), datetime(2026, 1, 2, tzinfo=UTC)
+    )
+    assert rows[2].activation == 'trailing'
 
 
 def test_invalid_strategy_is_rejected():

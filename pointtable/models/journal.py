@@ -7,11 +7,6 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
-class TransitionConfirmation(str, Enum):
-    CONFIRMED = "confirmed"
-    TOUCHED_ONLY = "touched_only"
-
-
 class JournalRecordType(str, Enum):
     TRANSITION = "transition"
     ZONE_UPDATE = "zone_update"
@@ -26,7 +21,6 @@ class JournalEntry(BaseModel):
     to_status: str
     reason: str = ""
     price: Optional[float] = None
-    confirmed: TransitionConfirmation = TransitionConfirmation.TOUCHED_ONLY
     record_type: JournalRecordType = JournalRecordType.TRANSITION
     created_at: datetime
 

@@ -10,7 +10,7 @@ from pointtable.jobs.execution_review import today_execution_review
 from pointtable.jobs.market_pipeline import volume_breakout_decision
 from pointtable.jobs.routines import run_settle
 from pointtable.jobs.watch import stop_break_decision
-from pointtable.models.journal import JournalEntry, TransitionConfirmation
+from pointtable.models.journal import JournalEntry
 from pointtable.models.signal import Signal, SignalSide, SignalStatus, SignalTag, SignalTrend, SignalValidPolicy
 
 
@@ -65,8 +65,7 @@ def test_execution_review_flags_missing_mechanical_receipt(tmp_db):
         signal_id=stop.id,
         from_status='ACTIVE',
         to_status='TRIGGERED',
-        confirmed=TransitionConfirmation.CONFIRMED,
-        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
     ))
     conn.commit()
     rows = today_execution_review(conn, '2026-01-01')
@@ -118,7 +117,7 @@ def _stopped(symbol: str = '300001', status_reason: str = 'stop_single_point:DEL
 @pytest.mark.parametrize(('status_reason', 'close_price', 'created'), [
     ('stop_single_point:DELAY_OBSERVE:passive', 10.0, False),
     ('stop_single_point:DIVERGENCE:divergence', 10.0, False),
-    ('stop_single_point:EXECUTE_NOW:active', None, True),
+    ('stop_single_point:EXECUTE_NOW:active', None, False),
     ('stop_single_point:LIMIT_EXEMPT:limit', 8.0, False),
 ])
 def test_settle_close_decision_uses_break_qualifier(tmp_db, status_reason, close_price, created):

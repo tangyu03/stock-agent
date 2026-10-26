@@ -12,6 +12,7 @@ from .db.session import (
     get_connection,
     init_db,
     load_event_calendar,
+    load_market_snapshots,
     set_database_path,
 )
 from .jobs.cutover import expire_legacy_signals, formal_push_ready, switch_push_mode
@@ -21,8 +22,8 @@ from .core.calendar import load_holidays
 from .core.auction import AuctionPattern
 from .jobs.routines import run_auction, run_evening, run_restore, run_settle, run_watch
 from .jobs.execution_review import today_execution_review
-from .jobs.market_pipeline import fetch_market_input
 from .jobs.market_pipeline import load_risk_config
+from .jobs.market_pipeline import fetch_market_input
 from .jobs.scheduler import next_routine
 from .jobs.tail_snapshot import capture_tail_snapshots
 from .jobs.tail_snapshot import load_tail_prices
@@ -92,23 +93,30 @@ def add_pool_entry(
     return cursor.rowcount
 
 
-def stats_report(performance: dict | None = None) -> dict:
+def stats_report(performance: dict | None = None, date: str | None = None) -> dict:
     conn = get_connection()
-    signals = [dict(row) for row in conn.execute('SELECT id, strategy_id, tag, status FROM signals')]
+    signals = [dict(row) for row in conn.execute('SELECT * FROM signals')]
+    stop_tracking = {
+        str(row['signal_id']): row
+        for row in (performance or {}).get('stop_tracking', [])
+    }
+    for row in signals:
+        row.update(stop_tracking.get(str(row['id']), {}))
     receipts = [dict(row) for row in conn.execute('SELECT signal_id, verdict FROM receipts')]
     receipt_by_signal = {row['signal_id']: row['verdict'] for row in reversed(receipts)}
     for row in signals:
         row['verdict'] = receipt_by_signal.get(row['id'])
     pool_rows = [dict(row) for row in conn.execute('SELECT symbol, theme_label FROM pool GROUP BY symbol')]
+    market_rows = load_market_snapshots(conn, date)
     behavior_data = behavior(signals)
     if performance:
         behavior_data['restore_violations'] = (performance.get('restore') or {}).get('violations')
     return {
-        'signal_quality': signal_quality(signals),
+        'signal_quality': signal_quality(signals, market_rows),
         'correction_hit_rate': performance.get('correction_hit_rate') if performance else None,
         'stop_outcomes': stop_outcomes(signals),
         'behavior': behavior_data,
-        'pool_quality': pool_quality(pool_rows, []),
+        'pool_quality': pool_quality(pool_rows, (performance or {}).get('performance') or []),
     }
 
 
@@ -155,15 +163,16 @@ def build_report(
     from .jobs.routines import signal_from_row
     from .notify.render import render_report
 
+    signal_date = str((market or {}).get('trade_date') or report_date)
     signal_rows = [
         signal_from_row(row)
         for row in get_connection().execute(
             '''
             SELECT * FROM signals
-            WHERE created_at LIKE ? OR (closed_at IS NOT NULL AND closed_at LIKE ?)
+            WHERE created_at <= ? OR (closed_at IS NOT NULL AND closed_at >= ?)
             ORDER BY created_at, id
             ''',
-            (report_date + '%', report_date + '%'),
+            (report_date + 'T23:59:59', signal_date + 'T00:00:00'),
         ).fetchall()
     ]
     portfolio_path = Path(__file__).parents[1] / 'legacy' / 'config' / 'portfolio.yaml'
@@ -177,15 +186,26 @@ def build_report(
         by_symbol.setdefault(signal.symbol, []).append(signal)
     market_for_report = dict((market or {}).get('market') or market or {})
     market_for_report['assignments'] = list((market or {}).get('assignments') or [])
-    market_for_report['name_map'] = name_by_symbol
+    market_for_report['name_map'] = {
+        **{str(code): str(name) for code, name in ((market or {}).get('name_map') or {}).items()},
+        **name_by_symbol,
+    }
+    for key in ('pool_total', 'watchlist_limit', 'retest_window_days'):
+        if (market or {}).get(key) is not None:
+            market_for_report[key] = market[key]
+    risk_config = load_risk_config(Path(__file__).parents[0] / 'config' / 'config.yaml')
+    market_for_report.setdefault('retest_window_days', risk_config['retest_window_days'])
+    market_for_report.setdefault('holidays', [value.isoformat() for value in risk_config['holidays']])
+    market_for_report['recent_stop_counts'] = (market or {}).get('recent_stop_counts') or {}
+    market_for_report['signal_date'] = signal_date
     market_for_report['context_marks'] = [
         dict(row) for row in get_connection().execute(
             'SELECT * FROM context_marks WHERE date=? ORDER BY context_type, code',
-            (report_date,),
+        (signal_date,),
         ).fetchall()
     ]
-    market_for_report['event_calendar'] = load_event_calendar(get_connection(), report_date)
-    market_for_report['execution_review'] = today_execution_review(get_connection(), report_date)
+    market_for_report['event_calendar'] = load_event_calendar(get_connection(), signal_date)
+    market_for_report['execution_review'] = today_execution_review(get_connection(), signal_date)
     market_for_report['ev_negative_strategies'] = sorted({
         signal.strategy_id
         for signals in by_symbol.values()
@@ -299,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
             from .jobs.performance import pool_performance_report
 
             performance = pool_performance_report(get_connection(), args.date, window=args.window)
-        print(json.dumps(stats_report(performance), ensure_ascii=False, indent=2))
+        print(json.dumps(stats_report(performance, args.date), ensure_ascii=False, indent=2))
     elif args.command == 'holdings':
         print(json.dumps([dict(row) for row in list_holdings()], ensure_ascii=False, indent=2))
     elif args.command == 'pool':
@@ -350,13 +370,13 @@ def main(argv: list[str] | None = None) -> int:
         now = datetime.now(timezone.utc)
         print(json.dumps(run_auction(get_connection(), args.date, AuctionPattern(args.pattern), now), ensure_ascii=False, indent=2))
     elif args.command == 'watch':
-        risk_config = load_risk_config(Path(__file__).parents[1] / 'config' / 'config.yaml')
+        risk_config = load_risk_config(Path(__file__).parents[0] / 'config' / 'config.yaml')
         print(json.dumps(run_watch(
             get_connection(), args.price, args.second_cycle,
             datetime.now(timezone.utc), args.volume_ratio, args.date,
             args.broken_id,
             break_context=(
-                json.loads(args.context_json.read_text(encoding='utf-8'))
+                json.loads(args.context_json.read_text(encoding='utf-8-sig'))
                 if args.context_json else None
             ),
             retest_volume_min=(
@@ -365,27 +385,27 @@ def main(argv: list[str] | None = None) -> int:
                 else risk_config['retest_volume_min']
             ),
             prices=(
-                json.loads(args.prices_json.read_text(encoding='utf-8'))
+                json.loads(args.prices_json.read_text(encoding='utf-8-sig'))
                 if args.prices_json else None
             ),
             context_prices=(
-                json.loads(args.context_prices_json.read_text(encoding='utf-8'))
+                json.loads(args.context_prices_json.read_text(encoding='utf-8-sig'))
                 if args.context_prices_json else None
             ),
         ), ensure_ascii=False, indent=2))
     elif args.command == 'settle':
         now = datetime.fromisoformat(args.now) if args.now else datetime.now(timezone.utc)
         zone_path = args.stop_zones_json or args.market_json
-        stop_zones = json.loads(zone_path.read_text(encoding='utf-8')) if zone_path else None
+        stop_zones = json.loads(zone_path.read_text(encoding='utf-8-sig')) if zone_path else None
         if stop_zones and args.market_json and not args.stop_zones_json:
             stop_zones = stop_zones.get('stop_zones')
-        close_prices = json.loads(args.close_prices_json.read_text(encoding='utf-8')) if args.close_prices_json else None
-        volume_ratios = json.loads(args.volume_ratios_json.read_text(encoding='utf-8')) if args.volume_ratios_json else None
-        break_contexts = json.loads(args.break_contexts_json.read_text(encoding='utf-8')) if args.break_contexts_json else None
-        market_payload = json.loads(args.market_json.read_text(encoding='utf-8')) if args.market_json else {}
+        close_prices = json.loads(args.close_prices_json.read_text(encoding='utf-8-sig')) if args.close_prices_json else None
+        volume_ratios = json.loads(args.volume_ratios_json.read_text(encoding='utf-8-sig')) if args.volume_ratios_json else None
+        break_contexts = json.loads(args.break_contexts_json.read_text(encoding='utf-8-sig')) if args.break_contexts_json else None
+        market_payload = json.loads(args.market_json.read_text(encoding='utf-8-sig')) if args.market_json else {}
         market_fields = market_payload.get('market') if isinstance(market_payload.get('market'), dict) else market_payload
-        holidays = json.loads(args.holidays_json.read_text(encoding='utf-8')) if args.holidays_json else None
-        risk_config = load_risk_config(Path(__file__).parents[1] / 'config' / 'config.yaml')
+        holidays = json.loads(args.holidays_json.read_text(encoding='utf-8-sig')) if args.holidays_json else None
+        risk_config = load_risk_config(Path(__file__).parents[0] / 'config' / 'config.yaml')
         print(json.dumps(run_settle(
             get_connection(),
             now,
@@ -466,7 +486,7 @@ def main(argv: list[str] | None = None) -> int:
         get_connection().commit()
         print(json.dumps({'signal_id': updated.id, 'size_hint': updated.size_hint}, ensure_ascii=False))
     elif args.command == 'report':
-        market = json.loads(args.market_json.read_text(encoding='utf-8')) if args.market_json else {}
+        market = json.loads(args.market_json.read_text(encoding='utf-8-sig')) if args.market_json else {}
         text = build_report(args.date, market)
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)

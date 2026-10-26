@@ -1,4 +1,4 @@
-from .journal import JournalEntry, TransitionConfirmation
+from .journal import JournalEntry, JournalRecordType
 from .pool import PoolEntry
 from .receipt import ReceiptEntry, ReceiptVerdict
 from .signal import (
@@ -21,5 +21,5 @@ __all__ = [
     "SignalTag",
     "SignalTrend",
     "SignalValidPolicy",
-    "TransitionConfirmation",
+    "JournalRecordType",
 ]

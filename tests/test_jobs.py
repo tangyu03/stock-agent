@@ -43,6 +43,14 @@ def test_settle_expires_intraday_and_creates_retest():
     assert retest.parent_id == (stop.parent_id or stop.id)
 
 
+def test_next_day_survives_generation_day_and_expires_next_day():
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    next_day = _signal(policy=SignalValidPolicy.NEXT_DAY)
+    assert expire_intraday([next_day], now)[0].status is SignalStatus.ACTIVE
+    later = next_day.model_copy(update={'created_at': datetime(2026, 1, 2, tzinfo=UTC)})
+    assert expire_intraday([later], datetime(2026, 1, 3, tzinfo=UTC))[0].status is SignalStatus.EXPIRED
+
+
 def test_trend_flip_rolls_stop_and_invalidates_t_buy():
     now = datetime(2026, 1, 2, tzinfo=UTC)
     stop = _signal(SignalTag.STOP, SignalValidPolicy.UNTIL_STOPPED, 'evt-0')

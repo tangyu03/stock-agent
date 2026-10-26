@@ -30,9 +30,9 @@ def expire_legacy_signals(
     for row in rows:
         update_sql = "UPDATE signals SET status='EXPIRED', status_reason=?, closed_at=? WHERE id=? AND status=?"
         conn.execute(update_sql, (reason, now_text, row['id'], row['status']))
-        insert_sql = "INSERT OR IGNORE INTO journal (signal_id, from_status, to_status, reason, confirmed, created_at) VALUES (?,?,?,?,?,?)"
+        insert_sql = "INSERT OR IGNORE INTO journal (signal_id, from_status, to_status, reason, created_at) VALUES (?,?,?,?,?)"
         before_changes = conn.total_changes
-        conn.execute(insert_sql, (row['id'], row['status'], 'EXPIRED', reason, 'confirmed', now_text))
+        conn.execute(insert_sql, (row['id'], row['status'], 'EXPIRED', reason, now_text))
         journal_count += conn.total_changes - before_changes
     return CutoverResult(len(rows), journal_count, reason)
 

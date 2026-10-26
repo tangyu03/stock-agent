@@ -10,6 +10,7 @@
 python -m pointtable.cli receipt <signal_id> --verdict executed
 python -m pointtable.cli veto <signal_id>
 python -m pointtable.cli stats
+python -m pointtable.cli stats --date 2026-10-22
 python -m pointtable.cli holdings
 python -m pointtable.cli pool
 ```
@@ -25,6 +26,8 @@ python -m pointtable.cli pool-performance --date 2026-10-15 --window 5
 python -m pointtable.cli report --date 2026-10-22 --market-json reports/market-2026-10-22.json --output reports/2026-10-22.md
 python -m pointtable.cli push-file --title "复盘" --file reports/2026-10-22.md
 ```
+
+统计依赖两张快照表：`market_snapshots` 保存当日行情，`zone_snapshots` 保存区间历史。STOP 后 5 日追踪读取 `closed_at` 之前最近的区间快照，因此后续 STOP 滚动不会改变历史统计。
 
 ## 迁移
 
@@ -43,7 +46,7 @@ python -m pointtable.db.migrate --source-db data/stock_agent.db
 迁移规则：
 
 - `signal_events` → `signals`：旧事件作为 `enter` 信号，区间由原入场价与目标下沿取上下沿组成，兼容恐慌抄底等倒序区间。
-- `signal_event_logs` → `journal`：触发类迁移标 `confirmed`，其余标 `touched_only`。
+- `signal_event_logs` → `journal`：仅保留 `record_type` 分类，`confirmed/touched_only` 已移除。
 - `trade_logs` → `receipts`：只迁移已有 `executed/ignored/veto` 回执，`pending` 不假装有结论。
 - 持仓/池资产先从 `portfolio.yaml` 与 `trade_logs` 提取，板块主题用 `theme_map.yaml` 人工映射兜底。
 

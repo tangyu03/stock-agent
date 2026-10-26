@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import requests
 import threading
@@ -18,6 +19,11 @@ _CACHE_LOCK = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix='akshare')
 _EXECUTOR_LOCK = threading.Lock()
 _TENCENT_KLINE_URL = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get'
+
+for proxy_key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'):
+    os.environ.pop(proxy_key, None)
+os.environ['NO_PROXY'] = '*'
+os.environ['no_proxy'] = '*'
 
 
 def call_ak_with_timeout(func: Callable[..., Any], timeout: float = 15, *args, **kwargs) -> Any | None:

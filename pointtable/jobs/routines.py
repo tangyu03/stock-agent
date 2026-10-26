@@ -11,11 +11,16 @@ from ..core.auction import AuctionPattern
 from ..core.lifecycle import JournalEntry
 from ..db.session import (
     load_context_marks,
+    load_pending_correction_anchors,
     save_context_marks,
+    save_correction_anchor,
     save_journal,
     save_signal,
     save_signals,
+    save_market_snapshots,
+    save_zone_snapshot,
     touch_context_mark,
+    mark_correction_notice,
     save_event_calendar,
 )
 from ..models.context_mark import ContextType
@@ -167,7 +172,7 @@ def run_watch(
             if price is not None and mark.level_low <= price <= mark.level_high:
                 touch_context_mark(conn, mark.date.isoformat(), mark.context_type, mark.code, now)
         conn.commit()
-    for signal in load_active_signals(conn, trade_date):
+    for signal in load_active_signals(conn):
         signal_price = (prices or {}).get(signal.symbol) if prices is not None else price
         if signal_price is None:
             continue
@@ -213,6 +218,18 @@ def run_watch(
                 from .settle import correction_notice
 
                 correction_notices.append(correction_notice(updated, 'retest_pass'))
+    from .settle import post_break_correction_notice
+
+    for anchor in load_pending_correction_anchors(conn):
+        signal_price = (prices or {}).get(anchor['symbol']) if prices is not None else price
+        if (
+            signal_price is None
+            or now.date().isoformat() <= anchor['trade_date']
+            or not anchor['zone_low'] <= signal_price <= anchor['zone_high']
+        ):
+            continue
+        if mark_correction_notice(conn, anchor['signal_id'], signal_price, now):
+            correction_notices.append(post_break_correction_notice(anchor))
     conn.commit()
     return {
         'touched': touched,
@@ -285,6 +302,7 @@ def run_settle(
         save_signal(conn, signal)
         original = original_signals.get(signal.id)
         if original and (original.zone_low, original.zone_high) != (signal.zone_low, signal.zone_high):
+            save_zone_snapshot(conn, signal.id, signal.zone_low, signal.zone_high, now)
             save_journal(conn, JournalEntry(
                 signal_id=signal.id,
                 from_status=original.status.value,
@@ -306,7 +324,8 @@ def run_settle(
         signal for signal in all_signals
         if signal.tag.value == 'stop'
         and signal.status is SignalStatus.TRIGGERED
-        and signal.created_at.date() == now.date()
+        and signal.closed_at is not None
+        and signal.closed_at.date() == now.date()
     ]:
         if stop.break_qualifier:
             from ..core.volume import BreakQualifier as QualifierEnum
@@ -329,6 +348,18 @@ def run_settle(
             from ..core.volume import BreakQualifier as QualifierEnum
 
             qualifier = QualifierEnum.EXECUTE_NOW
+        if qualifier.value == 'EXECUTE_NOW':
+            save_correction_anchor(
+                conn,
+                signal_id=stop.id,
+                symbol=stop.symbol,
+                trade_date=now.date().isoformat(),
+                qualifier=qualifier.value,
+                zone_low=stop.zone_low,
+                zone_high=stop.zone_high,
+                created_at=now,
+            )
+            continue
         if qualifier.value in {'DELAY_OBSERVE', 'DIVERGENCE'} and close_price is not None:
             if close_price >= stop.zone_low:
                 correction_notices.append(correction_notice(stop, 'same_day_close'))
@@ -448,11 +479,22 @@ def run_evening(conn: sqlite3.Connection, input_path: str | Path) -> dict[str, A
     ))
     quality_rows = [
         dict(row)
-        for row in conn.execute('SELECT id, strategy_id, status FROM signals').fetchall()
+        for row in conn.execute(
+            'SELECT id, symbol, strategy_id, tag, role, status, zone_low, zone_high, created_at FROM signals'
+        ).fetchall()
     ]
+    market_rows = [
+        {
+            **{key: assignment.get(key) for key in ('symbol', 'est_close', 'low', 'high', 'two_source_anomaly')},
+            'trade_date': trade_date,
+            'volume_ratio': assignment.get('volume_ratio'),
+        }
+        for assignment in assignments
+    ]
+    save_market_snapshots(conn, trade_date, market_rows)
     ev_negative = {
         strategy_id
-        for strategy_id, quality in signal_quality(quality_rows).items()
+        for strategy_id, quality in signal_quality(quality_rows, market_rows).items()
         if quality['ev_negative']
     }
     rows = [

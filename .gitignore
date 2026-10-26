@@ -46,7 +46,28 @@ data/*.parquet
 
 # 测试临时目录
 .ab_tmp/
+.pytest-*/
 .tmp-pytest/
 pytest-basetemp/
+.tmp-pt-run*/
+.tmp-pytest-pointtable/
 tests/.tmp-workspaces/
+.tmp_market-test.patch
+.tmp-tail.patch
+.apply.patch
+.codex-patch
+.codex_apply_patch_runner.py
+
+# 运行产物
+*.db
+*.db-shm
+*.db-wal
+history/*.csv
+history/*.json
+reports/
+test_migration_is_idempotent.output/
+test-v8-evening.json
+pointtable/data/evening-*.json
+pointtable/data/closes-*.json
+pointtable/data/prices-*.json
 .tmp_pushplus*

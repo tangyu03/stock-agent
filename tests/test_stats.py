@@ -32,6 +32,25 @@ def test_reachability_marks_tail_miss_unreachable():
     assert report['unreachable'] == 1
 
 
+def test_two_source_anomaly_is_excluded_from_reachability_and_ev():
+    rows = [
+        {'symbol': '300001', 'strategy_id': 'a', 'tag': 'enter', 'role': 'entry',
+         'zone_low': 10.0, 'zone_high': 10.2, 'status': 'TRIGGERED',
+         'hypothetical_pnl_pct': 100.0, 'created_at': '2026-01-01T15:00:00+08:00'},
+    ]
+    market_rows = [
+        {'trade_date': '2026-01-01', 'symbol': '300001', 'est_close': 10.1,
+         'low': 10.0, 'high': 10.3, 'two_source_anomaly': True},
+    ]
+    reachability = signal_reachability(rows, market_rows)['a']
+    quality = signal_quality(rows, market_rows)['a']
+    assert reachability['total'] == 1
+    assert reachability['audited'] == 0
+    assert reachability['audit_excluded'] == 1
+    assert quality['triggered'] == 0
+    assert quality['mechanical_expectancy'] is None
+
+
 def test_behavior_reports_insufficient_coverage_by_none():
     result = behavior([{'tag': 'stop', 'status': 'TRIGGERED'}])
     assert result['receipt_coverage'] is None

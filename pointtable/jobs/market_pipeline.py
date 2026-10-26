@@ -79,6 +79,15 @@ def _break_zone(level: float, width_pct: float) -> tuple[float, float]:
     return round(level * (1 - width_pct), 6), round(level, 6)
 
 
+def holiday_eve(trade_date: date, holidays: set[date] | None = None) -> bool:
+    candidate = trade_date + timedelta(days=1)
+    while candidate.weekday() >= 5:
+        if candidate in (holidays or set()):
+            return True
+        candidate += timedelta(days=1)
+    return candidate in (holidays or set())
+
+
 def volume_breakout_decision(
     rows: Sequence[Mapping[str, Any]],
     est_close: float,
@@ -236,6 +245,7 @@ def build_market_input(
     priority_order: Sequence[str] = ('holding', 'index', 'sector', 'candidate'),
     now: date | None = None,
     holidays: set[date] | None = None,
+    name_map: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     theme_map = load_theme_map(Path(__file__).parents[1] / 'config' / 'theme_map.yaml')
     closes = _closes(index_rows)
@@ -271,6 +281,7 @@ def build_market_input(
     assignments: list[dict[str, Any]] = []
     rejected: list[dict[str, str]] = []
     stop_zones: dict[str, tuple[float, float]] = {}
+    pool_total = len(pool_rows)
     for pool_row in pool_rows:
         symbol = str(pool_row.get('symbol') or '')
         if symbol in (active_retest or set()):
@@ -297,10 +308,18 @@ def build_market_input(
         stock_closes = _closes(rows)
         tail_price = (tail_prices or {}).get(symbol)
         latest_close = _numeric(latest_stock, '收盘', 'close', 'Close')
+        two_source_anomaly = False
         if tail_price is not None:
             est_close = tail_price
+            two_source_anomaly = False
             if latest_date.isoformat() == now.isoformat():
                 plan_closes = [*stock_closes[:-1], tail_price]
+                if latest_close is not None and not check_two_source(
+                    tail_price,
+                    latest_close,
+                    max_deviation=two_source_deviation_max,
+                ).ok:
+                    two_source_anomaly = True
             else:
                 plan_closes = [*stock_closes, tail_price]
         elif latest_date.isoformat() == now.isoformat():
@@ -325,6 +344,9 @@ def build_market_input(
             if not quote.ok:
                 rejected.append({'symbol': symbol, 'reason': quote.reason})
                 continue
+        else:
+            quote_high = est_close
+            quote_low = est_close
         regulated = symbol in set(regulator_list)
         bad_lhb, lhb_reason = lhb_decision(lhb, symbol, lhb_dumpers)
         breakout_hit, breakout_price = volume_breakout_decision(rows, est_close)
@@ -397,6 +419,9 @@ def build_market_input(
                 'parent_id': (entry_parent_ids or {}).get(symbol),
                 'closes': plan_closes,
                 'est_close': est_close,
+                'low': quote_low,
+                'high': quote_high,
+                'two_source_anomaly': two_source_anomaly,
                 'support': support_zone[0] if support_zone else None,
                 'resistance': resistance_zone[1] if resistance_zone else None,
                 'breakout_price': breakout_price,
@@ -404,6 +429,7 @@ def build_market_input(
             })
     return {
         'trade_date': str(now) if now else str(_value(_latest(index_rows) or {}, 'trade_date', '日期', 'date') or ''),
+        'holiday_eve': holiday_eve(now, holidays) if now else False,
         'market_tier': market_tier,
         'market': {
             'amount_yi': amount_yi,
@@ -411,13 +437,19 @@ def build_market_input(
             'sh_close': sh_close,
             'sh_ma5': sh_ma5,
             'index_trend': index_trend,
-            'zero_plan_day': market_tier == 'LOW' and index_trend == SignalTrend.DOWN.value,
+            'zero_plan_day': (
+                market_tier == 'LOW' and index_trend == SignalTrend.DOWN.value
+            ) or holiday_eve(now, holidays) if now else False,
         },
         'index_context': index_context,
         'sector_context': sector_context,
         'stop_zones': stop_zones,
         'assignments': assignments,
         'rejected': rejected,
+        'pool_total': pool_total,
+        'watchlist_limit': watchlist_limit,
+        'recent_stop_counts': dict(recent_stops or {}),
+        'name_map': dict(name_map or {}),
     }
 
 
@@ -458,6 +490,12 @@ def fetch_market_input(
     symbols = [row['symbol'] for row in pool_rows]
     entry_parent_ids = latest_entry_parent_ids(conn, symbols)
     stock_klines = {symbol: akshare.stock_kline(symbol, trade_date=trade_date, limit=60) for symbol in symbols}
+    spot_rows = akshare.stock_spot_rows()
+    name_map = {
+        str(row['symbol']): str(row.get('name') or '')
+        for row in spot_rows
+        if row.get('symbol') and row.get('name')
+    }
     themes = sorted({row['theme_label'] for row in pool_rows} - {'unknown'})
     sector_klines = {theme: akshare.sector_kline(theme, limit=60) for theme in themes}
     config = load_risk_config(config_path)
@@ -488,4 +526,5 @@ def fetch_market_input(
             config['priority'] if config.get('priority') else None
         ),
         holidays=config['holidays'],
+        name_map=name_map,
     )

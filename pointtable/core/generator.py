@@ -144,9 +144,10 @@ def generate_entry(
     )
     enter = _signal(
         enter_id, strategy.id, symbol, 'BUY', SignalTag.ENTER,
-        entry_zone, trend, created_at,
-        parent_id,
+        entry_zone, trend, created_at, parent_id,
+        valid_policy=SignalValidPolicy.NEXT_DAY,
     )
+    enter = enter.model_copy(update={'premise': {'premise': strategy.premise}})
     if trigger_window is not None:
         enter = enter.model_copy(update={
             'trigger_window_start': trigger_window[0],
@@ -187,8 +188,11 @@ def generate_entry(
         else _signal(
             f'{enter_id}-w', strategy.id, symbol, 'SELL', SignalTag.PROFIT,
             profit_zone, trend, created_at, enter_id,
+            valid_policy=SignalValidPolicy.UNTIL_STOPPED,
         )
     )
+    if strategy.w.get('trailing'):
+        profit = profit.model_copy(update={'activation': 'trailing'})
     return [enter, stop, profit]
 
 
@@ -200,6 +204,7 @@ def generate_holding_rows(
     resistance_zone: tuple[float, float],
     parent_id: str,
     created_at: datetime,
+    profit_mode: str = 'fixed',
 ) -> list[Signal]:
     rows = [
         _signal(
@@ -212,7 +217,7 @@ def generate_holding_rows(
         rows.extend([
             _signal(
                 f'{created_at.date().isoformat()}-{symbol}-profit', 'holding',
-                symbol, 'SELL', SignalTag.PROFIT, resistance_zone, trend,
+            symbol, 'SELL', SignalTag.PROFIT, resistance_zone, trend,
                 created_at, parent_id, SignalValidPolicy.UNTIL_STOPPED,
             ),
             _signal(
@@ -226,6 +231,8 @@ def generate_holding_rows(
                 SignalValidPolicy.SAME_DAY,
             ),
         ])
+    if rows[-1].tag is SignalTag.PROFIT:
+        rows[-1] = rows[-1].model_copy(update={'activation': 'trailing' if profit_mode == 'trailing' else 'profit'})
     return rows
 
 

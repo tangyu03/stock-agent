@@ -33,6 +33,12 @@ def _signal(tag=SignalTag.ENTER, status=SignalStatus.ACTIVE, **kwargs):
         valid_policy=kwargs.get('valid_policy', SignalValidPolicy.INTRADAY),
         status=status,
         created_at=kwargs.get('created_at', datetime(2026, 1, 1, tzinfo=UTC)),
+        closed_at=kwargs.get(
+            'closed_at',
+            datetime(2026, 1, 1, tzinfo=UTC)
+            if status in {SignalStatus.TRIGGERED, SignalStatus.EXPIRED, SignalStatus.INVALIDATED}
+            else None,
+        ),
         parent_id=kwargs.get('parent_id'),
         trigger_window_start=kwargs.get('trigger_window_start'),
         trigger_window_end=kwargs.get('trigger_window_end'),
@@ -122,7 +128,7 @@ def test_settle_reads_break_qualifier(tmp_db):
     assert result['correction_notices']
 
 
-def test_melt_day_treats_delay_as_execute(tmp_db):
+def test_melt_day_treats_delay_as_execute_without_retest(tmp_db):
     set_database_path(tmp_db)
     init_db()
     conn = get_connection()
@@ -138,7 +144,46 @@ def test_melt_day_treats_delay_as_execute(tmp_db):
         close_prices={'300001': 10.1},
         market_tier='LOW', index_trend='DOWN',
     )
-    assert result['retest_created'] == ['stop-1-retest']
+    assert result['retest_created'] == []
+    anchor = conn.execute(
+        'SELECT qualifier FROM correction_anchors WHERE signal_id=?',
+        ('stop-1',),
+    ).fetchone()
+    assert anchor['qualifier'] == 'EXECUTE_NOW'
+
+
+def test_execute_now_correction_is_watch_only(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    stop = _signal(
+        SignalTag.STOP, side='SELL', id='stop-1', strategy_id='holding',
+        parent_id='pool:300001', status=SignalStatus.TRIGGERED,
+        break_qualifier='EXECUTE_NOW',
+        valid_policy=SignalValidPolicy.UNTIL_STOPPED,
+    )
+    save_signals(conn, [stop])
+    first = run_settle(
+        conn, datetime(2026, 1, 1, 15, 5, tzinfo=UTC),
+        close_prices={'300001': 9.1},
+    )
+    assert first['retest_created'] == []
+    same_day = run_watch(
+        conn, 10.1, False, datetime(2026, 1, 1, 15, 10, tzinfo=UTC),
+        prices={'300001': 10.1},
+    )
+    assert same_day['correction_notices'] == []
+    next_day = run_watch(
+        conn, 10.1, False, datetime(2026, 1, 2, 10, 0, tzinfo=UTC),
+        prices={'300001': 10.1},
+    )
+    assert len(next_day['correction_notices']) == 1
+    assert 'EXECUTE_NOW' in next_day['correction_notices'][0]
+    repeat = run_watch(
+        conn, 10.1, False, datetime(2026, 1, 2, 11, 0, tzinfo=UTC),
+        prices={'300001': 10.1},
+    )
+    assert repeat['correction_notices'] == []
 
 
 def test_report_projects_lifecycle_slots(tmp_db):
