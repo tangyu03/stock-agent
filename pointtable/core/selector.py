@@ -13,15 +13,15 @@ COOLDOWN_STOP_COUNT = 2
 
 
 def check_first_move_5d(facts: Mapping[str, object]) -> bool:
-    return bool(facts.get('ma5_rising'))
+    return bool(facts.get('hot_theme') and facts.get('ma5_rising'))
 
 
 def check_first_move_10d(facts: Mapping[str, object]) -> bool:
-    return bool(facts.get('deep_pullback') and facts.get('ma10_alive'))
+    return bool(facts.get('hot_theme') and facts.get('deep_pullback') and facts.get('ma10_alive'))
 
 
 def check_first_move_drift(facts: Mapping[str, object]) -> bool:
-    return bool(facts.get('ma5_falling') and facts.get('drift_breakout'))
+    return bool(facts.get('hot_theme') and facts.get('ma5_falling') and facts.get('drift_breakout'))
 
 
 def check_first_board_dip(facts: Mapping[str, object]) -> bool:
@@ -42,7 +42,7 @@ CHECKS = {
 
 
 def select_strategies(facts: Mapping[str, object]) -> list[str]:
-    if not all(bool(facts.get(key)) for key in ('hot_theme', 'not_regulated', 'lhb_ok')):
+    if not all(bool(facts.get(key)) for key in ('not_regulated', 'lhb_ok')):
         return []
     return [strategy_id for strategy_id, check in CHECKS.items() if check(facts)]
 

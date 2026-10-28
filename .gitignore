@@ -35,7 +35,7 @@ pointtable/data/migration/*.cache.json
 # 环境变量
 .env
 .env.local
-pointtable/config/push.yaml
+config/push.yaml
 
 # 构建产物
 dist/
@@ -70,4 +70,6 @@ test-v8-evening.json
 pointtable/data/evening-*.json
 pointtable/data/closes-*.json
 pointtable/data/prices-*.json
+.tmp_pushplus*
+pointtable/data/*.log
 .tmp_pushplus*

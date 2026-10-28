@@ -74,6 +74,7 @@ class Signal(BaseModel):
     size_hint: Optional[int] = None
     premise: dict = {}
     break_qualifier: Optional[str] = None
+    settlement_outcome: Optional[str] = None
     trend: SignalTrend
     activation: Optional[str] = None
     valid_policy: SignalValidPolicy

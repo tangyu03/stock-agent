@@ -2,7 +2,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pointtable.cli import list_holdings, list_pool, main, stats_report
+from pointtable.cli import list_holdings, list_pool, main, plan_dates, stats_report
 from pointtable.db.session import get_connection, init_db, set_database_path
 
 
@@ -25,17 +25,14 @@ def _prepare(db_path: Path) -> None:
     conn.commit()
 
 
-def test_cli_receipt_stats_holdings_and_pool():
+def test_cli_stats_holdings_and_pool():
     db_path = Path.cwd() / 'test_cli.db'
     if db_path.exists():
         db_path.unlink()
     try:
         _prepare(db_path)
-        main(['--db', str(db_path), 'receipt', 'evt-1', '--verdict', 'executed', '--size-filled', '100'])
-        main(['--db', str(db_path), 'veto', 'evt-1'])
         report = stats_report()
         assert report['signal_quality']['strategy-a']['triggered'] == 1
-        assert report['behavior']['receipt_coverage'] == 1.0
         main(['--db', str(db_path), 'holdings'])
         main(['--db', str(db_path), 'pool'])
     finally:
@@ -50,6 +47,11 @@ def test_pool_add_and_role_filters(tmp_db):
     assert main(['--db', str(tmp_db), 'pool-add', '--date', '2026-01-01', '--symbol', '300002', '--theme', '机器人', '--role', 'candidate']) == 0
     assert [row['symbol'] for row in list_holdings()] == ['300001', '300002']
     assert [row['role'] for row in list_pool()] == ['holding', 'candidate']
+
+
+def test_plan_dates_infers_next_target_and_previous_signal_day():
+    dates = plan_dates('2026-10-24')
+    assert dates == {'target_date': '2026-10-26', 'signal_date': '2026-10-23'}
 
 
 def test_push_file_is_manual_one_way(monkeypatch, tmp_db):

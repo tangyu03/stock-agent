@@ -61,7 +61,7 @@ def run_shadow(
 def test_channel_sender(config_path: str | Path | None = None):
     from ..notify.push import PushPlusSender
 
-    path = config_path or Path(__file__).parents[1] / 'config' / 'push.yaml'
+    path = config_path or Path(__file__).parents[2] / 'config' / 'push.yaml'
     raw = yaml.safe_load(Path(path).read_text(encoding='utf-8')) or {}
     token = str((raw.get('pushplus') or {}).get('test_token') or '')
     if not token:

@@ -27,7 +27,6 @@ INVALIDATED                  新 enter                    叙事顺序投影到�
 | Signal（role=t） | 同上 | 池内票做T参考；每晚新建、当日有效 |
 | Signal（role=retest_confirm） | 同上 | 观察哨，三终态即“判决” |
 | PoolEntry | in / out | 关注关系 |
-| Receipt | executed / ignored / veto | 标注，不驱动迁移 |
 | ContextMark | ACTIVE / INACTIVE | 轻量环境标记 |
 
 **报告模板里不出现“S5 状态”“S7 迁移”**。出现的是“观察期存续”“判决后重新开放选股”。
@@ -48,7 +47,7 @@ INVALIDATED                  新 enter                    叙事顺序投影到�
 
 | 触发 | 条件 | 产生 | parent_id |
 |---|---|---|---|
-| enter TRIGGERED | 回执入场 | 该 stop 的 parent 锚点更新为新 enter（无 stop 则新建） | — |
+| enter TRIGGERED | 客观触发入场 | 该 stop 的 parent 锚点更新为新 enter（无 stop 则新建） | — |
 | 池内票，每晚 evening | 趋势 UP/DOWN 且**无 ACTIVE retest_confirm** | 更新 stop、t、profit | → 最近 TRIGGERED enter 或 pool |
 | 池内票，观察哨存续 | 有 ACTIVE retest_confirm | **暂停生成 stop/profit/t** | — |
 | stop TRIGGERED | 写入 break_qualifier | 记 journal qualifier | — |
@@ -65,7 +64,7 @@ INVALIDATED                  新 enter                    叙事顺序投影到�
 
 | 槽位 | 读取条件 |
 |---|---|
-| A0 今日执行回顾 | 当日进入 TRIGGERED 的全部 Signal＋receipts＋机械 vs 实际差异 |
+| A0 信号日触发回顾 | 信号日进入 TRIGGERED 的全部 Signal |
 | 环境行 | context_marks（ACTIVE）＋ event_calendar |
 | 候选区 | ACTIVE 的 entry，经三个前置检查过滤；同票多策略全部列出不合并；超上限标 truncated；**ma_tomorrow 系附触发窗口** |
 | 池内票区 | 池内票的 ACTIVE stop/profit/t（原“持仓区”改名）；**观察哨存续期此区不显示该票保护行** |
@@ -87,16 +86,12 @@ INVALIDATED                  新 enter                    叙事顺序投影到�
 
 ## 6. 各槽位模板
 
-### 6.1 A0 今日执行回顾
+### 6.1 A0 信号日触发回顾
 
 ```
-A0 今日执行回顾
+A0 信号日（2026-10-27）触发回顾
 触发：天孚通信 entry first_move_5d 208.0–209.5（14:47 窗口内单点触发）
-回执：executed，size_filled=全
-差异：无
 触发：深科达 stop 68.0（13:42 TRIGGERED，DELAY_OBSERVE）
-回执：未回执
-差异：机械执行=应止损；实际操作=无回执，状态不明
 ```
 
 ### 6.2 环境行
@@ -142,19 +137,6 @@ A0 今日执行回顾
 XX  entry  first_move_5d  26.3–26.5  [EV_NEG：该策略近50笔期望≤0，仅记录]
 ```
 
-**零预案日两个变体**：
-
-```
-# 市场熔断型（LOW档+指数DOWN）
-明日零预案
-环境：量能LOW，指数DOWN
-破位定性：取消延迟判决，DELAY_OBSERVE / DIVERGENCE 当日按 EXECUTE_NOW 处理
-
-# 节假日型（长假前最后一交易日）
-建议空仓过节
-停止生成新 BUY
-```
-
 ### 6.4 竞价快照
 
 ```
@@ -195,7 +177,7 @@ XX  entry  first_move_5d  26.3–26.5  [EV_NEG：该策略近50笔期望≤0，�
   板块：光模块主线，池内排名1/3
   履历：该票自上次 entry 触达至今 +12.4%
   点位：stop 211.5–212.3（明日MA5=212.3，每日上移）｜t买 208.0–209.5，t卖 220.0–221.5
-  提示：无｜T配对：t买 208.3 已回执，t卖未触发（14:30已提醒）
+  提示：无｜T配对：t买已生成，t卖未触发（14:30已提醒）
   同位置买点前提满足（entry first_move_5d 208.0–209.5，触发窗口 14:30–15:00），空仓可看候选区
 
 天孚通信（刚触达次日）
@@ -231,7 +213,7 @@ profit 行按 moban.md 另行渲染；size_hint 的 T_BUY t-size 结果附在 T 
   板块“半导体设备”13:42已触发（context_marks triggered_at），疑似被带崩
   收盘定生死：收盘破68.0→生成观察哨；收盘收复→当日假破位，纠错提醒
 
-执行对账：触发2，执行1，未执行1（深科达止损无回执）
+触发对账：触发2
 ```
 
 **熔断日变体**：

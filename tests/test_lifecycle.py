@@ -38,10 +38,11 @@ def test_terminal_states_close_and_cannot_transition():
         transition(expired, TransitionEvent.HIT)
 
 
-def test_invalid_human_veto_is_recorded():
-    updated, journal = transition(_signal(), TransitionEvent.HUMAN_VETO, 'user_veto')
-    assert updated.status is SignalStatus.INVALIDATED
-    assert journal.to_status == 'INVALIDATED'
+def test_triggered_state_is_terminal():
+    triggered, _ = transition(_signal(), TransitionEvent.HIT)
+    assert triggered.status is SignalStatus.TRIGGERED
+    with pytest.raises(ValueError, match='terminal'):
+        transition(triggered, TransitionEvent.HIT)
 
 
 def test_activation_is_copy_only_and_does_not_affect_transitions():

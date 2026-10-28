@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-from ..models.receipt import ReceiptVerdict
 from ..models.signal import Signal, SignalStatus, SignalTag
+import sqlite3
+from datetime import datetime
+from typing import Any
+from ..db.session import load_signals
+from .settle import correction_notice
 
 
 @dataclass(frozen=True)
@@ -38,9 +42,8 @@ def _signal_trade_date(signal: Signal) -> str:
 
 def find_unpaired_t_buy(
     signals: Iterable[Signal],
-    receipts: Iterable[Mapping[str, object]],
     trade_date: str | None = None,
-) -> tuple[list[UnpairedT], list[str], list[str]]:
+) -> tuple[list[UnpairedT], list[str]]:
     rows = list(signals)
     t_rows = [row for row in rows if row.tag is SignalTag.T]
     if trade_date is not None:
@@ -50,25 +53,14 @@ def find_unpaired_t_buy(
         for row in t_rows
         if row.side.value == 'SELL' and row.parent_id
     }
-    executed_signal_ids = {
-        str(row['signal_id'])
-        for row in receipts
-        if str(row.get('verdict') or '') == ReceiptVerdict.EXECUTED.value
-    }
     unpaired: list[UnpairedT] = []
-    no_receipt: list[str] = []
     violations: list[str] = []
     for signal in t_rows:
         if signal.side.value != 'BUY' or not signal.parent_id:
             continue
-        if signal.id not in executed_signal_ids:
-            no_receipt.append(signal.id)
-            continue
         paired_sell = sells_by_parent.get(signal.parent_id)
         if paired_sell and paired_sell.symbol != signal.symbol:
             paired_sell = None
-        if paired_sell and paired_sell.id in executed_signal_ids:
-            continue
         unpaired.append(UnpairedT(
             signal_id=signal.id,
             symbol=signal.symbol,
@@ -76,4 +68,87 @@ def find_unpaired_t_buy(
             trade_date=_signal_trade_date(signal),
         ))
         violations.append(signal.id)
-    return unpaired, no_receipt, violations
+    return unpaired, violations
+def _pool_symbols(conn: sqlite3.Connection, trade_date: str) -> list[str]:
+    rows = conn.execute(
+        '''
+        SELECT symbol FROM pool
+        WHERE date = (SELECT MAX(date) FROM pool WHERE date <= ?)
+        ORDER BY symbol
+        ''',
+        (trade_date,),
+    ).fetchall()
+    return [str(row['symbol']) for row in rows]
+
+
+def save_tail_snapshot(
+    conn: sqlite3.Connection,
+    trade_date: str,
+    symbol: str,
+    price: float,
+    captured_at: datetime,
+    *,
+    source: str = 'spot',
+) -> None:
+    conn.execute(
+        '''
+        INSERT INTO tail_snapshots (trade_date, symbol, captured_at, price, source)
+        VALUES (?,?,?,?,?)
+        ON CONFLICT(trade_date, symbol) DO UPDATE SET
+            captured_at=excluded.captured_at,
+            price=excluded.price,
+            source=excluded.source
+        ''',
+        (trade_date, symbol, captured_at.isoformat(timespec='seconds'), float(price), source),
+    )
+
+
+def load_tail_prices(conn: sqlite3.Connection, trade_date: str) -> dict[str, float]:
+    rows = conn.execute(
+        'SELECT symbol, price FROM tail_snapshots WHERE trade_date=? ORDER BY symbol',
+        (trade_date,),
+    ).fetchall()
+    return {str(row['symbol']): float(row['price']) for row in rows}
+
+
+def capture_tail_snapshots(
+    conn: sqlite3.Connection,
+    trade_date: str,
+    now: datetime,
+    *,
+    source_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+
+    symbols = set(_pool_symbols(conn, trade_date))
+    pool_symbols = sorted(symbols)
+    rows = source_rows if source_rows is not None else akshare.stock_spot_quotes(pool_symbols)
+    captured: list[str] = []
+    for row in rows:
+        symbol = str(row.get('symbol') or '')
+        price = row.get('price')
+        if symbol in symbols and price is not None:
+            save_tail_snapshot(
+                conn,
+                trade_date,
+                symbol,
+                float(price),
+                now,
+                source=str(row.get('source') or 'spot'),
+            )
+            captured.append(symbol)
+    conn.commit()
+    return {'trade_date': trade_date, 'captured': sorted(captured)}
+
+
+def run_restore(
+    conn: sqlite3.Connection,
+    close_price: float,
+) -> dict[str, Any]:
+    reminders = restore_reminders(load_signals(conn), close_price)
+    
+    return {
+        'reminders': [signal.id for signal in reminders],
+        'correction_notices': [
+            correction_notice(signal, 'same_day_close') for signal in reminders
+        ],
+    }

@@ -18,7 +18,7 @@ class PushPlusSender:
         token: str | None = None,
         channel: str | None = None,
     ):
-        path = config_path or Path(__file__).parents[1] / 'config' / 'push.yaml'
+        path = config_path or Path(__file__).parents[2] / 'config' / 'push.yaml'
         raw = yaml.safe_load(Path(path).read_text(encoding='utf-8')) or {}
         push = raw.get('pushplus') or {}
         self.mode = str(push.get('mode') or 'formal')

@@ -51,6 +51,14 @@ def test_next_day_survives_generation_day_and_expires_next_day():
     assert expire_intraday([later], datetime(2026, 1, 3, tzinfo=UTC))[0].status is SignalStatus.EXPIRED
 
 
+def test_same_day_t_expires_at_settle():
+    now = datetime(2026, 1, 2, tzinfo=UTC)
+    row = _signal(SignalTag.T, SignalValidPolicy.SAME_DAY, parent_id='evt-0').model_copy(update={
+        'created_at': datetime(2026, 1, 1, tzinfo=UTC),
+    })
+    assert expire_intraday([row], now)[0].status is SignalStatus.EXPIRED
+
+
 def test_trend_flip_rolls_stop_and_invalidates_t_buy():
     now = datetime(2026, 1, 2, tzinfo=UTC)
     stop = _signal(SignalTag.STOP, SignalValidPolicy.UNTIL_STOPPED, 'evt-0')

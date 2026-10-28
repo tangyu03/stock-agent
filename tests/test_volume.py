@@ -16,6 +16,17 @@ def test_passive_break_waits_for_close():
     assert decision.qualifier is BreakQualifier.DELAY_OBSERVE
 
 
+def test_missing_active_delta_does_not_fake_execution():
+    decision = break_qualifier(volume_ratio=1.5, active_delta=None)
+    assert decision.qualifier is BreakQualifier.DELAY_OBSERVE
+    assert decision.reason == 'active_delta_missing'
+
+
+def test_negative_active_delta_is_inner_dominance():
+    decision = break_qualifier(volume_ratio=1.5, active_delta=-1000.0)
+    assert decision.qualifier is BreakQualifier.DELAY_OBSERVE
+
+
 def test_divergence_and_limit_up_are_explicit_paths():
     assert break_qualifier(2.0, 100.0, divergence=True).qualifier is BreakQualifier.DIVERGENCE
     assert break_qualifier(0.5, 0.0, limit_up=True).qualifier is BreakQualifier.LIMIT_EXEMPT

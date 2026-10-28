@@ -5,6 +5,10 @@ from datetime import datetime
 
 from ..core.auction import AuctionPattern
 from ..models.signal import Signal, SignalSide, SignalStatus
+import sqlite3
+from typing import Any
+from ..core.lifecycle import JournalEntry
+from ..db.session import load_active_signals, save_journal, save_signal
 
 
 def apply_auction(
@@ -25,3 +29,23 @@ def apply_auction(
         else signal
         for signal in signals
     ]
+def run_auction(
+    conn: sqlite3.Connection,
+    trade_date: str,
+    pattern: AuctionPattern,
+    now: datetime,
+) -> dict[str, Any]:
+    before = load_active_signals(conn, trade_date)
+    after = apply_auction(before, pattern, now)
+    invalidated = [signal for signal in after if signal.status is SignalStatus.INVALIDATED]
+    for signal in invalidated:
+        save_signal(conn, signal)
+        save_journal(conn, JournalEntry(
+            signal_id=signal.id,
+            from_status=SignalStatus.ACTIVE.value,
+            to_status=SignalStatus.INVALIDATED.value,
+            reason='auction_weak',
+            created_at=now,
+        ))
+    conn.commit()
+    return {'pattern': pattern.value, 'invalidated': [signal.id for signal in invalidated]}

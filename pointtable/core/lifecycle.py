@@ -11,7 +11,6 @@ class TransitionEvent(str, Enum):
     HIT = 'hit'
     EOD = 'eod'
     PREMISE_BROKEN = 'premise_broken'
-    HUMAN_VETO = 'human_veto'
     RETEST_PASS = 'retest_pass'
     RETEST_FAIL = 'retest_fail'
     AUCTION_WEAK = 'auction_weak'
@@ -22,7 +21,6 @@ _TRANSITIONS = {
     TransitionEvent.HIT: SignalStatus.TRIGGERED,
     TransitionEvent.EOD: SignalStatus.EXPIRED,
     TransitionEvent.PREMISE_BROKEN: SignalStatus.INVALIDATED,
-    TransitionEvent.HUMAN_VETO: SignalStatus.INVALIDATED,
     TransitionEvent.RETEST_PASS: SignalStatus.INVALIDATED,
     TransitionEvent.RETEST_FAIL: SignalStatus.TRIGGERED,
     TransitionEvent.AUCTION_WEAK: SignalStatus.INVALIDATED,
@@ -37,7 +35,7 @@ def transition(
     price: float | None = None,
     now: datetime | None = None,
 ) -> tuple[Signal, JournalEntry]:
-    if signal.status in {SignalStatus.EXPIRED, SignalStatus.INVALIDATED}:
+    if signal.status in {SignalStatus.TRIGGERED, SignalStatus.EXPIRED, SignalStatus.INVALIDATED}:
         raise ValueError('terminal signal cannot transition')
     if price is not None and price < 0:
         raise ValueError('price must not be negative')

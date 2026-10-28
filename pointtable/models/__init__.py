@@ -1,6 +1,5 @@
 from .journal import JournalEntry, JournalRecordType
 from .pool import PoolEntry
-from .receipt import ReceiptEntry, ReceiptVerdict
 from .signal import (
     Signal,
     SignalSide,
@@ -13,8 +12,6 @@ from .signal import (
 __all__ = [
     "JournalEntry",
     "PoolEntry",
-    "ReceiptEntry",
-    "ReceiptVerdict",
     "Signal",
     "SignalSide",
     "SignalStatus",

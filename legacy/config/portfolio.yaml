@@ -6,22 +6,14 @@ stocks:
   name: 大普微
 - code: '688797'
   name: 臻宝
-- code: '920045'
-  name: 蘅东光
 - code: '300757'
   name: 罗博特科
 - code: '688521'
   name: 芯原股份
-- code: '002975'
-  name: 博杰股份
-- code: '300083'
-  name: 创世纪
 - code: '688392'
   name: 骄成超声
 - code: '300308'
   name: 中际旭创
-- code: '688361'
-  name: 中科飞测
 - code: '688630'
   name: 芯碁微装
 - code: '688328'
@@ -32,11 +24,7 @@ stocks:
   name: 精智达           
 - code: '688195'
   name: 腾景科技
-- code: '300476'
-  name: 胜宏科技
 - code: '300394'
   name: 天孚通信
 - code: '688167'
   name: 炬光科技
-- code: '603228'
-  name: 景旺电子

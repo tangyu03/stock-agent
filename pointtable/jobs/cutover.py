@@ -38,13 +38,13 @@ def expire_legacy_signals(
 
 
 def formal_push_ready(config_path: str | Path | None = None) -> bool:
-    path = config_path or Path(__file__).parents[1] / 'config' / 'push.yaml'
+    path = config_path or Path(__file__).parents[2] / 'config' / 'push.yaml'
     raw = yaml.safe_load(Path(path).read_text(encoding='utf-8')) or {}
     return bool((raw.get('pushplus') or {}).get('token'))
 
 
 def push_mode(config_path: str | Path | None = None) -> str:
-    path = config_path or Path(__file__).parents[1] / 'config' / 'push.yaml'
+    path = config_path or Path(__file__).parents[2] / 'config' / 'push.yaml'
     raw = yaml.safe_load(Path(path).read_text(encoding='utf-8')) or {}
     return str((raw.get('pushplus') or {}).get('mode') or 'formal')
 
@@ -52,7 +52,7 @@ def push_mode(config_path: str | Path | None = None) -> str:
 def switch_push_mode(config_path: str | Path | None = None, mode: str = 'formal') -> str:
     if mode not in {'shadow', 'formal'}:
         raise ValueError('push mode must be shadow or formal')
-    path = config_path or Path(__file__).parents[1] / 'config' / 'push.yaml'
+    path = config_path or Path(__file__).parents[2] / 'config' / 'push.yaml'
     text = path.read_text(encoding='utf-8')
     if re.search(r'^  mode:', text, flags=re.MULTILINE):
         text = re.sub(r'^  mode:.*$', f'  mode: "{mode}"', text, flags=re.MULTILINE)

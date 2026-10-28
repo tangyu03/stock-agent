@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .ma import ma_tomorrow
 from ..models.signal import (
     Signal,
     SignalRole,
@@ -126,12 +127,9 @@ def generate_entry(
     strategy: Strategy,
     symbol: str,
     entry_zone: tuple[float, float],
-    stop_zone: tuple[float, float],
-    profit_zone: tuple[float, float],
     created_at: datetime,
     trade_date: date | None = None,
     parent_id: str | None = None,
-    existing_signals: Iterable[Signal] | None = None,
 ) -> list[Signal]:
     validate_strategy(strategy)
     trade_date = trade_date or created_at.date()
@@ -153,47 +151,7 @@ def generate_entry(
             'trigger_window_start': trigger_window[0],
             'trigger_window_end': trigger_window[1],
         })
-    existing = list(existing_signals or [])
-    existing_stop = next(
-        (
-            signal for signal in existing
-            if signal.symbol == symbol
-            and signal.signal_role is SignalRole.STOP
-            and signal.status is SignalStatus.ACTIVE
-        ),
-        None,
-    )
-    existing_profit = next(
-        (
-            signal for signal in existing
-            if signal.symbol == symbol
-            and signal.signal_role is SignalRole.PROFIT
-            and signal.status is SignalStatus.ACTIVE
-        ),
-        None,
-    )
-    stop = _signal(
-        f'{enter_id}-z', strategy.id, symbol, 'SELL', SignalTag.STOP,
-        stop_zone, trend, created_at, enter_id, SignalValidPolicy.UNTIL_STOPPED,
-    )
-    if existing_stop is not None:
-        stop = existing_stop.model_copy(update={'parent_id': enter.id})
-    profit = (
-        existing_profit.model_copy(update={
-            'parent_id': enter.id,
-            'zone_low': profit_zone[0],
-            'zone_high': profit_zone[1],
-        })
-        if existing_profit is not None
-        else _signal(
-            f'{enter_id}-w', strategy.id, symbol, 'SELL', SignalTag.PROFIT,
-            profit_zone, trend, created_at, enter_id,
-            valid_policy=SignalValidPolicy.UNTIL_STOPPED,
-        )
-    )
-    if strategy.w.get('trailing'):
-        profit = profit.model_copy(update={'activation': 'trailing'})
-    return [enter, stop, profit]
+    return [enter]
 
 
 def generate_holding_rows(
@@ -269,3 +227,129 @@ def apply_t_size_choice(signal: Signal, choice: TSizeChoice) -> Signal:
     return signal.model_copy(update={
         'size_hint': max(1, round(signal.size_hint * multipliers[choice]))
     })
+
+
+def _zone(center: float, width_pct: float) -> tuple[float, float]:
+    if center <= 0:
+        raise ValueError('zone center must be positive')
+    half = center * width_pct
+    return round(center - half, 6), round(center + half, 6)
+
+
+def _break_zone(level: float, width_pct: float) -> tuple[float, float]:
+    if level <= 0:
+        raise ValueError('break level must be positive')
+    return round(level * (1 - width_pct), 6), round(level, 6)
+
+
+def _upper_zone(level: float, width_pct: float) -> tuple[float, float]:
+    if level <= 0:
+        raise ValueError('zone level must be positive')
+    return round(level, 6), round(level * (1 + width_pct), 6)
+
+
+def _strategy_value(strategy: Mapping[str, Any] | Any, key: str) -> Any:
+    if isinstance(strategy, Mapping):
+        return strategy[key]
+    return getattr(strategy, key)
+
+
+def _strategy_part(strategy: Mapping[str, Any] | Any, key: str) -> dict[str, Any]:
+    return dict(_strategy_value(strategy, key))
+
+
+def build_pool_plan(
+    strategy: Mapping[str, Any],
+    symbol: str,
+    closes: Sequence[float],
+    est_close: float,
+    *,
+    support: float | None = None,
+    resistance: float | None = None,
+    breakout_price: float | None = None,
+    parent_id: str | None = None,
+    premise_facts: Mapping[str, bool] | None = None,
+    zone_width_pct: float = 0.01,
+) -> dict[str, Any]:
+    if not symbol:
+        raise ValueError('symbol must not be empty')
+    if est_close <= 0:
+        raise ValueError('est_close must be positive')
+    if zone_width_pct <= 0 or zone_width_pct >= 0.5:
+        raise ValueError('zone_width_pct must be between 0 and 0.5')
+    if any(close <= 0 for close in closes):
+        raise ValueError('closes must be positive')
+
+    y = _strategy_part(strategy, 'y')
+    z = _strategy_part(strategy, 'z')
+    w = _strategy_part(strategy, 'w')
+    ma_source = closes[:-1] if closes and abs(closes[-1] - est_close) < 1e-9 else closes
+    y_type = str(y.get('type'))
+    if y_type == 'ma_tomorrow':
+        line = ma_tomorrow(ma_source, int(y['n']), est_close)
+        entry_zone = _upper_zone(line, zone_width_pct)
+        stop_zone = _break_zone(line, zone_width_pct)
+    elif y_type == 'pullback':
+        level = est_close * float(y.get('ratio', 0.98))
+        entry_zone = _zone(level, zone_width_pct)
+        stop_level = breakout_price or est_close
+        stop_zone = _break_zone(stop_level, zone_width_pct)
+    elif y_type == 'intraday_support':
+        if support is None:
+            return {}
+        entry_zone = _zone(support, zone_width_pct)
+        n = int(z.get('n', 5))
+        if len(closes) < n - 1:
+            return {}
+        stop_level = ma_tomorrow(ma_source, n, est_close)
+        stop_zone = _break_zone(stop_level, zone_width_pct)
+    else:
+        raise ValueError(f'unsupported strategy y type: {y_type}')
+
+    if str(w.get('type')) in {'pressure_zone', 'next_resistance'} and resistance:
+        profit_zone = (round(resistance * 0.995, 6), round(resistance * 1.005, 6))
+    else:
+        profit_zone = (round(entry_zone[1] * 1.02, 6), round(entry_zone[1] * 1.04, 6))
+
+    if stop_zone[1] > entry_zone[0]:
+        return {}
+    return {
+        'symbol': symbol,
+        'strategy_id': str(_strategy_value(strategy, 'id')),
+        'entry_low': entry_zone[0],
+        'entry_high': entry_zone[1],
+        'invalidation_price': stop_zone[1],
+        'stop_low': stop_zone[0],
+        'stop_high': stop_zone[1],
+        'profit_low': profit_zone[0],
+        'profit_high': profit_zone[1],
+        'parent_id': parent_id,
+        'premise_facts': dict(premise_facts or {}),
+    }
+
+
+def build_pool_plans(
+    strategies: Iterable[Mapping[str, Any] | Any],
+    assignments: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    by_id = {str(_strategy_value(strategy, 'id')): strategy for strategy in strategies}
+    plans: list[dict[str, Any]] = []
+    for assignment in assignments:
+        strategy = by_id.get(str(assignment.get('strategy_id') or ''))
+        if strategy is None:
+            continue
+        plan = build_pool_plan(
+            strategy,
+            str(assignment.get('symbol') or ''),
+            assignment.get('closes') or [],
+            float(assignment.get('est_close') or 0),
+            support=assignment.get('support'),
+            resistance=assignment.get('resistance'),
+            breakout_price=assignment.get('breakout_price'),
+            parent_id=assignment.get('parent_id'),
+            premise_facts=assignment.get('premise_facts'),
+            zone_width_pct=float(assignment.get('zone_width_pct') or 0.01),
+        )
+        if plan:
+            plans.append(plan)
+    return plans

@@ -60,7 +60,7 @@ def migration_status(
     mapping = load_theme_map(
         Path(theme_map_path)
         if theme_map_path
-        else Path(__file__).parents[1] / 'config' / 'theme_map.yaml'
+        else Path(__file__).parents[2] / 'config' / 'theme_map.yaml'
     )
     pool_rows = conn.execute(
         '''SELECT symbol, GROUP_CONCAT(DISTINCT theme_label) AS pool_theme

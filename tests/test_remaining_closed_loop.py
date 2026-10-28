@@ -13,9 +13,12 @@ from pointtable.db.session import (
     save_signals,
     set_database_path,
 )
-from pointtable.jobs.performance import pool_performance_report, five_day_performance
+from pointtable.stats import pool_performance_report, five_day_performance
 from pointtable.jobs.restore_check import find_unpaired_t_buy
-from pointtable.jobs.routines import run_evening, run_settle, run_watch, signal_from_row
+from pointtable.jobs.evening import run_evening
+from pointtable.db.session import signal_from_row
+from pointtable.jobs.settle import run_settle
+from pointtable.jobs.watch import run_watch
 from pointtable.cli import stats_report
 from pointtable.jobs.watch import stop_break_decision
 from pointtable.models.journal import JournalEntry
@@ -71,6 +74,7 @@ def test_stop_break_decision_and_context_does_not_change_transition(tmp_db):
     }
     assert stop_break_decision(active_context)[0] is BreakQualifier.EXECUTE_NOW
     assert stop_break_decision(passive_context)[0] is BreakQualifier.DELAY_OBSERVE
+    assert stop_break_decision({'volume_ratio': 1.5})[1] == 'active_delta_missing'
     assert stop_break_decision(None)[1] == 'NOT_CLASSIFIED'
 
     set_database_path(tmp_db)
@@ -119,31 +123,9 @@ def test_watch_loads_next_day_entry_created_on_prior_day(tmp_db):
 def test_find_unpaired_t_buy_rules(tmp_db):
     buy = _signal()
     sell = _signal('2026-01-01-300001-t-sell', 'SELL')
-    unpaired, no_receipt, violations = find_unpaired_t_buy([buy, sell], [])
-    assert unpaired == []
-    assert no_receipt == [buy.id]
-    assert violations == []
-
-    set_database_path(tmp_db)
-    init_db()
-    conn = get_connection()
-    conn.execute(
-        'INSERT INTO receipts (signal_id, verdict, created_at) VALUES (?,?,?)',
-        (buy.id, 'executed', buy.created_at.isoformat(timespec='seconds')),
-    )
-    receipt = [dict(row) for row in conn.execute('SELECT signal_id, verdict FROM receipts').fetchall()]
-    unpaired, no_receipt, violations = find_unpaired_t_buy([buy, sell], receipt)
+    unpaired, violations = find_unpaired_t_buy([buy, sell])
     assert [item.signal_id for item in unpaired] == [buy.id]
-    assert no_receipt == []
     assert violations == [buy.id]
-
-    conn.execute(
-        'INSERT INTO receipts (signal_id, verdict, created_at) VALUES (?,?,?)',
-        (sell.id, 'executed', sell.created_at.isoformat(timespec='seconds')),
-    )
-    receipt = [dict(row) for row in conn.execute('SELECT signal_id, verdict FROM receipts').fetchall()]
-    unpaired, no_receipt, violations = find_unpaired_t_buy([buy, sell], receipt)
-    assert (unpaired, no_receipt, violations) == ([], [], [])
 
 
 def test_five_day_performance_and_pool_report(tmp_db):
@@ -219,12 +201,14 @@ def test_run_evening_marks_ev_negative_strategy(tmp_db):
     payload = {
         'trade_date': '2026-01-01',
         'created_at': '2026-01-01T15:30:00+08:00',
-        'holdings': [{
-            'symbol': '300001',
-            'parent_id': 'holding-1',
-            'stop_zone': [9.0, 9.2],
-            'support_zone': [9.5, 9.7],
-            'resistance_zone': [10.8, 11.0],
+            'signal_rows': [{
+                'symbol': '300001',
+                'strategy_id': 'holding',
+                'parent_id': 'holding-1',
+                'stop_zone': [9.0, 9.2],
+                'profit_zone': [10.8, 11.0],
+                't_buy_zone': [9.5, 9.7],
+                't_sell_zone': [10.8, 11.0],
             'trend': 'UP',
         }],
     }
@@ -233,7 +217,7 @@ def test_run_evening_marks_ev_negative_strategy(tmp_db):
     result = run_evening(conn, payload_path)
     payload_path.unlink(missing_ok=True)
     saved = signal_from_row(conn.execute(
-        "SELECT * FROM signals WHERE id='2026-01-01-300001-t-buy'",
+        "SELECT * FROM signals WHERE tag='t' AND side='BUY' ORDER BY id DESC LIMIT 1",
     ).fetchone())
     assert saved.premise['ev_negative'] is True
 

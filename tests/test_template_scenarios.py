@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from pointtable.db.session import get_connection, init_db, save_journal, save_signals, set_database_path
-from pointtable.jobs.market_pipeline import build_market_input, recent_stop_counts
+from pointtable.jobs.evening import build_market_input, recent_stop_counts
 from pointtable.models.signal import (
     Signal,
     SignalSide,
@@ -26,6 +26,7 @@ def _signal(
     break_qualifier: str | None = None,
     status_reason: str = '',
     created_at: datetime | None = None,
+    closed_at: datetime | None = None,
     parent_id: str | None = None,
     valid_policy: SignalValidPolicy = SignalValidPolicy.INTRADAY,
 ) -> Signal:
@@ -46,20 +47,25 @@ def _signal(
         break_qualifier=break_qualifier,
         parent_id=parent_id,
         created_at=created_at,
-        closed_at=created_at if status is not SignalStatus.ACTIVE else None,
+        closed_at=(
+            closed_at
+            or (created_at if status is not SignalStatus.ACTIVE else None)
+        ),
     )
 
 
 def test_report_covers_no_break_break_retest_and_judgments():
     report_date = '2026-01-03'
+    closed_at = datetime(2026, 1, 1, tzinfo=UTC)
     created_at = datetime(2026, 1, 1, tzinfo=UTC)
     signals = [
         _signal('active-stop', '300001', SignalTag.STOP, SignalSide.SELL),
         _signal(
             'broken-stop', '300002', SignalTag.STOP, SignalSide.SELL,
-            status=SignalStatus.TRIGGERED,
-            break_qualifier='DELAY_OBSERVE',
-            status_reason='stop_single_point:DELAY_OBSERVE:passive_or_low_volume_break',
+                status=SignalStatus.TRIGGERED,
+                break_qualifier='DELAY_OBSERVE',
+                status_reason='stop_single_point:DELAY_OBSERVE:passive_or_low_volume_break',
+                closed_at=closed_at,
         ),
         _signal(
             'observation', '300003', SignalTag.RETEST_CONFIRM, SignalSide.NEUTRAL,
@@ -67,23 +73,26 @@ def test_report_covers_no_break_break_retest_and_judgments():
         ),
         _signal(
             'judgment-fail', '300005', SignalTag.RETEST_CONFIRM, SignalSide.NEUTRAL,
-            status=SignalStatus.TRIGGERED,
-            break_qualifier='DELAY_OBSERVE',
-            status_reason='retest_fail',
+                status=SignalStatus.TRIGGERED,
+                break_qualifier='DELAY_OBSERVE',
+                status_reason='retest_fail',
+                closed_at=closed_at,
             parent_id='pool:300005',
             valid_policy=SignalValidPolicy.FIXED_WINDOW,
         ),
         _signal(
             'judgment-pass', '300006', SignalTag.RETEST_CONFIRM, SignalSide.NEUTRAL,
-            status=SignalStatus.INVALIDATED,
-            status_reason='retest_pass',
+                status=SignalStatus.INVALIDATED,
+                status_reason='retest_pass',
+                closed_at=closed_at,
             parent_id='pool:300006',
             valid_policy=SignalValidPolicy.FIXED_WINDOW,
         ),
         _signal(
             'judgment-expired', '300007', SignalTag.RETEST_CONFIRM, SignalSide.NEUTRAL,
-            status=SignalStatus.EXPIRED,
-            status_reason='retest_window_expired',
+                status=SignalStatus.EXPIRED,
+                status_reason='retest_window_expired',
+                closed_at=closed_at,
             parent_id='pool:300007',
             valid_policy=SignalValidPolicy.FIXED_WINDOW,
         ),
@@ -110,20 +119,69 @@ def test_report_covers_no_break_break_retest_and_judgments():
         'retest_window_days': 3,
     }
     text = render_signal_report(report_date, market, signals)
-    assert '不破股（300001）【止损】' in text
-    assert '破位股（300002）【止损】' in text and '延迟观察' in text
-    assert '观察股（300003）【回踩确认】' in text
+    assert '不破股（300001｜UP）' in text and '点位：stop 68–68.5' in text
+    assert '池内票区（2只）：' in text
+    assert '观察股（观察哨存续期）' in text
+    assert '观察哨存续（68–68.5，剩2日）' in text
+    assert '保护语义由观察哨承担，本票暂不生成 stop/profit/t' in text
+    assert '观察股（UP）' not in text and '观察股（300003） stop' not in text
+    assert '破位股 stop 68–68.5' in text and '延迟观察' in text
+    assert '观察股（300003）：破位日01.01' in text
     assert '今日最高68.3摸到区间，收67.9未站上' in text
     assert '剩2日。（观察期内不出买点）' in text
-    assert '失败股（300005）【回踩确认】' in text
-    assert '3日反抽未收复68.5（最高68.3），原支撑确认转为压力' in text
-    assert '假破股（300006）【回踩确认】' in text
-    assert '收盘68.9收复观察区间上沿68.5，量比1.4（达标）' in text
+    assert '失败股（300005） 确认破位' in text
+    assert '第1日最高68.3反抽至观察区间，收盘67.9未站回68.5，提前确认破位。观察哨关闭。' in text
+    assert '假破股（300006） 假破位' in text
+    assert '第1日收盘68.9站回68.5，量比1.4（达标），原止损逻辑失效。观察哨关闭。' in text
     assert '原止损逻辑失效' in text
-    assert '到期股（300007）【回踩确认】' in text
-    assert '3日窗口到期' in text
-    assert '再买股（300008） 10日线首动' in text
+    assert '到期股（300007） 无反抽' in text
+    assert '1日窗口到期' in text
+    assert '再买股' in text and 'entry  10日线首动' in text
+    assert '均线冷却：5日线档位冷却中' in text
     assert '5日线档位冷却中' in text
+
+
+def test_candidate_shows_tail_reachability():
+    signals = [
+        _signal('entry', '300001', SignalTag.ENTER, SignalSide.BUY),
+        _signal('entry-2', '300002', SignalTag.ENTER, SignalSide.BUY).model_copy(
+            update={'symbol': '300002'}
+        ),
+    ]
+    market = {
+        'signal_date': '2026-01-01',
+        'name_map': {'300001': '穿越股', '300002': '远离股'},
+        'assignments': [
+            {'symbol': '300001', 'est_close': 69, 'low': 68.2, 'high': 69.2},
+            {'symbol': '300002', 'est_close': 60, 'low': 59, 'high': 61},
+        ],
+    }
+    text = render_signal_report('2026-01-02', market, signals)
+    assert '穿越股' in text and '可达性（信号日评估，非明日结论）：盘中穿越，收盘未回；明日尾盘复检' in text
+    assert '远离股' in text and '可达性（信号日评估，非明日结论）：未触达；明日尾盘复检' in text
+
+
+def test_break_slots_read_only_signal_date():
+    report_date = '2026-01-02'
+    signals = [
+        _signal(
+            'signal-day-break', '300001', SignalTag.STOP, SignalSide.SELL,
+            status=SignalStatus.TRIGGERED,
+            closed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        ),
+        _signal(
+            'target-day-break', '300002', SignalTag.STOP, SignalSide.SELL,
+            status=SignalStatus.TRIGGERED,
+            closed_at=datetime(2026, 1, 2, tzinfo=UTC),
+        ),
+    ]
+    market = {
+        'signal_date': '2026-01-01',
+        'name_map': {'300001': '信号日', '300002': '目标日'},
+    }
+    text = render_signal_report(report_date, market, signals)
+    assert '信号日' in text
+    assert '目标日' not in text
 
 
 def test_recent_stop_counts_feed_same_ma_cooldown(tmp_db):

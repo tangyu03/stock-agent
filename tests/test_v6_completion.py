@@ -9,14 +9,15 @@ from pointtable.data import akshare
 from pointtable.cli import main
 from pointtable.db.session import get_connection, init_db, save_journal, save_signals, set_database_path
 from pointtable.models.journal import JournalEntry
-from pointtable.jobs.evening import build_context_marks, build_evening_signals, market_tier, zero_plan_day
-from pointtable.jobs.routines import run_auction, run_restore, run_settle, run_watch
-from pointtable.jobs.routines import run_evening
-from pointtable.jobs.market_pipeline import build_market_input, lhb_decision
-from pointtable.jobs.market_pipeline import latest_entry_parent_ids, truncate_watchlist
-from pointtable.jobs.tail_snapshot import capture_tail_snapshots, load_tail_prices
-from pointtable.jobs.scheduler import Routine, next_routine
-from pointtable.jobs.plan_builder import build_pool_plan, build_pool_plans
+from pointtable.jobs.evening import build_context_marks, build_evening_signals, market_tier
+from pointtable.jobs.auction_call import run_auction
+from pointtable.jobs.evening import build_market_input, lhb_decision, run_evening
+from pointtable.jobs.evening import _volume_ratio, latest_entry_parent_ids, truncate_watchlist
+from pointtable.jobs.restore_check import capture_tail_snapshots, load_tail_prices, run_restore
+from pointtable.cli import Routine, next_routine
+from pointtable.core.generator import build_pool_plan, build_pool_plans
+from pointtable.jobs.settle import run_settle
+from pointtable.jobs.watch import run_watch
 from pointtable.core.generator import (
     TSizeChoice,
     apply_size_hints,
@@ -65,6 +66,64 @@ def test_akshare_domain_wrappers_use_cached_source():
         assert akshare.margin_rows('2026-01-01') == [{'trade_date': '2026-01-01', 'close': 1}]
 
 
+def test_tencent_kline_handles_quote_without_kline_rows():
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {'data': {'bj920045': {'qt': {'bj920045': ['0'] * 38}}}}
+
+    class FakeSession:
+        def get(self, *args, **kwargs):
+            return FakeResponse()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    with patch.object(akshare.requests, 'Session', return_value=FakeSession()):
+        assert akshare._tencent_kline('920045', '2026-10-01', '2026-10-23', 60) == []
+
+
+def test_tencent_kline_does_not_mix_live_quote_into_history():
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            quote = ['0'] * 45
+            quote[30] = '20261026095018'
+            quote[37] = '1000'
+            return {
+                'data': {
+                    'sh000001': {
+                        'day': [['2026-10-23', '1', '2', '3', '0.5', '10']],
+                        'qt': {'sh000001': quote},
+                    }
+                }
+            }
+
+    class FakeSession:
+        def get(self, *args, **kwargs):
+            return FakeResponse()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    with patch.object(akshare.requests, 'Session', return_value=FakeSession()):
+        rows = akshare._tencent_kline('sh000001', '2026-10-01', '2026-10-23', 60)
+        assert rows == [{
+            'date': '2026-10-23', 'open': 1.0, 'close': 2.0,
+            'high': 3.0, 'low': 0.5, 'volume': 10.0,
+        }]
+
+
 def test_index_kline_appends_spot_for_missing_trade_date():
     daily_rows = [{
         'date': __import__('datetime').date(2026, 10, 21),
@@ -88,8 +147,9 @@ def test_index_kline_appends_spot_for_missing_trade_date():
         patch.object(akshare, '_tencent_kline', return_value=[]),
         patch.object(akshare, 'cached_ak', cached_ak),
     ):
-        rows = akshare.index_kline('sh000001', '2026-10-22', limit=2)
-    assert rows[-1]['date'] == __import__('datetime').date(2026, 10, 22)
+        today = __import__('datetime').date.today().isoformat()
+        rows = akshare.index_kline('sh000001', today, limit=2)
+    assert rows[-1]['date'] == __import__('datetime').date.today()
     assert rows[-1]['close'] == 3658.0256
 
 
@@ -119,11 +179,11 @@ def test_generate_entry_links_reentry_parent():
         w={'type': 'pressure_zone'},
     )
     rows = generate_entry(
-        strategy, '300001', (10, 10.2), (9, 9.2), (12, 12.2), now,
+        strategy, '300001', (10, 10.2), now,
         parent_id='old-enter',
     )
     assert rows[0].parent_id == 'old-enter'
-    assert rows[1].parent_id == rows[0].id
+    assert len(rows) == 1
 
 
 def test_watch_process_touch_and_premise():
@@ -163,11 +223,9 @@ def test_evening_pipeline_and_market_fuse():
         }],
         'LOW', now,
     )
-    assert [row.tag for row in rows] == [SignalTag.ENTER, SignalTag.STOP, SignalTag.PROFIT]
+    assert [row.tag for row in rows] == [SignalTag.ENTER]
     assert build_context_marks([{'symbol': 'sh000001', 'zone': (3000, 3010)}], [], now.date(), now)[0].code == 'sh000001'
     assert market_tier(8000) == 'LOW'
-    assert zero_plan_day(8000, 'down')
-    assert not zero_plan_day(8000, 'up')
 
 
 def test_save_signal_and_journal(tmp_db):
@@ -205,7 +263,7 @@ def test_routine_auction_watch_settle_and_restore(tmp_db):
     assert result['touched'] == ['stop-1']
     assert dict(conn.execute('SELECT status FROM signals WHERE id=?', ('stop-1',)).fetchone())['status'] == 'TRIGGERED'
 
-    result = run_settle(conn, now)
+    result = run_settle(conn, now, close_prices={'300001': 9.9})
     assert result['retest_created'] == ['stop-1-retest']
     assert dict(conn.execute('SELECT status FROM signals WHERE id=?', ('stop-1-retest',)).fetchone())['status'] == 'ACTIVE'
     result = run_restore(conn, 10.5)
@@ -243,6 +301,34 @@ def test_settle_rolls_active_stop_zones(tmp_db):
     assert row['zone_high'] == 11.0
 
 
+def test_settle_catches_up_close_touch_without_watch(tmp_db):
+    now = datetime(2026, 1, 2, tzinfo=UTC)
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    stop = _signal(
+        SignalTag.STOP, side='SELL', parent_id='pool:300001',
+    ).model_copy(update={
+        'id': 'stop-1',
+        'valid_policy': SignalValidPolicy.UNTIL_STOPPED,
+        'created_at': now,
+    })
+    save_signals(conn, [stop])
+    run_settle(
+        conn,
+        now,
+        close_prices={'300001': 9.9},
+        low_prices={'300001': 9.9},
+        high_prices={'300001': 10.4},
+    )
+    row = conn.execute(
+        'SELECT status, status_reason, closed_at FROM signals WHERE id=?',
+        ('stop-1',),
+    ).fetchone()
+    assert row['status'] == 'TRIGGERED'
+    assert row['status_reason'] == 'settle_close_touch:DELAY_OBSERVE:NOT_CLASSIFIED'
+
+
 def test_settle_resolves_retest_by_close(tmp_db):
     now = datetime(2026, 1, 1, tzinfo=UTC)
     set_database_path(tmp_db)
@@ -263,7 +349,7 @@ def test_settle_resolves_retest_by_close(tmp_db):
     assert conn.execute('SELECT status FROM signals WHERE id=?', ('retest-fail',)).fetchone()[0] == 'TRIGGERED'
 
 
-def test_evening_generates_holding_rows(tmp_db):
+def test_evening_generates_pool_signals(tmp_db):
     now = datetime(2026, 1, 1, 15, 30, tzinfo=UTC)
     set_database_path(tmp_db)
     init_db()
@@ -271,16 +357,17 @@ def test_evening_generates_holding_rows(tmp_db):
         'trade_date': '2026-01-01',
         'created_at': now.isoformat(),
         'plans': [],
-        'holdings': [{
+        'signal_rows': [{
             'symbol': '300001',
             'parent_id': 'parent',
             'trend': 'UP',
             'stop_zone': (9.0, 9.2),
-            'support_zone': (10.0, 10.2),
-            'resistance_zone': (11.0, 11.2),
+            'profit_zone': (11.0, 11.2),
+            't_buy_zone': (10.0, 10.2),
+            't_sell_zone': (11.0, 11.2),
         }],
     }
-    input_path = Path.cwd() / 'test_evening_holdings.json'
+    input_path = Path.cwd() / 'test_evening_pool_signals.json'
     input_path.write_text(json.dumps(payload), encoding='utf-8')
     try:
         result = run_evening(get_connection(), input_path)
@@ -310,7 +397,7 @@ def test_evening_cli_persists_signals(tmp_db):
         assert dict(get_connection().execute(
             'SELECT COUNT(*) AS count FROM signals WHERE created_at LIKE ?',
             ('2026-01-01%',),
-        ).fetchone())['count'] == 3
+        ).fetchone())['count'] == 1
     finally:
         input_path.unlink(missing_ok=True)
 
@@ -326,13 +413,45 @@ def test_plan_builder_builds_batch_from_strategy_objects():
         premise_facts={'hot': True},
     )
     assert plan['strategy_id'] == 'first_move_5d'
-    assert plan['entry_low'] < plan['stop_high'] < plan['entry_high'] < plan['profit_low']
+    assert plan['entry_low'] >= plan['stop_high']
+    assert plan['invalidation_price'] == plan['stop_high']
+    assert plan['entry_low'] < plan['entry_high'] < plan['profit_low']
     plans = build_pool_plans([strategy], [{
         'symbol': '300001', 'strategy_id': 'first_move_5d',
         'closes': [10.0, 10.0, 10.0, 10.0], 'est_close': 10.2,
         'premise_facts': {'hot': True},
     }])
     assert plans == [plan]
+
+
+def test_pool_plan_rejects_invalidation_inside_entry():
+    strategy = Strategy(
+        id='pullback', side='BUY', premise='support',
+        y={'type': 'pullback'}, z={'type': 'close_below'},
+        w={'type': 'next_resistance'},
+    )
+    plan = build_pool_plan(
+        strategy, '300001', [10, 10, 10, 10], 10.2,
+        support=10.0, resistance=11.0, breakout_price=10.1,
+    )
+    assert plan == {}
+
+
+def test_stock_spot_quotes_uses_pool_symbols_only(monkeypatch):
+    seen = []
+
+    def fake_parts(symbols):
+        seen.extend(symbols)
+        return [['51', '测试股', '300001', '10.2', '10.0']]
+
+    monkeypatch.setattr(akshare, '_tencent_quote_parts', fake_parts)
+    monkeypatch.setattr(
+        akshare, 'stock_spot_rows',
+        lambda: pytest.fail('pool quotes must not fall back to full market'),
+    )
+    rows = akshare.stock_spot_quotes(['300001'])
+    assert seen == ['300001']
+    assert rows == [{'symbol': '300001', 'name': '测试股', 'price': 10.2}]
 
 
 def test_scheduler_skips_weekend_and_orders_routines():
@@ -360,7 +479,7 @@ def test_stats_pool_quality_and_render_slots():
     assert report['five_day_avg_return'] == 4.0
     assert render_index_points({'index_points': [{'name': '上证', 'levels': [1, 2]}]}).count('1') == 1
     text = render_report('1.1', {
-        'amount_yi': 8000, 'tier': 'LOW', 'zero_plan_day': True,
+        'amount_yi': 8000, 'tier': 'LOW',
         'sector_down': True, 'pool_reversal': True, 't_symbols': [],
     }, [{'name': 'A', 'progress_pct': 1, 'premise': '主力净流出', 'stop_n': 10, 'stop_low': 9, 'stop_high': 9.2}])
     assert '【持仓】' in text and '止损放宽到10日线9–9.2' in text
@@ -406,7 +525,7 @@ def test_report_uses_pool_rows(tmp_db):
         assert main(['--db', str(tmp_db), 'report', '--date', '2026-01-01', '--output', str(output_path)]) == 0
         text = output_path.read_text(encoding='utf-8')
         assert '【2026-01-01 交易计划】' in text
-        assert '博杰股份（002975） 5日线首动 10–11' in text
+        assert '002975' in text and 'entry  5日线首动  10–11' in text
     finally:
         output_path.unlink(missing_ok=True)
 
@@ -440,6 +559,86 @@ def test_market_pipeline_builds_assignments_and_context():
     assert payload['rejected'] == []
     assert payload['sector_context'] == [{'symbol': 'AI', 'zone': (990.0, 1010.0)}]
     assert payload['stop_zones']['300001'][0] < payload['stop_zones']['300001'][1]
+
+
+def test_volume_ratio_uses_prior_five_day_average():
+    rows = [
+        {'date': f'2026-01-0{day}', 'volume': 100.0}
+        for day in range(1, 6)
+    ]
+    rows.append({'date': '2026-01-06', 'volume': 150.0})
+    assert _volume_ratio(rows, '2026-01-06') == 1.5
+    assert _volume_ratio(rows, '2026-01-05') is None
+
+
+def test_market_pipeline_blocks_new_buy_when_lhb_unchecked():
+    index_rows = [
+        {'日期': '2026-01-01', '收盘': 4000, '最高': 4010, '最低': 3990, 'amount': 13_000_000_000_000}
+        for _ in range(20)
+    ]
+    stock_rows = [
+        {'日期': '2026-01-01', '收盘': 10 + index * 0.1, '最高': 10.2 + index * 0.1, '最低': 9.8}
+        for index in range(20)
+    ]
+    payload = build_market_input(
+        [{'symbol': '300001', 'theme_label': 'AI'}],
+        index_rows,
+        [],
+        {'300001': stock_rows},
+        {'AI': stock_rows},
+        now=datetime(2026, 1, 1, tzinfo=UTC).date(),
+        lhb_checked=False,
+    )
+    assert payload['assignments'] == []
+    assert payload['rejected'] == [{'symbol': '300001', 'reason': 'lhb_data_unavailable'}]
+
+
+def test_sector_kline_filters_current_history_window(monkeypatch):
+    from pointtable.data import akshare
+
+    calls = []
+
+    def fake_cached_ak(name, **kwargs):
+        calls.append((name, kwargs))
+        if 'indu' not in name:
+            return []
+        return [
+            {'日期': '2026-01-01', '收盘': 100},
+            {'日期': '2026-01-02', '收盘': 101},
+            {'日期': '2026-01-03', '收盘': 102},
+        ]
+
+    monkeypatch.setattr(akshare, 'cached_ak', fake_cached_ak)
+    rows = akshare.sector_kline('半导体', trade_date='2026-01-02', limit=2)
+    assert [row['日期'] for row in rows] == ['2026-01-01', '2026-01-02']
+    assert calls[0][1]['end_date'] == '20260102'
+
+
+def test_sina_lhb_fallback_does_not_filter_undated_rows(monkeypatch):
+    from pointtable.data import akshare
+
+    monkeypatch.setattr(
+        akshare,
+        'cached_ak',
+        lambda name, **kwargs: None if name == 'stock_lhb_detail_em' else [
+            {'股票代码': '300001'},
+            {'股票代码': '300002'},
+        ],
+    )
+    rows, checked = akshare.lhb_rows_checked('2026-01-02')
+    assert checked is True
+    assert [row['股票代码'] for row in rows] == ['300001', '300002']
+
+
+def test_market_pipeline_fills_missing_spot_quotes(monkeypatch):
+    from pointtable.jobs.evening import fill_missing_spot_rows
+
+    rows = fill_missing_spot_rows(
+        [],
+        ['300001'],
+        lambda symbols: [{'symbol': '300001', 'name': '', 'price': 12.3}],
+    )
+    assert rows == [{'symbol': '300001', 'name': '', 'price': 12.3}]
 
 
 def test_selector_uses_facts_and_family_cooldown():
@@ -487,25 +686,31 @@ def test_tail_snapshot_overrides_daily_close(tmp_db):
     )
     capture_tail_snapshots(
         conn, '2026-01-01', now,
-        source_rows=[{'symbol': '300001', 'price': 10.5}],
+        source_rows=[{'symbol': '300001', 'price': 12.0}],
     )
     payload = build_market_input(
         [{'symbol': '300001', 'theme_label': 'AI'}],
-        [{'日期': '2026-01-01', '收盘': 4000, 'amount': 13_000_000_000_000} for _ in range(20)],
+        [
+            {'日期': '2026-01-01', '收盘': 4000, 'amount': 13_000_000_000_000}
+        for _ in range(20)
+        ],
         [],
         {'300001': [{'日期': '2026-01-01', '收盘': 10 + index * 0.1} for index in range(20)]},
         {},
         tail_prices=load_tail_prices(conn, '2026-01-01'),
         now=now.date(),
     )
-    assert payload['assignments'][0]['est_close'] == 10.5
+    assert payload['assignments'][0]['est_close'] == 12.0
 
 
 def test_tail_snapshot_appends_missing_close_for_tomorrow_line(tmp_db):
     now = datetime(2026, 1, 2, tzinfo=UTC).date()
     payload = build_market_input(
         [{'symbol': '300001', 'theme_label': 'AI'}],
-        [{'日期': '2026-01-01', '收盘': 4000, 'amount': 13_000_000_000_000} for _ in range(20)],
+        [
+            {'日期': '2026-01-01', '收盘': 4000, 'amount': 13_000_000_000_000}
+            for _ in range(19)
+        ] + [{'日期': '2026-01-02', '收盘': 4000, 'amount': 13_000_000_000_000}],
         [],
         {'300001': [{'日期': '2026-01-01', '收盘': close} for close in (9, 10, 11, 12, 13, 14)]},
         {},

@@ -51,20 +51,20 @@ def test_two_source_anomaly_is_excluded_from_reachability_and_ev():
     assert quality['mechanical_expectancy'] is None
 
 
-def test_behavior_reports_insufficient_coverage_by_none():
+def test_behavior_uses_objective_signal_rows_only():
     result = behavior([{'tag': 'stop', 'status': 'TRIGGERED'}])
-    assert result['receipt_coverage'] is None
-    assert result['insufficient_data'] is False
-    assert result['discipline_rate'] == 0.0
+    assert 'receipt_coverage' not in result
+    assert 'insufficient_data' not in result
+    assert 'discipline_rate' not in result
 
 
-def test_behavior_marks_low_coverage_as_insufficient():
+def test_behavior_ignores_manual_verdict_fields():
     rows = [
         {'tag': 'stop', 'status': 'TRIGGERED', 'verdict': 'executed'},
         {'tag': 'stop', 'status': 'TRIGGERED', 'verdict': None},
         {'tag': 'stop', 'status': 'TRIGGERED', 'verdict': None},
     ]
     result = behavior(rows)
-    assert result['receipt_coverage'] == pytest.approx(1 / 3)
-    assert result['insufficient_data'] is True
-    assert result['discipline_rate'] is None
+    assert 'receipt_coverage' not in result
+    assert 'insufficient_data' not in result
+    assert 'discipline_rate' not in result

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import re
 import requests
 import threading
 import time
 from collections.abc import Callable
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import date, timedelta
 from typing import Any
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 _CACHE: dict[tuple[str, tuple[tuple[str, Any], ...]], Any] = {}
@@ -19,6 +22,8 @@ _CACHE_LOCK = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix='akshare')
 _EXECUTOR_LOCK = threading.Lock()
 _TENCENT_KLINE_URL = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get'
+_TENCENT_QUOTE_URL = 'http://qt.gtimg.cn/q='
+_INDEX_AMOUNT_OVERRIDES_PATH = Path(__file__).with_name('index_amount_overrides.json')
 
 for proxy_key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'):
     os.environ.pop(proxy_key, None)
@@ -97,6 +102,12 @@ def stock_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> 
         end.isoformat().replace('-', ''),
         limit,
     )
+    if trade_date:
+        normalized = [
+            row for row in normalized
+            if str(row.get('trade_date') or row.get('日期') or row.get('date') or '').replace('-', '')
+            <= trade_date.replace('-', '')
+        ]
     if normalized and len(normalized) >= min(limit, 20):
         return normalized
     if trade_date:
@@ -132,6 +143,12 @@ def index_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> 
         end.isoformat().replace('-', ''),
         limit,
     )
+    if trade_date:
+        records = [
+            row for row in records
+            if str(row.get('trade_date') or row.get('日期') or row.get('date') or '').replace('-', '')
+            <= trade_date.replace('-', '')
+        ]
     if records and len(records) >= min(limit, 20) and _latest_amount(records[-1]) is not None:
         return records
     rows = cached_ak(
@@ -152,7 +169,55 @@ def index_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> 
         rows = cached_ak('stock_zh_index_daily', symbol=symbol)
         records = _tail(rows, trade_date, limit, inclusive=True)
         latest_date = records[-1].get('date') or records[-1].get('日期') if records else None
-    if records and _latest_amount(records[-1]) is None:
+    is_current_signal_day = trade_date == date.today().isoformat()
+    if records and not is_current_signal_day and _latest_amount(records[-1]) is None:
+        override = {}
+        if _INDEX_AMOUNT_OVERRIDES_PATH.exists():
+            override = json.loads(_INDEX_AMOUNT_OVERRIDES_PATH.read_text(encoding='utf-8')).get(symbol) or {}
+        override_amount = (override or {}).get(trade_date)
+        if override_amount is None:
+            hist_symbol = symbol[-6:]
+            hist_rows = _records(cached_ak(
+                'index_zh_a_hist',
+                symbol=hist_symbol,
+                period='daily',
+                start_date=(date.fromisoformat(trade_date) - timedelta(days=10)).isoformat().replace('-', ''),
+                end_date=trade_date.replace('-', ''),
+            ))
+            hist_row = next(
+                (
+                    row for row in reversed(hist_rows)
+                    if str(row.get('trade_date') or row.get('date') or row.get('日期') or '').replace('-', '')
+                    == trade_date.replace('-', '')
+                ),
+                None,
+            )
+            if hist_row is not None and _latest_amount(hist_row) is not None:
+                override_amount = _latest_amount(hist_row)
+        if override_amount is not None:
+            records[-1]['amount'] = float(override_amount)
+            records[-1]['成交额'] = float(override_amount)
+    if records and not is_current_signal_day and _latest_amount(records[-1]) is None:
+        hist_symbol = symbol[-6:]
+        hist_rows = _records(cached_ak(
+            'index_zh_a_hist',
+            symbol=hist_symbol,
+            period='daily',
+            start_date=(date.fromisoformat(trade_date) - timedelta(days=10)).isoformat().replace('-', ''),
+            end_date=trade_date.replace('-', ''),
+        ))
+        hist_row = next(
+            (
+                row for row in reversed(hist_rows)
+                if str(row.get('trade_date') or row.get('date') or row.get('日期') or '').replace('-', '')
+                == trade_date.replace('-', '')
+            ),
+            None,
+        )
+        if hist_row is not None and _latest_amount(hist_row) is not None:
+            records[-1]['amount'] = _latest_amount(hist_row)
+            records[-1]['成交额'] = _latest_amount(hist_row)
+    if records and is_current_signal_day and _latest_amount(records[-1]) is None:
         spot_rows = _records(cached_ak('stock_zh_index_spot_sina'))
         spot = next((row for row in spot_rows if str(row.get('代码')) == symbol), None)
         if spot is not None and trade_date:
@@ -170,7 +235,11 @@ def index_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> 
             end.isoformat().replace('-', ''),
             limit,
         )
-        if trade_date and (not records or str(latest_date).replace('-', '') < trade_date.replace('-', '')):
+        if (
+            trade_date
+            and is_current_signal_day
+            and (not records or str(latest_date).replace('-', '') < trade_date.replace('-', ''))
+        ):
             spot_rows = _records(cached_ak('stock_zh_index_spot_sina'))
             spot = next((row for row in spot_rows if str(row.get('代码')) == symbol), None)
             if spot is not None:
@@ -193,9 +262,46 @@ def index_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> 
     return records
 
 
-def sector_kline(symbol: str, limit: int = 60) -> list[dict[str, Any]]:
-    rows = cached_ak('stock_board_industry_hist_em', symbol=symbol)
-    return _tail(rows, None, limit)
+def sector_kline(symbol: str, limit: int = 60, trade_date: str | None = None) -> list[dict[str, Any]]:
+    end = date.fromisoformat(trade_date) if trade_date else date.today()
+    start = end - timedelta(days=180)
+    aliases = {
+        '3C设备': ('industry', '消费电子零部件及组装'),
+        '光模块CPO': ('concept', 'CPO概念'),
+        '存储': ('concept', '存储芯片'),
+        '算力硬件': ('concept', '算力概念'),
+        '先进封装': ('concept', '先进封装'),
+        '量子科技': ('concept', '量子科技'),
+        '新能源车': ('concept', '新能源车'),
+    }
+    if symbol in aliases:
+        source, board = aliases[symbol]
+        name = 'stock_board_industry_hist_em' if source == 'industry' else 'stock_board_concept_hist_em'
+        rows = cached_ak(
+            name,
+            symbol=board,
+            start_date=start.isoformat().replace('-', ''),
+            end_date=end.isoformat().replace('-', ''),
+        )
+        normalized = _tail(rows, trade_date, limit, inclusive=True)
+        if normalized:
+            return normalized
+    rows = cached_ak(
+        'stock_board_industry_hist_em',
+        symbol=symbol,
+        start_date=start.isoformat().replace('-', ''),
+        end_date=end.isoformat().replace('-', ''),
+    )
+    normalized = _tail(rows, trade_date, limit, inclusive=True)
+    if normalized:
+        return normalized
+    rows = cached_ak(
+        'stock_board_concept_hist_em',
+        symbol=symbol,
+        start_date=start.isoformat().replace('-', ''),
+        end_date=end.isoformat().replace('-', ''),
+    )
+    return _tail(rows, trade_date, limit, inclusive=True)
 
 
 def auction_snapshot(symbol: str, trade_date: str) -> list[dict[str, Any]]:
@@ -204,8 +310,19 @@ def auction_snapshot(symbol: str, trade_date: str) -> list[dict[str, Any]]:
 
 
 def lhb_rows(trade_date: str) -> list[dict[str, Any]]:
-    rows = cached_ak('stock_lhb_detail_em', start_date=trade_date, end_date=trade_date)
-    return _tail(rows, trade_date, 100)
+    rows, _ = lhb_rows_checked(trade_date)
+    return rows
+
+
+def lhb_rows_checked(trade_date: str) -> tuple[list[dict[str, Any]], bool]:
+    compact_date = trade_date.replace('-', '')
+    rows = cached_ak('stock_lhb_detail_em', start_date=compact_date, end_date=compact_date)
+    if rows is not None:
+        return _tail(rows, trade_date, 100), True
+    rows = cached_ak('stock_lhb_detail_daily_sina', date=compact_date)
+    if rows is not None:
+        return _records(rows)[-100:], True
+    return [], False
 
 
 def margin_rows(trade_date: str) -> list[dict[str, Any]]:
@@ -219,7 +336,9 @@ def money_flow(symbol: str, limit: int = 10) -> list[dict[str, Any]]:
 
 
 def stock_spot_rows() -> list[dict[str, Any]]:
-    records = _records(cached_ak('stock_zh_a_spot'))
+    records = _records(cached_ak('stock_zh_a_spot_em'))
+    if not records:
+        records = _records(cached_ak('stock_zh_a_spot'))
     result = []
     for row in records:
         code = str(row.get('代码') or '')
@@ -232,6 +351,107 @@ def stock_spot_rows() -> list[dict[str, Any]]:
             'price': row.get('最新价'),
         })
     return result
+
+
+def stock_spot_quote(symbol: str) -> dict[str, Any]:
+    rows = _records(cached_ak('stock_bid_ask_em', symbol=symbol))
+    values = {
+        str(row.get('item')): row.get('value')
+        for row in rows
+        if row.get('item') is not None
+    }
+    price = values.get('最新')
+    if price is None:
+        return {}
+    return {'symbol': symbol, 'name': '', 'price': price}
+
+
+def stock_spot_quotes(symbols: Sequence[str]) -> list[dict[str, Any]]:
+    if not symbols:
+        return []
+    result = []
+    for parts in _tencent_quote_parts(symbols):
+        symbol = str(parts[2] or '')
+        try:
+            price = float(parts[3])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if re.fullmatch(r'\d{6}', symbol) and price > 0:
+            result.append({
+                'symbol': symbol,
+                'name': str(parts[1] or ''),
+                'price': price,
+            })
+    return result
+
+
+def stock_active_deltas(symbols: Sequence[str]) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for index in range(0, len(symbols), 60):
+        chunk = [str(symbol) for symbol in symbols[index:index + 60] if symbol]
+        if not chunk:
+            continue
+        try:
+            with requests.Session() as session:
+                session.trust_env = False
+                response = session.get(
+                    _TENCENT_QUOTE_URL + ','.join(_tencent_symbol(symbol) for symbol in chunk),
+                    headers={'User-Agent': 'Mozilla/5.0'},
+                    timeout=8,
+                )
+            response.raise_for_status()
+            response.encoding = 'gbk'
+            for line in response.text.strip().split(';'):
+                if '=' not in line:
+                    continue
+                payload = line.split('=', 1)[1].strip().strip('"')
+                parts = payload.split('~')
+                if len(parts) <= 8:
+                    continue
+                symbol = str(parts[2] or '')
+                if not re.fullmatch(r'\d{6}', symbol):
+                    continue
+                raw_volume = float(parts[6] or 0)
+                amount = float(parts[37] or 0) * 10000 if len(parts) > 37 else 0
+                reference_price = float(parts[4] or parts[3] or 0)
+                volume_factor = 1.0
+                if raw_volume > 0 and reference_price > 0 and amount > 0:
+                    volume_factor = amount / (raw_volume * reference_price)
+                outer_volume = float(parts[7] or 0) * volume_factor
+                inner_volume = float(parts[8] or 0) * volume_factor
+                if outer_volume > 0 or inner_volume > 0:
+                    result[symbol] = round(outer_volume - inner_volume, 6)
+        except Exception as exc:
+            logger.warning('tencent active delta failed: %s', exc)
+    return result
+
+
+def _tencent_quote_parts(symbols: Sequence[str]) -> list[list[str]]:
+    parts: list[list[str]] = []
+    for index in range(0, len(symbols), 60):
+        chunk = [str(symbol) for symbol in symbols[index:index + 60] if symbol]
+        if not chunk:
+            continue
+        try:
+            with requests.Session() as session:
+                session.trust_env = False
+                response = session.get(
+                    _TENCENT_QUOTE_URL + ','.join(_tencent_symbol(symbol) for symbol in chunk),
+                    headers={'User-Agent': 'Mozilla/5.0'},
+                    timeout=8,
+                )
+            response.raise_for_status()
+            response.encoding = 'gbk'
+            for line in response.text.strip().split(';'):
+                if '=' not in line:
+                    continue
+                payload = line.split('=', 1)[1].strip().strip(chr(34))
+                row_parts = payload.split('~')
+                if len(row_parts) > 3:
+                    parts.append(row_parts)
+        except Exception as exc:
+            logger.warning('tencent quote batch failed: %s', exc)
+    return parts
 
 
 def _records(rows: Any) -> list[dict[str, Any]]:
@@ -300,7 +520,9 @@ def _tencent_kline(symbol: str, start_date: str, end_date: str, limit: int) -> l
         ]
         qt_rows = block.get('qt') or {}
         qt = qt_rows.get(tencent_symbol) or []
-        if len(qt) > 37:
+        quote_date = str(qt[30]).split()[0].replace('-', '') if len(qt) > 30 else ''
+        last_date = str(records[-1].get('date') or '').replace('-', '') if records else ''
+        if records and len(qt) > 37 and quote_date == last_date:
             try:
                 records[-1]['amount'] = float(qt[37]) * 10_000
             except (TypeError, ValueError):

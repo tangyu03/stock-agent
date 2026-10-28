@@ -142,33 +142,6 @@ def _migrate_journal(source: sqlite3.Connection, conn: sqlite3.Connection) -> di
     return {"source": len(rows), "inserted": inserted, "skipped": skipped}
 
 
-def _migrate_receipts(source: sqlite3.Connection, conn: sqlite3.Connection) -> dict[str, int]:
-    rows = source.execute(
-        "SELECT id, user_action, actual_position, created_at, event_id FROM trade_logs"
-        " WHERE user_action IN ('executed','ignored','veto') ORDER BY created_at, id"
-    ).fetchall()
-    inserted = skipped = 0
-    for row in rows:
-        signal_id = str(row["event_id"] or "").strip()
-        if not signal_id:
-            skipped += 1
-            continue
-        cursor = conn.execute(
-            "INSERT OR IGNORE INTO receipts (signal_id, verdict, size_filled, created_at)"
-            " VALUES (?,?,?,?)",
-            (
-                signal_id,
-                str(row["user_action"]),
-                int(row["actual_position"]) if row["actual_position"] else None,
-                _iso(row["created_at"]) or "1970-01-01 00:00:00",
-            ),
-        )
-        inserted += cursor.rowcount
-        if cursor.rowcount == 0:
-            skipped += 1
-    return {"source": len(rows), "inserted": inserted, "skipped": skipped}
-
-
 def _load_theme_map() -> dict[str, str]:
     path = REPO_ROOT / "pointtable" / "config" / "theme_map.yaml"
     try:
@@ -242,12 +215,10 @@ def migrate(
     }
     signals = _migrate_signals(source, conn)
     journal = _migrate_journal(source, conn)
-    receipts = _migrate_receipts(source, conn)
     pool = _migrate_pool(conn, source)
     totals = {
         "signals": conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0],
         "journal": conn.execute("SELECT COUNT(*) FROM journal").fetchone()[0],
-        "receipts": conn.execute("SELECT COUNT(*) FROM receipts").fetchone()[0],
         "pool": conn.execute("SELECT COUNT(*) FROM pool").fetchone()[0],
     }
     conn.commit()
@@ -258,7 +229,6 @@ def migrate(
         "exports": exports,
         "signals": signals,
         "journal": journal,
-        "receipts": receipts,
         "pool": pool,
         "totals": totals,
         "checks": {

@@ -4,7 +4,7 @@
 
 ## 1. 范围结论
 
-- 新运行时持久化核心表为 `signals`、`journal`、`receipts`、`pool`；另有当日运行表 `tail_snapshots`。
+- 新运行时持久化核心表为 `signals`、`journal`、`pool`；另有当日运行表 `tail_snapshots`。
 - 做字段级 ETL 的旧表只有三张：`signal_events`、`signal_event_logs`、`trade_logs`。
 - 其余旧表不做字段级迁移。原因分三类：旧决策层已删除、临时/缓存数据不需要搬迁、新链路改为从行情与配置实时计算。
 - `legacy/` 只作回查归档，不参与运行时。`sector_pool.py`、`sector_ranker.py`、`theme_attribution.py`、`data/ths_cache/` 保留为归档，不迁入 `pointtable`。
@@ -16,7 +16,7 @@
 |---|---|---|
 | `signal_events` | 字段级 ETL | `signals` |
 | `signal_event_logs` | 字段级 ETL | `journal` |
-| `trade_logs` | 字段级 ETL + 原始 CSV 导出 | `receipts`、`pool` |
+| `trade_logs` | 原始 CSV 导出 | 不落新表 |
 | `board_component` | 归档 | `pointtable/core/sector.py` 与 `market-input` 的板块事实，不落历史表 |
 | `board_snapshot` | 归档 | 同上 |
 | `data_cache` | 归档 | `pointtable/data/akshare.py` 的安全封装与重试策略 |
@@ -38,10 +38,10 @@
 | `signal_rejections` | 归档 | `generator` 返回缺失/无效原因，不落独立拒绝表 |
 | `signal_tracking_stop_logs` | 归档 | `signals.status/status_reason` + `journal` |
 | `stock_sector_history` | 归档 | `theme_map` overrides + `market-input` 板块数据 |
-| `strategy_status` | 归档，策略开关层删除 | `pointtable/config/strategies.yaml` |
+| `strategy_status` | 归档，策略开关层删除 | `config/strategies.yaml` |
 | `volume_projection_log` | 归档，量能预测层删除 | `pointtable/core/volume.py` 实时判定 |
 | `sqlite_sequence` | SQLite 内部对象 | 不迁移 |
-| `signal_ledger`（视图） | 归档 | `signals` / `journal` / `receipts` 统计与报告查询 |
+| `signal_ledger`（视图） | 归档 | `signals` / `journal` 统计与报告查询 |
 
 ## 3. 字段级映射
 
@@ -91,18 +91,9 @@
 
 `journal` 的唯一索引由 `signal_id, created_at, from_status, to_status, reason, price, confirmed` 组成，重复迁移不会产生重复流水。
 
-### 3.3 `trade_logs` → `receipts`
+### 3.3 `trade_logs`
 
-只迁移 `user_action` 为 `executed`、`ignored`、`veto` 的行。
-
-| 旧字段 | 新字段 | 规则 |
-|---|---|---|
-| `id` | 不迁移 | `receipts.id` 由新库自增 |
-| `event_id` | `signal_id` | 必须非空；空值跳过 |
-| `user_action` | `verdict` | 只接受 `executed/ignored/veto` |
-| `actual_position` | `size_filled` | 非空时转整数 |
-| `created_at` | `created_at` | 规范为 `YYYY-MM-DD HH:MM:SS` |
-| `actual_price`、`exit_price`、`pnl_pct` | 不迁移 | 成交回报层不保留价格复盘流水 |
+`trade_logs` 只做原始 CSV 导出。人工执行标注属于旧链路，新系统不建表、不迁移、不统计。
 | `note`、`review_note`、`review_outcome` | 不迁移 | 报告层改为实时生成 |
 | `trigger_price`、`stop_loss`、`target_price` | 不迁移 | 已由 `signals.zone/premise` 承载 |
 | `hypothesis_*`、`paired_*`、`z_reference`、`zw_triggered` | 不迁移 | XYZW 假说与配对 Z/W 出场已删除 |
@@ -117,7 +108,7 @@
 | `trade_logs.date` | `date` | 去重后写入 |
 | `trade_logs.stock_code` | `symbol` | 去重后写入 |
 | `config/portfolio.yaml.stocks[].code` | `date`、`symbol` | 追加到迁移结果，日期为迁移执行日 |
-| `pointtable/config/theme_map.yaml.overrides` | `theme_label` | 按 `symbol` 反查；没有映射写 `unknown` |
+| `config/theme_map.yaml.overrides` | `theme_label` | 按 `symbol` 反查；没有映射写 `unknown` |
 
 `pool` 的唯一约束是 `date + symbol + theme_label`；主题映射更新后可重跑补齐标签。
 
@@ -140,6 +131,24 @@
 归档表不进入新链路，逐字段改成空值或 `NULL` 会制造假兼容。它们的原数据保留在 `legacy/` 与源库中，可按需要回查。需要提取历史事实时，先用 `pointtable/db/migrate.py` 的 CSV 导出能力，再按临时需求分析，而不是把这些表塞进新 schema。
 
 ## 5. 测试文件逐模块映射
+
+## 4.1 运行时代码目录映射
+
+`pointtable/jobs` 已收敛为五个核心任务文件，不再保留中间编排层：
+
+| 旧实现 | 新实现 |
+|---|---|
+| `pointtable/jobs/market_pipeline.py` | `pointtable/jobs/evening.py` |
+| `pointtable/jobs/execution_review.py` | `pointtable/jobs/evening.py` |
+| `pointtable/jobs/plan_builder.py` | `pointtable/core/generator.py` |
+| `pointtable/jobs/tail_snapshot.py` | `pointtable/jobs/restore_check.py` |
+| `pointtable/jobs/scheduler.py` | `pointtable/cli.py` |
+| `pointtable/jobs/performance.py` | `pointtable/stats.py` |
+| `pointtable/jobs/routines.py` | `auction_call.py`、`watch.py`、`restore_check.py`、`settle.py`、`evening.py`、`pointtable/db/session.py` |
+
+`cutover.py`、`migration.py`、`shadow.py` 是运维入口，暂不并入五个例行任务。
+
+### 5. 测试文件逐模块映射
 
 新测试不追求旧测试一比一复制。旧测试里有大量评分、调度、洞察、基本面闸门、估值透镜、标签语义、RRR、EV 闸门、回测和 XYZW 的断言；对应能力已删除，测试也应删除。仍有语义价值的部分映射如下。
 
@@ -205,7 +214,7 @@
 2. `signal_event_logs.source == journal.inserted + journal.skipped`。
 3. 抽样核对 `signal_events.event_id` 与 `signals.id`；`signal_event_logs.event_id` 与 `journal.signal_id`。
 4. 抽样核对旧状态与 `_STATUS_MAP` 转换后的新状态。
-5. 抽样核对 `trade_logs.user_action` 与 `receipts.verdict`。
+5. 确认 `trade_logs` 只出现在原始 CSV 导出中，不进入新库。
 6. 抽样核对 `pool.symbol` 能在 `theme_map` 或 `unknown` 中得到解释。
 
 ## 7. 明确不迁移的能力

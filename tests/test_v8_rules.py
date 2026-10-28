@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 
@@ -10,11 +11,15 @@ from pointtable.db.session import (
     load_context_marks,
     save_context_marks,
     save_signals,
+    save_correction_anchor,
     set_database_path,
 )
 from pointtable.jobs.evening import build_context_marks
 from pointtable.jobs.evening import build_event_calendar
-from pointtable.jobs.routines import run_evening, run_settle, run_watch
+from pointtable.jobs.evening import build_pool_signals, run_evening
+from pointtable.jobs.settle import run_settle
+from pointtable.jobs.watch import run_watch
+from pointtable.jobs.watch import context_from_marks
 from pointtable.jobs.watch import process_touch
 from pointtable.models.context_mark import ContextType
 from pointtable.models.signal import Signal, SignalStatus, SignalTag, SignalTrend, SignalValidPolicy
@@ -63,7 +68,7 @@ def test_ma_entry_window_is_hard():
     assert journal is not None
 
 
-def test_generator_reuses_active_stop():
+def test_entry_generates_only_entry():
     now = datetime(2026, 1, 2, tzinfo=UTC)
     strategy = Strategy(
         id='first_move_5d', side='BUY', premise='hot',
@@ -71,36 +76,29 @@ def test_generator_reuses_active_stop():
         z={'type': 'ma_break', 'n': 5},
         w={'type': 'pressure_zone', 'action': 'sell_part'},
     )
-    existing = _signal(
-        SignalTag.STOP, side='SELL', id='active-stop', strategy_id='holding',
-        parent_id='pool:300001', zone_low=9.0, zone_high=9.2,
-        valid_policy=SignalValidPolicy.UNTIL_STOPPED,
-    )
     rows = generate_entry(
-        strategy, '300001', (10, 10.2), (8.8, 9.0), (12, 12.2), now,
-        existing_signals=[existing],
+        strategy, '300001', (10, 10.2), now,
     )
     assert rows[0].trigger_window_start == time(14, 30)
-    assert rows[1].id == 'active-stop'
-    assert rows[1].parent_id == rows[0].id
+    assert len(rows) == 1
 
 
-def test_active_retest_pauses_holding_rows(tmp_db):
+def test_active_retest_pauses_pool_signals(tmp_db):
     set_database_path(tmp_db)
     init_db()
     conn = get_connection()
     retest = _signal(
         SignalTag.RETEST_CONFIRM, side='NEUTRAL', id='retest-1',
-        strategy_id='holding', parent_id='pool:300001',
+        strategy_id='pool', parent_id='pool:300001',
         valid_policy=SignalValidPolicy.FIXED_WINDOW,
     )
     save_signals(conn, [retest])
     payload = {
         'trade_date': '2026-01-01',
-        'holdings': [{
+        'signal_rows': [{
             'symbol': '300001', 'parent_id': 'pool:300001', 'trend': 'UP',
-            'stop_zone': (9, 9.2), 'support_zone': (10, 10.2),
-            'resistance_zone': (11, 11.2),
+            'stop_zone': (9, 9.2), 'profit_zone': (11, 11.2),
+            't_buy_zone': (10, 10.2), 't_sell_zone': (11, 11.2),
         }],
     }
     path = Path('test-v8-evening.json')
@@ -141,7 +139,7 @@ def test_melt_day_treats_delay_as_execute_without_retest(tmp_db):
     save_signals(conn, [stop])
     result = run_settle(
         conn, datetime(2026, 1, 1, 15, 5, tzinfo=UTC),
-        close_prices={'300001': 10.1},
+        close_prices={'300001': 9.1},
         market_tier='LOW', index_trend='DOWN',
     )
     assert result['retest_created'] == []
@@ -150,6 +148,44 @@ def test_melt_day_treats_delay_as_execute_without_retest(tmp_db):
         ('stop-1',),
     ).fetchone()
     assert anchor['qualifier'] == 'EXECUTE_NOW'
+
+
+def test_delayed_break_requires_close_price(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    stop = _signal(
+        SignalTag.STOP, side='SELL', id='stop-1', strategy_id='holding',
+        parent_id='pool:300001', status=SignalStatus.TRIGGERED,
+        break_qualifier='DELAY_OBSERVE',
+        valid_policy=SignalValidPolicy.UNTIL_STOPPED,
+    )
+    save_signals(conn, [stop])
+    try:
+        run_settle(conn, datetime(2026, 1, 1, 15, 5, tzinfo=UTC))
+    except ValueError as error:
+        assert 'missing close price' in str(error)
+    else:
+        raise AssertionError('missing close price must fail settlement')
+
+
+def test_non_weak_close_break_creates_retest(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    stop = _signal(
+        SignalTag.STOP, side='SELL', id='stop-1', strategy_id='holding',
+        parent_id='pool:300001', status=SignalStatus.TRIGGERED,
+        break_qualifier='DELAY_OBSERVE',
+        valid_policy=SignalValidPolicy.UNTIL_STOPPED,
+    )
+    save_signals(conn, [stop])
+    result = run_settle(
+        conn, datetime(2026, 1, 1, 15, 5, tzinfo=UTC),
+        close_prices={'300001': 9.1},
+    )
+    assert result['retest_created'] == ['stop-1-retest']
+    assert result['correction_notices'] == []
 
 
 def test_execute_now_correction_is_watch_only(tmp_db):
@@ -186,6 +222,175 @@ def test_execute_now_correction_is_watch_only(tmp_db):
     assert repeat['correction_notices'] == []
 
 
+def test_same_day_close_correction_persists_once_and_renders(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    stop = _signal(
+        SignalTag.STOP, side='SELL', id='stop-1', strategy_id='holding',
+        parent_id='pool:300001', status=SignalStatus.TRIGGERED,
+        break_qualifier='DELAY_OBSERVE',
+        valid_policy=SignalValidPolicy.UNTIL_STOPPED,
+    )
+    save_signals(conn, [stop])
+    now = datetime(2026, 1, 1, 15, 5, tzinfo=UTC)
+    first = run_settle(
+        conn, now,
+        close_prices={'300001': 10.1},
+    )
+    repeat = run_settle(
+        conn, now,
+        close_prices={'300001': 10.1},
+    )
+    assert first['correction_notices']
+    assert repeat['correction_notices'] == []
+    rows = conn.execute(
+        'SELECT COUNT(*) AS n FROM correction_events WHERE signal_id=?',
+        ('stop-1',),
+    ).fetchone()
+    assert rows['n'] == 1
+    market = {
+        'name_map': {'300001': '测试'},
+        'spot_prices': {'300001': 10.1},
+    }
+    text = build_report('2026-01-01', market)
+    assert '收盘处理（1条）' in text
+    assert '测试（300001）' in text
+    assert '当日收复' in text
+
+
+def test_pool_stop_after_execute_now_is_suppressed_until_new_entry():
+    now = datetime(2026, 1, 2, tzinfo=UTC)
+    row = {
+        'symbol': '300001', 'strategy_id': 'pool', 'trend': 'UP',
+        'stop_zone': (9.0, 9.2), 'profit_zone': (11.0, 11.2),
+        't_buy_zone': (10.0, 10.2), 't_sell_zone': (11.0, 11.2),
+        'parent_id': 'pool:300001',
+    }
+    executed_stop = _signal(
+        SignalTag.STOP, side='SELL', id='stop-1', strategy_id='pool',
+        parent_id='pool:300001', status=SignalStatus.TRIGGERED,
+        break_qualifier='EXECUTE_NOW',
+        valid_policy=SignalValidPolicy.UNTIL_STOPPED,
+    )
+    assert build_pool_signals([row], now, [executed_stop]) == []
+
+    new_entry = _signal(status=SignalStatus.TRIGGERED).model_copy(update={
+        'created_at': now,
+    })
+    assert build_pool_signals([row], now, [executed_stop, new_entry])
+
+
+def test_rebuilt_pool_stop_records_prior_stop_id():
+    now = datetime(2026, 1, 2, tzinfo=UTC)
+    row = {
+        'symbol': '300001', 'strategy_id': 'pool', 'trend': 'UP',
+        'stop_zone': (9.0, 9.2), 'profit_zone': (11.0, 11.2),
+        't_buy_zone': (10.0, 10.2), 't_sell_zone': (11.0, 11.2),
+        'parent_id': 'pool:300001',
+    }
+    prior_stop = _signal(
+        SignalTag.STOP, side='SELL', id='stop-1', strategy_id='pool',
+        parent_id='pool:300001', status=SignalStatus.TRIGGERED,
+        break_qualifier='SAME_DAY_RECOVERED',
+        valid_policy=SignalValidPolicy.UNTIL_STOPPED,
+    )
+    stop = next(
+        signal for signal in build_pool_signals([row], now, [prior_stop])
+        if signal.tag is SignalTag.STOP and signal.status is SignalStatus.ACTIVE
+    )
+    assert stop.premise['prior_stop_id'] == 'stop-1'
+
+
+def test_active_candidate_expires_on_same_ma_cooldown(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    candidate = _signal(strategy_id='first_move_5d')
+    save_signals(conn, [candidate])
+    input_path = Path('test-candidate-cooldown.json')
+    input_path.write_text(json.dumps({
+        'trade_date': '2026-01-01',
+        'created_at': '2026-01-01T15:30:00+08:00',
+        'same_ma_cooldown_days': 2,
+        'recent_stop_counts': {'300001': {'ma5': 2}},
+    }), encoding='utf-8')
+    run_evening(conn, input_path)
+    row = conn.execute(
+        'SELECT status, status_reason FROM signals WHERE id=?',
+        (candidate.id,),
+    ).fetchone()
+    assert row['status'] == 'EXPIRED'
+    assert row['status_reason'] == 'ma_family_cooldown'
+    input_path.unlink()
+
+
+def test_correction_projection_merges_same_symbol_and_date(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    rows = []
+    for signal_id, strategy_id in [
+        ('stop-1', 'holding'), ('stop-2', 'first_move_5d')
+    ]:
+        stop = _signal(
+            SignalTag.STOP, side='SELL', id=signal_id, strategy_id=strategy_id,
+            parent_id='pool:300001', status=SignalStatus.TRIGGERED,
+            valid_policy=SignalValidPolicy.UNTIL_STOPPED,
+        )
+        rows.append(stop)
+        save_correction_anchor(
+            conn,
+            signal_id=signal_id,
+            symbol='300001',
+            trade_date='2026-01-01',
+            qualifier='EXECUTE_NOW',
+            zone_low=10,
+            zone_high=10.2,
+            created_at=datetime(2026, 1, 1, 15, 5, tzinfo=UTC),
+        )
+    save_signals(conn, rows)
+    market = {
+        'name_map': {'300001': '测试'},
+        'trade_date': '2026-01-01',
+    }
+    text = build_report('2026-01-01', market)
+    assert '收盘处理（1条）' in text
+
+
+def test_correction_anchor_schema_supports_one_per_trade_date(tmp_db):
+    set_database_path(tmp_db)
+    conn = sqlite3.connect(tmp_db)
+    conn.executescript('''
+        CREATE TABLE correction_anchors (
+            signal_id TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            qualifier TEXT NOT NULL,
+            zone_low REAL NOT NULL,
+            zone_high REAL NOT NULL,
+            notice_price REAL,
+            noticed_at TEXT,
+            created_at TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+    init_db()
+    conn = get_connection()
+    assert save_correction_anchor(
+        conn, signal_id='stop-1', symbol='300001', trade_date='2026-01-01',
+        qualifier='EXECUTE_NOW', zone_low=10, zone_high=10.2,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert save_correction_anchor(
+        conn, signal_id='stop-1', symbol='300001', trade_date='2026-01-02',
+        qualifier='EXECUTE_NOW', zone_low=10, zone_high=10.2,
+        created_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    assert conn.execute('SELECT COUNT(*) AS n FROM correction_anchors').fetchone()['n'] == 2
+
+
 def test_report_projects_lifecycle_slots(tmp_db):
     set_database_path(tmp_db)
     init_db()
@@ -209,13 +414,14 @@ def test_report_projects_lifecycle_slots(tmp_db):
     market = {
         'assignments': [{'symbol': '300001', 'est_close': 10.1}],
         'amount_yi': 11000, 'tier': 'NORMAL', 'sh_close': 3005,
-        'sh_ma5': 3000, 'index_trend': 'UP', 'zero_plan_day': False,
+        'sh_ma5': 3000, 'index_trend': 'UP',
         'name_map': {'300001': '测试'},
+        'spot_prices': {'300001': 10.2},
     }
     text = build_report('2026-01-01', market)
-    for heading in ('【候选】', '【池内票】', '【观察区】'):
+    for heading in ('候选（1只', '池内票区（1只）', '观察区（1个）'):
         assert heading in text
-    assert '现价 10.1' in text
+    assert '现价：10.2' in text
 
 
 def test_watch_touches_context_marks(tmp_db):
@@ -237,6 +443,58 @@ def test_watch_touches_context_marks(tmp_db):
     rows = {row.code: row for row in load_context_marks(conn, now.date().isoformat())}
     assert rows['sh000001'].triggered_at is not None
     assert rows['AI'].triggered_at is not None
+
+
+def test_context_fact_uses_any_same_day_trigger(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=UTC)
+    triggered_at = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    marks = build_context_marks(
+        [{'symbol': 'sh000001', 'zone': (10, 11)}],
+        [{'symbol': 'AI', 'zone': (10, 11)}],
+        now.date(), triggered_at,
+    )
+    conn.execute(
+        'INSERT INTO pool (date, symbol, theme_label) VALUES (?,?,?)',
+        (now.date().isoformat(), '300001', 'AI'),
+    )
+    save_context_marks(conn, [
+        mark.model_copy(update={'triggered_at': triggered_at})
+        for mark in marks
+    ])
+    assert context_from_marks(conn, '300001', now) == {
+        'stock_triggered': False,
+        'sector_triggered': True,
+        'index_triggered': True,
+    }
+
+
+def test_stale_sector_context_does_not_trigger_break_fact(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=UTC)
+    triggered_at = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    marks = build_context_marks(
+        [],
+        [{'symbol': 'AI', 'zone': (10, 11)}],
+        now.date(), now,
+    )
+    conn.execute(
+        'INSERT INTO pool (date, symbol, theme_label) VALUES (?,?,?)',
+        (now.date().isoformat(), '300001', 'AI'),
+    )
+    save_context_marks(conn, [
+        mark.model_copy(update={
+            'label': 'stale_sector_context',
+            'triggered_at': triggered_at,
+        })
+        for mark in marks
+    ])
+    context = context_from_marks(conn, '300001', now)
+    assert context['sector_triggered'] is False
 
 
 def test_tail_snapshot_plans_go_to_event_calendar():

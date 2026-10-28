@@ -9,7 +9,7 @@
 三条铁律：
 
 1. **pool 是关注范围，不是持仓清单。** 池内每只票所有适用 role 全算全呈现；系统不知道、不推断你的实际持仓。同一只票同一晚可以同时有 entry 和 stop——5 日线对空仓者是买点、对持有者是风控线，两条都给，你自己对号入座。
-2. **信号一生只有四个状态：ACTIVE → TRIGGERED / EXPIRED / INVALIDATED。** 人的动作（veto、回执）是对信号的标注，不是状态机的一环。
+2. **信号一生只有四个状态：ACTIVE → TRIGGERED / EXPIRED / INVALIDATED。** 系统只记录客观触发，不记录或推断人工执行。
 3. **策略就是 strategies.yaml 里的几段配置。** 每条策略必须写全 premise / y / z / w 四键，缺一加载即报错。加打法 = 加一段 YAML。
 
 ## 1. 行为建模
@@ -20,7 +20,7 @@
 
 | 时刻 | 行为 | 输出 |
 |---|---|---|
-| 15:30 | evening 收盘生成 | 信号入库＋汇总报告（含零预案判定）＋ ACTIVE entry 的 premise 重检 |
+| 15:30 | evening 收盘生成 | 信号入库＋汇总报告＋ ACTIVE entry 的 premise 重检 |
 | 9:15–9:25 | auction_call 竞价判定 | 形态分类 → 作废当日 BUY 或快照供人确认 |
 | 9:30–15:00 | watch 盘中盯梢 | 触发检查 → 定性 → 提醒；context_marks 的 triggered_at 记录（每次触发更新为最近） |
 | 14:30 | 尾盘快照 | 把此刻价格写入 tail_snapshots，供晚间 ma_tomorrow 使用；**ma_tomorrow 系 entry 的触发窗口从此刻开启** |
@@ -31,12 +31,12 @@
 
 - **entry 触发**：单点触碰即触发，**但受 trigger_window 约束**——ma_tomorrow 系 entry 仅 14:30–15:00 接受触发，窗口外触碰直接忽略、不记 touched_only、不推送；first_board_dip / volume_breakout 的 entry 全天有效。**activation 对 entry 不再是“仅文案提示”，而是真实触发约束。**
 - **stop/profit/t 触发**：单点触碰即触发，全天有效（intraday 语义按 §3.1 valid_policy 说明）。
-- **破位定性**：两级查询（板块 → 指数，查 context_marks）＋封板豁免＋分歧规则。
+- **破位定性**：两级查询（板块 → 指数，查 context_marks 当日最近有效事实）＋封板豁免＋分歧规则。
 - **STOP 当日收复**：纠错提醒。
 - **前提破坏**：作废＋撤销提醒。
 - **retest_confirm 盘中触达**：按 §7.3 判定终态。
 
-**人触发（全部可选，不驱动状态机）：** veto；receipt（executed / ignored，可带 size_filled）；t-size；pool 编辑；config 编辑；push-file 人工单向推送。
+**人触发（全部可选，不驱动状态机）：** t-size；pool 编辑；config 编辑；push-file 人工单向推送。
 
 
 
@@ -53,7 +53,6 @@ pointtable/
 │   ├── models/
 │   │   ├── signal.py           # Signal + 四状态枚举 + zone校验(low<high) + role/side 枚举 + break_qualifier + trigger_window
 │   │   ├── journal.py          # JournalEntry（record_type: transition / zone_update / qualifier）
-│   │   ├── receipt.py          # Receipt（executed/ignored/veto + size_filled）
 │   │   ├── pool.py             # PoolEntry（date/symbol/theme_label）
 │   │   └── context_mark.py     # ContextMark（index/sector 参考区间＋最近 triggered_at）
 │   ├── db/session.py
@@ -105,7 +104,7 @@ pointtable/
 | valid_policy | intraday / until_stopped / fixed_window（语义见下） |
 | window_days | 仅 fixed_window 用，生成时从 config 快照 |
 | status | ACTIVE / TRIGGERED / EXPIRED / INVALIDATED |
-| status_reason | 封闭枚举：hit / eod / premise_broken / human_veto / retest_pass / retest_fail |
+| status_reason | 封闭枚举：hit / eod / premise_broken / retest_pass / retest_fail |
 | parent_id | stop/profit/t/retest_confirm 必填，指向最近一次 TRIGGERED 的 enter；无则 `pool:<symbol>` |
 | root_id | 链起点，可选（跨 reentry 保留） |
 | created_at / closed_at | “当日结案”查 signals.closed_at |
@@ -115,7 +114,7 @@ pointtable/
 | 值 | 对 entry 的语义 | 对 t 的语义 | 对 stop/profit 的语义 |
 |---|---|---|---|
 | intraday | **次一交易日有效**：T 晚生成，T+1 settle 未触发才 EXPIRED | **当日有效**：T 日生成，T 日 settle 未触发即 EXPIRED | — |
-| until_stopped | — | — | 持续有效，直至触发或 premise_broken / human_veto |
+| until_stopped | — | — | 持续有效，直至触发或 premise_broken |
 | fixed_window | — | — | retest_confirm 用；window_days 期有效 |
 
 **关键删除**：`journal.confirmed` 字段（v8.0 已删）、双周期确认逻辑（v8.0 已删）。
@@ -126,7 +125,7 @@ pointtable/
 |---|---|
 | id / signal_id | 主键 / 关联信号 |
 | record_type | **transition / zone_update / qualifier（新增）** |
-| event | 仅 transition：hit / eod / premise_broken / human_veto |
+| event | 仅 transition：hit / eod / premise_broken |
 | reason | 迁移原因（同 status_reason 枚举） |
 | **qualifier** | **新增，仅 record_type=qualifier**：四路定性值 |
 | old_zone_low / old_zone_high | 仅 zone_update |
@@ -139,13 +138,9 @@ pointtable/
 - **zone_update**：stop/profit 每晚滚动更新 zone 时记一条；t 不记（t 是 intraday 当日新建，不原地更新）；
 - **qualifier**：stop 触发后写入 break_qualifier 时记一条，供 settle 读取和审计追溯。
 
-### 3.3 receipts
+### 3.3 持久化边界
 
-id / signal_id / verdict（executed / ignored / veto）/ size_filled / created_at。
-
-**T 配对**：不加 pair_id。restore_check 用“同 symbol + 同日 + T_BUY executed + T_SELL 无 executed”查询时推导。**配对窗口 = 当日**；T_SELL 次日触发不回溯配对。
-
-**一个 signal 只有一个有效 receipt**：允许补录历史记录，但最新一条为 effective，旧记录标记 superseded 留 audit trail。
+系统不建 receipts 表，不迁移旧 trade_logs 执行结论。T 配对由当晚生成的 t-buy 与 t-sell 信号自身推导；当日 SELL 未触发即视为未复原。
 
 ### 3.4 pool
 
@@ -159,7 +154,7 @@ date / symbol / price。14:30 由 watch 写入。ma_tomorrow 的 est_close 优�
 
 | role | side | zone_policy | pair_required | parent | 触发方式 | 触发窗口 | 触发后行为 |
 |---|---|---|---|---|---|---|---|
-| entry | BUY | 当日有效（次一交易日） | 否 | 无 | 单点 | **ma_tomorrow 系 14:30–15:00；其他全天** | **成为后续保护行的 parent 锚点＋统计分母** |
+| entry | BUY | 当日有效（次一交易日） | 否 | 无 | 单点 | **ma_tomorrow 系 14:30–15:00；其他全天** | **成为后续止盈 / 止损 / 做T 行的 parent 锚点＋统计分母** |
 | stop | SELL | rolling（每日上移） | 否 | enter 或 pool | 单点 | 全天 | 产生 retest_confirm |
 | profit | SELL | **fixed 或 trailing（按策略 w 配置）** | 否 | enter 或 pool | 单点 | 全天 | 无 |
 | t | BUY/SELL | fixed（当日） | 是（当日配对） | enter 或 pool | 单点 | 全天 | 配对提示 |
@@ -181,7 +176,7 @@ date / symbol / price。14:30 由 watch 写入。ma_tomorrow 的 est_close 优�
 
 **生命周期**：evening 每天生成 ACTIVE；watch 盘中检测进入区间，每次更新 triggered_at 为当前时刻；次日 evening 覆盖或置 INACTIVE。**不接 lifecycle.py，不产生 journal 迁移记录，不进 stats，不进报告买卖区。**
 
-**两级查询**：`break_qualifier` 查“近 30 分钟有无 triggered_at 且时间戳在 30 分钟内”。
+**两级查询**：`break_qualifier` 查“当日有无最近有效的 triggered_at”；低频 CLI 不使用 30 分钟窗口，避免漏采。
 
 ### 3.8 time_trigger
 
@@ -229,7 +224,7 @@ def check_first_move_drift(facts) -> bool: ...
   - 若该 symbol 已有 ACTIVE stop → **不新建，把 enter 记为该 stop 的关联锚点（stop.parent_id 更新为指向新 enter）**；
   - 若没有 → 按 Z/W 同生新建一条 stop；
   - **同 symbol 同时刻只有一条 ACTIVE stop**（A4 硬约束）；
-- 池内票按趋势生成/更新保护行与 T 行（见下）；
+- 池内票按趋势生成/更新止盈 / 止损 / 做T 行（见下）；
 - context_marks 生成；
 - time_trigger 行。
 
@@ -250,11 +245,11 @@ def ensure_stop_for_enter(enter):
 **观察哨存续期暂停 stop/profit/t 生成**：
 
 ```python
-def generate_holding_rows(symbol):
+def generate_pool_signals(symbol):
     if has_active_retest_confirm(symbol):
-        return []       # 观察期存续，保护语义由 retest_confirm 承担
+        return []       # 观察期存续，观察语义由 retest_confirm 承担
     if in_post_judgment_gap(symbol):   # 判决后至新 enter 前
-        return []       # 价格未到下一档均线，没有保护对象
+        return []       # 价格未到下一档均线，没有新信号对象
     return build_stop_t_profit(symbol)
 ```
 
@@ -265,8 +260,8 @@ def generate_holding_rows(symbol):
 | 池内票、趋势 UP | stop zone 滚动上移（**原地更新，记 zone_update**）＋ t（**每晚新建，旧行 eod EXPIRED**）＋ profit（原地更新或 trailing，记 zone_update） |
 | 池内票、趋势 DOWN | stop zone 更新为支撑位，不生成 BUY 行 |
 | UP→DOWN 翻转当晚 | 原 T_BUY 连坐 INVALIDATED，stop zone 更新为支撑位 |
-| **观察哨存续期间（有 ACTIVE retest_confirm）** | **暂停生成 stop / profit / t**；保护语义由 retest_confirm 承担 |
-| **判决三终态落地后至新 enter 前** | **仍暂停生成**（价格未到下一档均线，没有保护对象） |
+| **观察哨存续期间（有 ACTIVE retest_confirm）** | **暂停生成 stop / profit / t**；观察语义由 retest_confirm 承担 |
+| **判决三终态落地后至新 enter 前** | **仍暂停生成**（价格未到下一档均线，没有新信号对象） |
 | **新 enter 触达后** | **恢复正常生成** |
 
 **parent 规则**：parent_id 指向该 symbol 最近一次 TRIGGERED 的 enter；无则 `pool:<symbol>`。
@@ -361,10 +356,9 @@ guard:
 | Signal（role=entry） | ACTIVE → TRIGGERED / EXPIRED / INVALIDATED | 候选买点，触达即终态；ma_tomorrow 系仅在 trigger_window 内触发 |
 | Signal（role=stop） | 同上 | 池内票风控线，破位即 TRIGGERED；break_qualifier 记录定性 |
 | Signal（role=profit） | 同上 | 池内票止盈参考 |
-| Signal（role=t） | 同上 | 池内票做T参考；配对靠回执推导；每晚新建、当日有效 |
+| Signal（role=t） | 同上 | 池内票做T参考；配对由 t-buy/t-sell 信号推导；每晚新建、当日有效 |
 | Signal（role=retest_confirm） | 同上 | 观察哨，三终态即“判决” |
 | PoolEntry | in / out | 关注关系 |
-| Receipt | executed / ignored / veto | 标注 |
 | ContextMark | ACTIVE / INACTIVE | 轻量环境标记 |
 
 ```python
@@ -372,7 +366,6 @@ TRANSITIONS = {
     ("ACTIVE", "hit"):            "TRIGGERED",
     ("ACTIVE", "eod"):            "EXPIRED",
     ("ACTIVE", "premise_broken"): "INVALIDATED",
-    ("ACTIVE", "human_veto"):     "INVALIDATED",
 }
 ```
 
@@ -485,7 +478,7 @@ if same_ma_stop_count(symbol, ma_n=5, days=cfg.reentry_rules.same_ma_cooldown_da
 
 | 触发 | 条件 | 产生 | parent_id | 实现 |
 |---|---|---|---|---|
-| enter TRIGGERED | 回执入场 | 该 stop 的 parent 锚点更新为新 enter（如无 stop 则新建） | — | evening |
+| enter TRIGGERED | 客观触发入场 | 该 stop 的 parent 锚点更新为新 enter（如无 stop 则新建） | — | evening |
 | 池内票，每晚 evening | 趋势 UP/DOWN 且**无 ACTIVE retest_confirm** | 更新 stop、t、profit | → 最近 TRIGGERED enter 或 pool | generator |
 | 池内票，观察哨存续 | 有 ACTIVE retest_confirm | **暂停生成 stop/profit/t** | — | generator |
 | 池内票，判决后至新 enter 前 | 无 ACTIVE stop 且价格未到均线 | **暂停生成** | — | generator |
@@ -504,21 +497,19 @@ if same_ma_stop_count(symbol, ma_n=5, days=cfg.reentry_rules.same_ma_cooldown_da
 
 | 槽位 | 投影规则 |
 |---|---|
-| A0 今日执行回顾 | 当日进入 TRIGGERED 的全部 Signal ＋ receipts ＋机械 vs 实际差异 |
+| A0 信号日触发回顾 | 信号日进入 TRIGGERED 的全部 Signal，不附执行状态 |
 | 环境行 | context_marks（ACTIVE）＋ event_calendar |
 | 候选区 | ACTIVE 的 entry，经三个前置检查过滤；同票多策略全部列出不合并；超 watchlist 上限标 truncated；ma_tomorrow 系附 `触发窗口：14:30–15:00` |
-| 池内票区 | 池内票的 ACTIVE stop/profit/t（原“持仓区”改名） |
+| 止盈 / 止损 / 做T区 | 池内票的 ACTIVE stop/profit/t（原“持仓区”改名） |
 | 破位区 | 当日进入 TRIGGERED 的 stop，附 break_qualifier |
 | 观察区 | ACTIVE 的 retest_confirm |
 | 判决区 | 当日 signals.closed_at 的 retest_confirm 终态 |
 
 **关键约束**：
 
-1. **同一只票可同时在候选区和池内票区出现，不折叠。**
+1. **同一只票可同时在候选区和止盈 / 止损 / 做T区出现，不折叠。**
 2. **观察区与判决区互斥**。
 3. **判决区只显示当天刚结案的**；回看走“近期已结案”小节。
-
-**零预案日两个变体**：市场熔断型（LOW+指数DOWN，**破位定性取消延迟判决**）；节假日型（长假前最后一交易日，停止新 BUY）。
 
 ## 9. 统计（两层）
 
@@ -543,7 +534,7 @@ if same_ma_stop_count(symbol, ma_n=5, days=cfg.reentry_rules.same_ma_cooldown_da
 - 池子质量报表。
 - 合成 parent（`pool:` 前缀）的信号链不进统计。
 
-**行为层（回执驱动，覆盖率<50% 明示“数据不足”）**：纪律执行率；做T增值粗算；复原违规次数。
+**行为层（客观信号驱动）**：做T增值粗算；复原违规次数。
 
 **明确删除**：账户盈亏、连续亏损、违规计数、杠杆提醒、浮盈计算。
 
@@ -583,7 +574,7 @@ test_ma / test_trend / test_volume / test_selector / test_lifecycle / test_order
 | 不做 | 原因 |
 |---|---|
 | 选股/题材判断 | “没啥指标，就一眼感觉”。pool 落表并审计质量，不判断 |
-| 支撑压力精密算法 | 机械代理＋premise 标注，人可 veto |
+| 支撑压力精密算法 | 机械代理＋premise 标注 |
 | 日内纠错决策 | 只发收复提醒，追不追是人 |
 | 破位后“利润或纪律”的二选一 | 系统不知道你的利润厚度 |
 | 个股与大盘压力冲突优先级 | “人是活的” |
@@ -608,11 +599,11 @@ test_ma / test_trend / test_volume / test_selector / test_lifecycle / test_order
 | signals.tag 8 值平铺 | 改为 role 5 值 + side 双字段 |
 | **`holding:<symbol>` 前缀** | **改 `pool:<symbol>`，与铁律一“pool 是关注范围”一致** |
 | **“熔断日 STOP 收紧为破位即 SELL”** | **改写为“熔断日破位定性取消延迟判决”** |
-| **“entry 产生持仓上下文”措辞** | **改为“成为后续保护行的 parent 锚点＋统计分母”** |
+| **“entry 产生持仓上下文”措辞** | **改为“成为后续止盈 / 止损 / 做T 行的 parent 锚点＋统计分母”** |
 
 ## 13. 当前实施状态
 
-已实现：市场输入与尾盘快照、selector 按事实独立选策、volume_breakout 独立 assignment、同票多策略不去重全部推送、A0 今日执行回顾、零预案日严格报告、EV_NEG 报告记录、节假日日历、一字首开分类、`stats --date` 接线 correction/restore、破位四路定性、retest_confirm 生成/到期/放量收复判决、观察哨存续禁买、同均线家族冷却、`settle/watch` CLI 接线。
+已实现：市场输入与尾盘快照、selector 按事实独立选策、volume_breakout 独立 assignment、同票多策略不去重全部推送、A0 信号日触发回顾、EV_NEG 报告记录、节假日日历、一字首开分类、`stats --date` 接线 correction/restore、破位四路定性、retest_confirm 生成/到期/放量收复判决、观察哨存续禁买、同均线家族冷却、`settle/watch` CLI 接线。
 
 统计链路已接入持久快照：`market_snapshots` 保存收盘价、最低/最高价、量比与两源异常；`zone_snapshots` 保存信号初始区间和 STOP 滚动更新区间。`run_evening` 落行情快照，`save_signal` 落初始区间快照，`run_settle` 在 STOP 区间更新时落新快照。`stats --date` 会消费当日行情快照计算可达性；STOP 后 5 日追踪用 `closed_at` 时点区间快照，不再读取当前区间。v8.1 的 A1-A5、B1-B8、C2 均已实现。
 

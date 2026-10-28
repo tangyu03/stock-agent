@@ -6,9 +6,8 @@ from pointtable.core.auction import AuctionPattern, classify_auction
 from pointtable.core.calendar import is_trading_day, load_holidays
 from pointtable.core.volume import BreakQualifier
 from pointtable.db.session import get_connection, init_db, save_journal, save_signals, set_database_path
-from pointtable.jobs.execution_review import today_execution_review
-from pointtable.jobs.market_pipeline import volume_breakout_decision
-from pointtable.jobs.routines import run_settle
+from pointtable.jobs.evening import signal_day_trigger_review, volume_breakout_decision
+from pointtable.jobs.settle import run_settle
 from pointtable.jobs.watch import stop_break_decision
 from pointtable.models.journal import JournalEntry
 from pointtable.models.signal import Signal, SignalSide, SignalStatus, SignalTag, SignalTrend, SignalValidPolicy
@@ -46,7 +45,7 @@ def test_same_symbol_entries_are_not_deduped():
     assert [entry.strategy_id for entry in entries[:2]] == ['first_move_5d', 'volume_breakout']
 
 
-def test_execution_review_flags_missing_mechanical_receipt(tmp_db):
+def test_execution_review_is_objective_trigger_audit(tmp_db):
     signal = _entry('300001', 'first_move_5d')
     stop = signal.model_copy(update={
         'id': '2026-01-01-300001-stop',
@@ -68,9 +67,10 @@ def test_execution_review_flags_missing_mechanical_receipt(tmp_db):
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
     ))
     conn.commit()
-    rows = today_execution_review(conn, '2026-01-01')
-    assert rows[0]['mechanical'] is True
-    assert rows[0]['difference'] == '未回执'
+    rows = signal_day_trigger_review(conn, '2026-01-01')
+    assert 'mechanical' not in rows[0]
+    assert 'verdict' not in rows[0]
+    assert 'difference' not in rows[0]
 
 
 def test_volume_breakout_requires_price_volume_and_yang_close():

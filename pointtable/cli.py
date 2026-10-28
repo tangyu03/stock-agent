@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sqlite3
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 
 import yaml
@@ -11,26 +14,29 @@ import yaml
 from .db.session import (
     get_connection,
     init_db,
+    load_pending_correction_anchors,
+    load_correction_events,
     load_event_calendar,
     load_market_snapshots,
+    load_report_signal_snapshot,
+    signal_from_row,
     set_database_path,
 )
 from .jobs.cutover import expire_legacy_signals, formal_push_ready, switch_push_mode
 from .core.generator import TSizeChoice, apply_t_size_choice
 from .core.sector import load_theme_map
 from .core.calendar import load_holidays
+from .core.calendar import is_trading_day
 from .core.auction import AuctionPattern
-from .jobs.routines import run_auction, run_evening, run_restore, run_settle, run_watch
-from .jobs.execution_review import today_execution_review
-from .jobs.market_pipeline import load_risk_config
-from .jobs.market_pipeline import fetch_market_input
-from .jobs.scheduler import next_routine
-from .jobs.tail_snapshot import capture_tail_snapshots
-from .jobs.tail_snapshot import load_tail_prices
+from .jobs.auction_call import run_auction
+from .jobs.evening import evening_report, fetch_market_input, load_risk_config, run_evening, signal_day_trigger_review
+from .jobs.restore_check import capture_tail_snapshots, load_tail_prices, run_restore
+from .jobs.settle import run_settle
+from .jobs.watch import run_watch
 from .jobs.migration import migration_status
 from .jobs.shadow import run_shadow
+from .stats import pool_performance_report
 from .jobs.evening import evening_report
-from .models.receipt import ReceiptEntry, ReceiptVerdict
 from .stats import behavior, correction_hit_rate, pool_quality, signal_quality, stop_outcomes
 from .notify.push import PushPlusSender
 
@@ -39,25 +45,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 
-def add_receipt(
-    signal_id: str,
-    verdict: str,
-    size_filled: int | None = None,
-    created_at: str | None = None,
-) -> int:
-    entry = ReceiptEntry(
-        signal_id=signal_id,
-        verdict=ReceiptVerdict(verdict),
-        size_filled=size_filled,
-        created_at=datetime.fromisoformat(created_at) if created_at else datetime.now(timezone.utc),
+def _configure_logging() -> None:
+    logging.basicConfig(
+        filename=Path(__file__).parents[1] / 'data' / 'pointtable.log',
+        encoding='utf-8',
+        level=logging.WARNING,
+        format='%(asctime)s %(levelname)s %(name)s %(message)s',
     )
-    conn = get_connection()
-    cursor = conn.execute(
-        'INSERT OR IGNORE INTO receipts (signal_id, verdict, size_filled, created_at) VALUES (?,?,?,?)',
-        (entry.signal_id, entry.verdict.value, entry.size_filled, entry.created_at.isoformat(timespec='seconds')),
-    )
-    conn.commit()
-    return cursor.rowcount
 
 
 def list_holdings() -> list[sqlite3.Row]:
@@ -102,10 +96,6 @@ def stats_report(performance: dict | None = None, date: str | None = None) -> di
     }
     for row in signals:
         row.update(stop_tracking.get(str(row['id']), {}))
-    receipts = [dict(row) for row in conn.execute('SELECT signal_id, verdict FROM receipts')]
-    receipt_by_signal = {row['signal_id']: row['verdict'] for row in reversed(receipts)}
-    for row in signals:
-        row['verdict'] = receipt_by_signal.get(row['id'])
     pool_rows = [dict(row) for row in conn.execute('SELECT symbol, theme_label FROM pool GROUP BY symbol')]
     market_rows = load_market_snapshots(conn, date)
     behavior_data = behavior(signals)
@@ -131,7 +121,7 @@ def legacy_signals() -> list[sqlite3.Row]:
 
 def audit_pool_themes(theme_map_path: Path | None = None) -> dict:
     mapping = load_theme_map(
-        theme_map_path or Path(__file__).parents[0] / 'config' / 'theme_map.yaml'
+        theme_map_path or Path(__file__).parents[1] / 'config' / 'theme_map.yaml'
     )
     rows = get_connection().execute(
         '''SELECT symbol, GROUP_CONCAT(DISTINCT theme_label) AS pool_theme
@@ -160,11 +150,11 @@ def build_report(
     report_date: str,
     market: dict[str, Any] | None = None,
 ) -> str:
-    from .jobs.routines import signal_from_row
     from .notify.render import render_report
 
     signal_date = str((market or {}).get('trade_date') or report_date)
-    signal_rows = [
+    report_snapshot = load_report_signal_snapshot(get_connection(), report_date)
+    signal_rows = report_snapshot or [
         signal_from_row(row)
         for row in get_connection().execute(
             '''
@@ -186,14 +176,18 @@ def build_report(
         by_symbol.setdefault(signal.symbol, []).append(signal)
     market_for_report = dict((market or {}).get('market') or market or {})
     market_for_report['assignments'] = list((market or {}).get('assignments') or [])
+    market_for_report['signal_rows'] = list((market or {}).get('signal_rows') or [])
     market_for_report['name_map'] = {
         **{str(code): str(name) for code, name in ((market or {}).get('name_map') or {}).items()},
         **name_by_symbol,
     }
+    market_for_report['spot_prices'] = {
+        **{str(code): value for code, value in ((market or {}).get('spot_prices') or {}).items()},
+    }
     for key in ('pool_total', 'watchlist_limit', 'retest_window_days'):
         if (market or {}).get(key) is not None:
             market_for_report[key] = market[key]
-    risk_config = load_risk_config(Path(__file__).parents[0] / 'config' / 'config.yaml')
+    risk_config = load_risk_config(Path(__file__).parents[1] / 'config' / 'config.yaml')
     market_for_report.setdefault('retest_window_days', risk_config['retest_window_days'])
     market_for_report.setdefault('holidays', [value.isoformat() for value in risk_config['holidays']])
     market_for_report['recent_stop_counts'] = (market or {}).get('recent_stop_counts') or {}
@@ -205,7 +199,13 @@ def build_report(
         ).fetchall()
     ]
     market_for_report['event_calendar'] = load_event_calendar(get_connection(), signal_date)
-    market_for_report['execution_review'] = today_execution_review(get_connection(), signal_date)
+    market_for_report['correction_anchors'] = [
+        anchor
+        for anchor in load_pending_correction_anchors(get_connection())
+        if anchor['trade_date'] == signal_date
+    ]
+    market_for_report['correction_events'] = load_correction_events(get_connection(), signal_date)
+    market_for_report['execution_review'] = signal_day_trigger_review(get_connection(), signal_date)
     market_for_report['ev_negative_strategies'] = sorted({
         signal.strategy_id
         for signals in by_symbol.values()
@@ -215,17 +215,112 @@ def build_report(
     return render_report(report_date, market_for_report, [], signal_rows)
 
 
+def _next_trading_day(value: date, holidays: set[date]) -> date:
+    current = value + timedelta(days=1)
+    while not is_trading_day(current, holidays):
+        current += timedelta(days=1)
+    return current
+
+
+def _previous_trading_day(value: date, holidays: set[date]) -> date:
+    current = value - timedelta(days=1)
+    while not is_trading_day(current, holidays):
+        current -= timedelta(days=1)
+    return current
+
+
+def plan_dates(target_date: str | None = None) -> dict[str, str]:
+    config = load_risk_config(Path(__file__).parents[1] / 'config' / 'config.yaml')
+    holidays = config['holidays']
+    if target_date:
+        target = date.fromisoformat(target_date)
+        if not is_trading_day(target, holidays):
+            target = _next_trading_day(target, holidays)
+    else:
+        current = datetime.now().astimezone()
+        if is_trading_day(current.date(), holidays) and current.time() < time(15, 5):
+            target = current.date()
+        else:
+            target = _next_trading_day(current.date(), holidays)
+    return {
+        'target_date': target.isoformat(),
+        'signal_date': _previous_trading_day(target, holidays).isoformat(),
+    }
+
+
+def settle_before_evening(signal_date: str, payload: dict) -> dict[str, list[str]]:
+    now = datetime.now().astimezone()
+    signal_day = date.fromisoformat(signal_date)
+    if signal_day > now.date() or (
+        signal_day == now.date() and now.time() < time(15, 5)
+    ):
+        return {}
+    now = datetime.combine(
+        signal_day,
+        time(15, 5),
+        tzinfo=now.tzinfo,
+    )
+    risk_config = load_risk_config(Path(__file__).parents[1] / 'config' / 'config.yaml')
+    signal_symbols = {
+        str(row['symbol'])
+        for row in (payload.get('signal_rows') or [])
+    } | {
+        str(row['symbol'])
+        for row in (payload.get('assignments') or [])
+    }
+    close_prices = {
+        str(row['symbol']): float(row['est_close'])
+        for row in (payload.get('signal_rows') or [])
+        if row.get('symbol') in signal_symbols and row.get('est_close') is not None
+    }
+    low_prices = {
+        str(row['symbol']): float(row['low'])
+        for row in (payload.get('signal_rows') or [])
+        if row.get('symbol') in signal_symbols and row.get('low') is not None
+    }
+    high_prices = {
+        str(row['symbol']): float(row['high'])
+        for row in (payload.get('signal_rows') or [])
+        if row.get('symbol') in signal_symbols and row.get('high') is not None
+    }
+    volume_ratios = {
+        str(row['symbol']): float(row['volume_ratio'])
+        for row in (payload.get('signal_rows') or [])
+        if row.get('volume_ratio') is not None
+    }
+    break_contexts = {
+        str(row['symbol']): {
+            'volume_ratio': row.get('volume_ratio') or 0,
+            'active_delta': row.get('active_delta'),
+            'stock_triggered': False,
+            'sector_triggered': False,
+            'index_triggered': False,
+        }
+        for row in payload.get('signal_rows') or []
+    }
+    return run_settle(
+        get_connection(),
+        now,
+        stop_zones=payload.get('stop_zones') or {},
+        close_prices=close_prices,
+        low_prices=low_prices,
+        high_prices=high_prices,
+        volume_ratios=volume_ratios,
+        break_contexts=break_contexts,
+        market_tier=str((payload.get('market') or {}).get('tier') or 'NORMAL'),
+        index_trend=str((payload.get('market') or {}).get('index_trend') or 'UP'),
+        created_before=signal_day,
+        retest_window_days=risk_config['retest_window_days'],
+        retest_volume_min=risk_config['retest_volume_min'],
+        holidays=risk_config['holidays'],
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='pointtable')
     parser.add_argument('--db', type=Path, default=None)
     parser.add_argument('--legacy', action='store_true', help='query system migration audit rows')
     commands = parser.add_subparsers(dest='command')
-    receipt = commands.add_parser('receipt')
-    receipt.add_argument('signal_id')
-    receipt.add_argument('--verdict', choices=[item.value for item in ReceiptVerdict], required=True)
-    receipt.add_argument('--size-filled', type=int)
-    veto = commands.add_parser('veto')
-    veto.add_argument('signal_id')
     stats = commands.add_parser('stats')
     stats.add_argument('--date')
     stats.add_argument('--window', type=int, default=5)
@@ -290,6 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
     tail.add_argument('--now')
     market_input.add_argument('--date', required=True)
     market_input.add_argument('--output', type=Path, required=True)
+    plan = commands.add_parser('plan')
+    plan.add_argument('--date')
     performance = commands.add_parser('pool-performance')
     performance.add_argument('--date', required=True)
     performance.add_argument('--window', type=int, default=5)
@@ -299,7 +396,46 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+class Routine(str, Enum):
+    AUCTION = 'auction'
+    WATCH = 'watch'
+    TAIL = 'tail'
+    RESTORE = 'restore'
+    SETTLE = 'settle'
+    EVENING = 'evening'
+
+
+FIXED_TIMES = {
+    Routine.AUCTION: time(9, 25),
+    Routine.WATCH: time(9, 30),
+    Routine.TAIL: time(14, 30),
+    Routine.RESTORE: time(14, 31),
+    Routine.SETTLE: time(15, 5),
+    Routine.EVENING: time(15, 30),
+}
+
+
+@dataclass(frozen=True)
+class ScheduledRoutine:
+    routine: Routine
+    run_at: datetime
+
+
+def next_routine(now: datetime, holidays: set | None = None) -> ScheduledRoutine:
+    if now.tzinfo is None:
+        raise ValueError('now must be timezone-aware')
+    candidate_date = now.date()
+    while True:
+        if is_trading_day(candidate_date, holidays):
+            for routine in Routine:
+                scheduled = datetime.combine(
+                    candidate_date, FIXED_TIMES[routine], tzinfo=now.tzinfo
+                )
+                if scheduled > now:
+                    return ScheduledRoutine(routine, scheduled)
+        candidate_date += timedelta(days=1)
 def main(argv: list[str] | None = None) -> int:
+    _configure_logging()
     args = build_parser().parse_args(argv)
     if not args.command and not args.legacy:
         raise SystemExit('pointtable: error: a command is required')
@@ -309,15 +445,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.legacy:
         print(json.dumps([dict(row) for row in legacy_signals()], ensure_ascii=False, indent=2))
         return 0
-    if args.command in {'receipt', 'veto'}:
-        verdict = 'veto' if args.command == 'veto' else args.verdict
-        inserted = add_receipt(args.signal_id, verdict, getattr(args, 'size_filled', None), _now())
-        print(json.dumps({'signal_id': args.signal_id, 'verdict': verdict, 'inserted': inserted}, ensure_ascii=False))
-    elif args.command == 'stats':
+    if args.command == 'stats':
         performance = None
         if args.date:
-            from .jobs.performance import pool_performance_report
-
             performance = pool_performance_report(get_connection(), args.date, window=args.window)
         print(json.dumps(stats_report(performance, args.date), ensure_ascii=False, indent=2))
     elif args.command == 'holdings':
@@ -370,7 +500,7 @@ def main(argv: list[str] | None = None) -> int:
         now = datetime.now(timezone.utc)
         print(json.dumps(run_auction(get_connection(), args.date, AuctionPattern(args.pattern), now), ensure_ascii=False, indent=2))
     elif args.command == 'watch':
-        risk_config = load_risk_config(Path(__file__).parents[0] / 'config' / 'config.yaml')
+        risk_config = load_risk_config(Path(__file__).parents[1] / 'config' / 'config.yaml')
         print(json.dumps(run_watch(
             get_connection(), args.price, args.second_cycle,
             datetime.now(timezone.utc), args.volume_ratio, args.date,
@@ -405,14 +535,14 @@ def main(argv: list[str] | None = None) -> int:
         market_payload = json.loads(args.market_json.read_text(encoding='utf-8-sig')) if args.market_json else {}
         market_fields = market_payload.get('market') if isinstance(market_payload.get('market'), dict) else market_payload
         holidays = json.loads(args.holidays_json.read_text(encoding='utf-8-sig')) if args.holidays_json else None
-        risk_config = load_risk_config(Path(__file__).parents[0] / 'config' / 'config.yaml')
+        risk_config = load_risk_config(Path(__file__).parents[1] / 'config' / 'config.yaml')
         print(json.dumps(run_settle(
             get_connection(),
             now,
-            stop_zones,
-            close_prices,
-            volume_ratios,
-            break_contexts,
+            stop_zones=stop_zones,
+            close_prices=close_prices,
+            volume_ratios=volume_ratios,
+            break_contexts=break_contexts,
             retest_window_days=(
                 args.retest_window_days
                 if args.retest_window_days is not None
@@ -434,8 +564,7 @@ def main(argv: list[str] | None = None) -> int:
 
         conn = get_connection()
         t_signals = [signal_from_row(row) for row in conn.execute("SELECT * FROM signals WHERE tag='t'").fetchall()]
-        receipt_rows = [dict(row) for row in conn.execute('SELECT signal_id, verdict FROM receipts').fetchall()]
-        unpaired, no_receipt, _ = find_unpaired_t_buy(t_signals, receipt_rows, args.date)
+        unpaired, _ = find_unpaired_t_buy(t_signals, trade_date=args.date)
         tail_prices = load_tail_prices(conn, args.date)
         signals_by_id = {signal.id: signal for signal in t_signals}
         rows = []
@@ -462,11 +591,11 @@ def main(argv: list[str] | None = None) -> int:
                 'resistance_zone_high': sell.zone_high if sell else signal.zone_high,
                 'minutes_since_tail': int((datetime.now(timezone.utc) - captured_at).total_seconds() / 60) if captured_at else None,
             })
-        print(json.dumps({'unpaired_t_buy': rows, 'no_receipt': no_receipt}, ensure_ascii=False, indent=2))
+        print(json.dumps({'unpaired_t_buy': rows}, ensure_ascii=False, indent=2))
     elif args.command == 'evening':
         print(json.dumps(run_evening(get_connection(), args.input), ensure_ascii=False, indent=2))
     elif args.command == 'next-routine':
-        config_path = Path(__file__).parents[0] / 'config' / 'config.yaml'
+        config_path = Path(__file__).parents[1] / 'config' / 'config.yaml'
         holidays = load_holidays(yaml.safe_load(config_path.read_text(encoding='utf-8')).get('holidays'))
         scheduled = next_routine(datetime.now().astimezone(), holidays)
         print(json.dumps({
@@ -477,8 +606,6 @@ def main(argv: list[str] | None = None) -> int:
         rows = get_connection().execute('SELECT * FROM signals WHERE id=?', (args.signal_id,)).fetchall()
         if not rows:
             raise SystemExit('signal not found')
-        from .jobs.routines import signal_from_row
-
         updated = apply_t_size_choice(signal_from_row(rows[0]), TSizeChoice(args.choice))
         from .db.session import save_signal
 
@@ -493,8 +620,46 @@ def main(argv: list[str] | None = None) -> int:
             args.output.write_text(text, encoding='utf-8')
         else:
             print(text)
+    elif args.command == 'plan':
+        dates = plan_dates(args.date)
+        config_path = Path(__file__).parents[1] / 'config' / 'config.yaml'
+        input_path = Path('pointtable') / 'data' / ('evening-' + dates['target_date'] + '.json')
+        payload = fetch_market_input(get_connection(), dates['signal_date'], config_path)
+        input_path.parent.mkdir(parents=True, exist_ok=True)
+        input_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+        settled = settle_before_evening(dates['signal_date'], payload)
+        evening = run_evening(get_connection(), input_path, dates['target_date'])
+        current = datetime.now().astimezone()
+        watch_result: dict[str, Any] = {}
+        if dates['target_date'] == current.date().isoformat() and current.time() < time(15, 5):
+            watch_result = run_watch(
+                get_connection(),
+                0.0,
+                False,
+                current,
+                prices={
+                    str(row['symbol']): float(row['est_close'])
+                    for row in payload.get('signal_rows') or []
+                    if row.get('est_close') is not None
+                },
+            )
+        report_path = Path('reports') / (dates['target_date'] + '-plan.md')
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            build_report(dates['target_date'], payload),
+            encoding='utf-8',
+        )
+        print(json.dumps({
+            'report': str(report_path),
+            'target_date': dates['target_date'],
+            'signal_date': dates['signal_date'],
+            'input': str(input_path),
+            'settle': settled,
+            'watch': watch_result,
+            'signal_count': len(evening['signal_ids']),
+        }, ensure_ascii=False, indent=2))
     elif args.command == 'market-input':
-        payload = fetch_market_input(get_connection(), args.date, Path(__file__).parents[0] / 'config' / 'config.yaml')
+        payload = fetch_market_input(get_connection(), args.date, Path(__file__).parents[1] / 'config' / 'config.yaml')
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
         print(json.dumps({
@@ -507,8 +672,6 @@ def main(argv: list[str] | None = None) -> int:
         result = capture_tail_snapshots(get_connection(), args.date, now)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == 'pool-performance':
-        from .jobs.performance import pool_performance_report
-
         print(json.dumps(pool_performance_report(
             get_connection(), args.date, window=args.window,
         ), ensure_ascii=False, indent=2))

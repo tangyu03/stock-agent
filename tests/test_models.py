@@ -4,7 +4,6 @@ from datetime import date, datetime, timezone
 from pointtable.models import (
     JournalEntry,
     PoolEntry,
-    ReceiptEntry,
     Signal,
     SignalSide,
     SignalStatus,
@@ -50,12 +49,10 @@ def test_signal_terminal_status_requires_closed_at():
         )
 
 
-def test_journal_and_receipt_models_are_immutable_by_contract():
+def test_journal_models_are_immutable_by_contract():
     now = datetime.now(timezone.utc)
     journal = JournalEntry(signal_id="s1", from_status="ACTIVE", to_status="TRIGGERED", created_at=now)
-    receipt = ReceiptEntry(signal_id="s1", verdict="executed", created_at=now)
     assert journal.record_type.value == "transition"
-    assert receipt.verdict.value == "executed"
 
 
 def test_pool_requires_theme_label():

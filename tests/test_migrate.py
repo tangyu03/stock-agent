@@ -62,18 +62,15 @@ def test_migration_is_idempotent(source_db: Path):
     first = migrate(source_db, output_dir, database_path)
     assert first["checks"]["signals_inserted"] == 1
     assert first["checks"]["journal_inserted"] == 1
-    assert first["receipts"]["inserted"] == 1
 
     conn = get_connection()
     assert conn.execute("select count(*) from signals").fetchone()[0] == 1
     assert conn.execute("select count(*) from journal").fetchone()[0] == 1
-    assert conn.execute("select count(*) from receipts").fetchone()[0] == 1
     conn.commit()
 
     second = migrate(source_db, output_dir, database_path)
     assert second["checks"]["signals_inserted"] == 0
     assert second["checks"]["journal_inserted"] == 0
-    assert second["receipts"]["inserted"] == 0
 
 
 def test_migration_exports_history_csv(source_db: Path):

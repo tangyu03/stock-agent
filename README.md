@@ -2,11 +2,11 @@
 
 旧表字段映射与测试模块映射见 `MIGRATION_MAPPING.md`。
 
-推送变少是设计不是故障：v6 只做人工触发的单向通知，不做定时自动推送，也不做按钮回传。所有执行/否决/T 档动作都通过 CLI 回执完成。
+推送变少是设计不是故障：v6 只做人工触发的单向通知，不做定时自动推送，也不做按钮回传。系统只生成信号和客观触发回顾，不要求、不记录、不推断人工执行。
 
 ## v6 当前形态
 
-- 新主链路在 `pointtable/`：四领域模型、四表 schema、点位生成器、生命周期、任务、报告、推送和统计。
+- 新主链路在 `pointtable/`：三领域模型、点位生成器、生命周期、任务、报告、推送和统计。
 - 保留 `theme_map`、`pointtable/data/akshare.py` 安全封装、`DataFreshnessGuard` 和脏数据闸门；决策层评分、调度、组合、回测引擎已移除。
 - 指数与股票 K 线优先走腾讯日线；东财、新浪保留为兜底。腾讯请求强制 `trust_env=False`，避免 Windows 系统代理把请求注入到 `127.0.0.1:9`。
 - 旧源码冻结在 `legacy/`，只作一个月回查归档，不参与新链路。
@@ -14,9 +14,19 @@
 
 ## 运行
 
+日常一条命令生成交易计划。默认盘前/盘中生成当日，15:05 后先生成当日清点，再生成下一交易日；周末自动跳到下一交易日：
+
 ```bash
-python -m pointtable.cli --db pointtable/data/pointtable.db receipt <signal_id> --verdict executed --size-filled 100
-python -m pointtable.cli --db pointtable/data/pointtable.db veto <signal_id>
+python -m pointtable.cli plan
+```
+
+显式指定目标交易日：
+
+```bash
+python -m pointtable.cli plan --date 2026-10-26
+```
+
+```bash
 python -m pointtable.cli --db pointtable/data/pointtable.db stats
 python -m pointtable.cli --db pointtable/data/pointtable.db stats --date 2026-10-22
 python -m pointtable.cli --db pointtable/data/pointtable.db holdings
@@ -43,7 +53,7 @@ python -m pointtable.cli --db pointtable/data/pointtable.db shadow-run --date 20
   --expected-id 2026-10-22-300001-first_move_5d-z
 ```
 
-复制 `pointtable/config/push.yaml.example` 为 `pointtable/config/push.yaml`；配置 `pushplus.test_token` 后，可加 `--push-test` 把影子结果发到测试通道。正式 token 不入库。
+复制 `config/push.yaml.example` 为 `config/push.yaml`；配置 `pushplus.test_token` 后，可加 `--push-test` 把影子结果发到测试通道。正式 token 不入库。
 
 报告也只在明确执行命令时推送；`push-file` 是单向通知，不等待、不接收任何交互回传：
 
@@ -75,7 +85,7 @@ python -m pointtable.cli --db pointtable/data/pointtable.db report --date 2026-1
 
 个股 K 线经过 `DataFreshnessGuard` 和报价清洁检查；监管和龙虎榜结果会写入每只池内票的 `premise_facts`。`context_marks` 保存指数/板块区间触发时间，`event_calendar` 承接尾盘 `ma_tomorrow` 提示，二者都不再伪装成 signals。
 
-报告按 signals 投影：候选、池内票保护行、破位、观察区、判决区互不折叠；同票多策略不合并，并显示名称和现价。
+报告按 signals 投影：A0信号日触发回顾、环境、候选、池内票区、破位区、观察区、判决区互不折叠。候选按股票分组并展示前提、失效和依据；池内票按股票分组合并展示止损、止盈和做T。观察哨存续票在池内票区只显示观察哨提示，不显示普通保护行。
 
 `pool.role` 区分 `holding/index/sector/candidate`；旧库自动补列，存量默认 `holding`。`holdings` 和报告只读取 `holding`，`market-input` 会按 `watchlist_limit` 和 priority 截断全部池内票。
 
@@ -107,8 +117,8 @@ python -m pointtable.cli --db pointtable/data/pointtable.db --legacy
 
 - `ENTER` 默认 `NEXT_DAY`：当晚生成，次日盘前/盘中仍可触发；生成当天收盘结算不失效，次一交易日收盘结算后未触发才过期。
 - `STOP` 持续有效；`PROFIT` 可按策略配置为固定压力或 `trailing` 移动止盈提示。
-- 同票多策略不合并、不去重；报告显示名称、现价、前提、支撑/压力、突破位和破位 qualifier。
-- 两源异常只标记并从可达性/EV 审计剔除，不直接拦截当晚计划；节假日零预案日停止新 BUY。
+- 同票多策略不合并、不去重；报告显示名称、现价、前提、失效线和破位 qualifier。
+- 两源异常只标记并从可达性/EV 审计剔除，不直接拦截当晚计划。
 - `journal.confirmed/touched_only` 已移除，只保留 `record_type`。
 
 ```bash
@@ -117,20 +127,10 @@ python -X utf8 -m pytest -q -p no:tmpdir -p no:cacheprovider --ignore=legacy --i
 
 验收重点：均线锚点误差小于 0.5%，影子期无漏报，切流后旧信号全量失效，两层统计可正常产出。
 
+python -m pointtable.cli plan
 
-以下是图片中提取的文字内容：
+默认自动判断：盘前/盘中生成当日计划；15:05 后生成下一交易日；周末自动顺延。
 
-现在（10/23 早上）生成 10/23 交易计划，用 10/22 作为行情基准日：
+指定日期的口子：
 
-python -X utf8 -m pointtable.cli --db pointtable/data/pointtable.db market-input --date 2026-10-22 --output pointtable/data/evening-2026-10-22.json
-
-python -X utf8 -m pointtable.cli --db pointtable/data/pointtable.db evening --input pointtable/data/evening-2026-10-22.json
-
-python -X utf8 -m pointtable.cli --db pointtable/data/pointtable.db report --date 2026-10-22 --market-json pointtable/data/evening-2026-10-22.json --output reports/2026-10-23-plan.md
-
-说明：
-
-- market-input 拉取 10/22 及以前的数据，生成计划输入。
-- evening 把计划信号写入数据库。
-- report 生成计划报告。
-- 输出文件名用 2026-10-23-plan.md，但 --date 必须是 2026-10-22，否则读不到对应的计划信号。
+python -m pointtable.cli plan --date 2026-10-26

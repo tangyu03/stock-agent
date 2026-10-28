@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from ..models.journal import JournalEntry
 from ..models.context_mark import ContextMark, ContextStatus, ContextType
 from ..models.event_calendar import EventCalendar
-from ..models.signal import Signal, SignalRole, SignalValidPolicy
+from ..models.signal import Signal, SignalRole, SignalStatus, SignalValidPolicy
 
 _DATABASE_PATH = Path(__file__).resolve().parents[1] / "data" / "pointtable.db"
 _local = threading.local()
@@ -98,6 +98,49 @@ CREATE TABLE IF NOT EXISTS zone_snapshots (
 CREATE INDEX IF NOT EXISTS idx_signals_symbol_status ON signals(symbol, status);
 CREATE INDEX IF NOT EXISTS idx_signals_parent ON signals(parent_id);
 
+CREATE TABLE IF NOT EXISTS signal_trigger_snapshots (
+    signal_id TEXT NOT NULL,
+    triggered_at TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    side TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    role TEXT NOT NULL,
+    zone_low REAL NOT NULL,
+    zone_high REAL NOT NULL,
+    parent_id TEXT,
+    created_at TEXT NOT NULL,
+    valid_policy TEXT NOT NULL,
+    PRIMARY KEY (signal_id, triggered_at)
+);
+
+CREATE TABLE IF NOT EXISTS report_signal_snapshots (
+    report_date TEXT NOT NULL,
+    signal_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    side TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    role TEXT NOT NULL,
+    zone_low REAL NOT NULL,
+    zone_high REAL NOT NULL,
+    size_hint INTEGER,
+    premise TEXT NOT NULL DEFAULT '{}',
+    break_qualifier TEXT,
+    settlement_outcome TEXT,
+    trend TEXT NOT NULL,
+    activation TEXT,
+    valid_policy TEXT NOT NULL,
+    status TEXT NOT NULL,
+    status_reason TEXT NOT NULL DEFAULT '',
+    parent_id TEXT,
+    created_at TEXT NOT NULL,
+    closed_at TEXT,
+    trigger_window_start TEXT,
+    trigger_window_end TEXT,
+    PRIMARY KEY (report_date, signal_id)
+);
+
 CREATE TABLE IF NOT EXISTS journal (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     signal_id TEXT NOT NULL,
@@ -111,17 +154,6 @@ CREATE TABLE IF NOT EXISTS journal (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_journal_transition
 ON journal(signal_id, created_at, from_status, to_status, reason, COALESCE(price, -1));
 CREATE INDEX IF NOT EXISTS idx_journal_signal ON journal(signal_id, created_at);
-
-CREATE TABLE IF NOT EXISTS receipts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    signal_id TEXT NOT NULL,
-    verdict TEXT NOT NULL CHECK (verdict IN ('executed','ignored','veto')),
-    size_filled INTEGER,
-    created_at TEXT NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_receipt_transition
-ON receipts(signal_id, verdict, COALESCE(size_filled, -1), created_at);
-CREATE INDEX IF NOT EXISTS idx_receipts_signal ON receipts(signal_id, created_at);
 
 CREATE TABLE IF NOT EXISTS pool (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,7 +190,7 @@ CREATE TABLE IF NOT EXISTS event_calendar (
 );
 
 CREATE TABLE IF NOT EXISTS correction_anchors (
-    signal_id TEXT PRIMARY KEY,
+    signal_id TEXT NOT NULL,
     symbol TEXT NOT NULL,
     trade_date TEXT NOT NULL,
     qualifier TEXT NOT NULL,
@@ -166,14 +198,29 @@ CREATE TABLE IF NOT EXISTS correction_anchors (
     zone_high REAL NOT NULL,
     notice_price REAL,
     noticed_at TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (signal_id, trade_date)
 );
+
+CREATE TABLE IF NOT EXISTS correction_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date TEXT NOT NULL,
+    signal_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    trigger TEXT NOT NULL CHECK (trigger IN ('same_day_close','retest_pass','post_break_retest')),
+    notice TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(trade_date, signal_id, trigger)
+);
+CREATE INDEX IF NOT EXISTS idx_correction_events_date ON correction_events(trade_date);
 """
 
 
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(SCHEMA)
+        _rebuild_correction_anchors_schema(conn)
+        conn.execute("DROP TABLE IF EXISTS receipts")
         _rebuild_signals_schema(conn)
         conn.execute("UPDATE signals SET role='retest_confirm' WHERE tag='retest_confirm' AND role<>'retest_confirm'")
         _migrate_journal_schema(conn)
@@ -192,12 +239,46 @@ def init_db() -> None:
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_pool_symbol_theme_role ON pool(date, symbol, theme_label, role)")
 
 
+def _rebuild_correction_anchors_schema(conn: sqlite3.Connection) -> None:
+    columns = conn.execute('PRAGMA table_info(correction_anchors)').fetchall()
+    if len([column for column in columns if column['pk'] == 1]) == 2:
+        return
+    conn.execute('ALTER TABLE correction_anchors RENAME TO correction_anchors_legacy')
+    conn.execute('''
+        CREATE TABLE correction_anchors (
+            signal_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            qualifier TEXT NOT NULL,
+            zone_low REAL NOT NULL,
+            zone_high REAL NOT NULL,
+            notice_price REAL,
+            noticed_at TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (signal_id, trade_date)
+        )
+    ''')
+    conn.execute('''
+        INSERT INTO correction_anchors (
+            signal_id, symbol, trade_date, qualifier,
+            zone_low, zone_high, notice_price, noticed_at, created_at
+        )
+        SELECT
+            signal_id, symbol, trade_date, qualifier,
+            zone_low, zone_high, notice_price, noticed_at, created_at
+        FROM correction_anchors_legacy
+    ''')
+    conn.execute('DROP TABLE correction_anchors_legacy')
+
+
 def _rebuild_signals_schema(conn: sqlite3.Connection) -> None:
     table_sql = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='signals'"
     ).fetchone()[0]
     required = ('role', 'break_qualifier', 'trigger_window_start', 'trigger_window_end')
     columns = {row[1] for row in conn.execute('PRAGMA table_info(signals)')}
+    if 'settlement_outcome' not in columns:
+        conn.execute('ALTER TABLE signals ADD COLUMN settlement_outcome TEXT')
     if all(column in columns for column in required) and all(value in table_sql for value in required):
         return
     conn.execute('DROP TABLE IF EXISTS signals_v8')
@@ -251,6 +332,10 @@ def _rebuild_signals_schema(conn: sqlite3.Connection) -> None:
     conn.execute('CREATE INDEX idx_signals_symbol_status ON signals(symbol, status)')
     conn.execute('CREATE INDEX idx_signals_parent ON signals(parent_id)')
 
+    signal_columns = {row[1] for row in conn.execute('PRAGMA table_info(signals)')}
+    if 'settlement_outcome' not in signal_columns:
+        conn.execute('ALTER TABLE signals ADD COLUMN settlement_outcome TEXT')
+
 
 def _migrate_journal_schema(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute('PRAGMA table_info(journal)')}
@@ -286,14 +371,15 @@ def save_signal(conn: sqlite3.Connection, signal: Signal) -> None:
     conn.execute(
         '''INSERT OR REPLACE INTO signals (
                id, symbol, strategy_id, side, tag, role, zone_low, zone_high, size_hint,
-               premise, break_qualifier, trend, activation, valid_policy, status,
-               status_reason, parent_id, created_at, closed_at,
+               premise, break_qualifier, settlement_outcome, trend, activation,
+               valid_policy, status, status_reason, parent_id, created_at, closed_at,
                trigger_window_start, trigger_window_end
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (
             signal.id, signal.symbol, signal.strategy_id, signal.side.value,
             signal.tag.value, signal.signal_role.value, signal.zone_low, signal.zone_high, signal.size_hint,
-            json.dumps(signal.premise, ensure_ascii=False), signal.break_qualifier, signal.trend.value, signal.activation,
+            json.dumps(signal.premise, ensure_ascii=False), signal.break_qualifier, signal.settlement_outcome,
+            signal.trend.value, signal.activation,
             signal.valid_policy.value, signal.status.value, signal.status_reason,
             signal.parent_id, signal.created_at.isoformat(timespec='seconds'),
             signal.closed_at.isoformat(timespec='seconds') if signal.closed_at else None,
@@ -307,6 +393,29 @@ def save_signal(conn: sqlite3.Connection, signal: Signal) -> None:
         signal.zone_low,
         signal.zone_high,
         signal.created_at,
+    )
+
+
+def save_trigger_snapshot(conn: sqlite3.Connection, signal: Signal, triggered_at: datetime) -> None:
+    conn.execute(
+        '''INSERT OR IGNORE INTO signal_trigger_snapshots (
+               signal_id, triggered_at, symbol, strategy_id, side, tag, role,
+               zone_low, zone_high, parent_id, created_at, valid_policy
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (
+            signal.id,
+            triggered_at.isoformat(timespec='seconds'),
+            signal.symbol,
+            signal.strategy_id,
+            signal.side.value,
+            signal.tag.value,
+            signal.signal_role.value,
+            signal.zone_low,
+            signal.zone_high,
+            signal.parent_id,
+            signal.created_at.isoformat(timespec='seconds'),
+            signal.valid_policy.value,
+        ),
     )
 
 
@@ -407,7 +516,73 @@ def load_market_snapshots(
     ]
 
 
+def save_report_signal_snapshot(
+    conn: sqlite3.Connection,
+    report_date: str,
+    signals: list[Signal],
+) -> int:
+    for signal in signals:
+        conn.execute(
+            '''INSERT OR REPLACE INTO report_signal_snapshots (
+                   report_date, signal_id, symbol, strategy_id, side, tag, role,
+                   zone_low, zone_high, size_hint, premise, break_qualifier,
+                   settlement_outcome, trend, activation, valid_policy, status,
+                   status_reason, parent_id, created_at, closed_at,
+                   trigger_window_start, trigger_window_end
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (
+                report_date,
+                signal.id,
+                signal.symbol,
+                signal.strategy_id,
+                signal.side.value,
+                signal.tag.value,
+                signal.signal_role.value,
+                signal.zone_low,
+                signal.zone_high,
+                signal.size_hint,
+                json.dumps(signal.premise, ensure_ascii=False),
+                signal.break_qualifier,
+                signal.settlement_outcome,
+                signal.trend.value,
+                signal.activation,
+                signal.valid_policy.value,
+                signal.status.value,
+                signal.status_reason,
+                signal.parent_id,
+                signal.created_at.isoformat(timespec='seconds'),
+                signal.closed_at.isoformat(timespec='seconds') if signal.closed_at else None,
+                signal.trigger_window_start.isoformat(timespec='seconds') if signal.trigger_window_start else None,
+                signal.trigger_window_end.isoformat(timespec='seconds') if signal.trigger_window_end else None,
+            ),
+        )
+    return len(signals)
+
+
+def load_report_signal_snapshot(
+    conn: sqlite3.Connection,
+    report_date: str,
+) -> list[Signal]:
+    rows = conn.execute(
+        'SELECT * FROM report_signal_snapshots WHERE report_date=? ORDER BY created_at, signal_id',
+        (report_date,),
+    ).fetchall()
+    signals = []
+    for row in rows:
+        item = dict(row)
+        item['id'] = item.pop('signal_id')
+        item.pop('report_date')
+        signals.append(signal_from_row(item))
+    return signals
+
+
 def save_journal(conn: sqlite3.Connection, entry: JournalEntry) -> None:
+    if entry.to_status == 'TRIGGERED':
+        signal_row = conn.execute(
+            'SELECT * FROM signals WHERE id=?', (entry.signal_id,)
+        ).fetchone()
+        if signal_row is not None:
+            save_trigger_snapshot(conn, signal_from_row(signal_row), entry.created_at)
     conn.execute(
         '''INSERT OR IGNORE INTO journal (
                signal_id, from_status, to_status, reason, price,
@@ -504,15 +679,81 @@ def save_correction_anchor(
     return cursor.rowcount > 0
 
 
+def save_correction_event(
+    conn: sqlite3.Connection,
+    *,
+    trade_date: str,
+    signal_id: str,
+    symbol: str,
+    trigger: str,
+    notice: str,
+    created_at: datetime,
+) -> bool:
+    cursor = conn.execute(
+        '''INSERT OR IGNORE INTO correction_events (
+               trade_date, signal_id, symbol, trigger, notice, created_at
+           ) VALUES (?,?,?,?,?,?)''',
+        (
+            trade_date, signal_id, symbol, trigger, notice,
+            created_at.isoformat(timespec='seconds'),
+        ),
+    )
+    return cursor.rowcount > 0
+
+
+def load_correction_events(conn: sqlite3.Connection, trade_date: str) -> list[dict[str, Any]]:
+    return [
+        dict(row) for row in conn.execute(
+            '''
+            SELECT ce.trade_date, ce.signal_id, ce.symbol, ce.trigger,
+                   ce.notice, ce.created_at, s.strategy_id
+            FROM correction_events
+            ce
+            JOIN signals s ON s.id = ce.signal_id
+            WHERE ce.trade_date=?
+            ORDER BY ce.created_at, ce.id
+            ''',
+            (trade_date,),
+        ).fetchall()
+    ]
+
+
+def signal_from_row(row: sqlite3.Row | dict[str, Any]) -> Signal:
+    item = dict(row)
+    if isinstance(item.get('premise'), str):
+        try:
+            item['premise'] = json.loads(item['premise'])
+        except json.JSONDecodeError:
+            item['premise'] = {}
+    if 'settlement_outcome' not in item:
+        item['settlement_outcome'] = None
+    return Signal.model_validate(item)
+
+
+def load_signals(conn: sqlite3.Connection, trade_date: str | None = None) -> list[Signal]:
+    sql = 'SELECT * FROM signals'
+    params: tuple[str, ...] = ()
+    if trade_date:
+        sql += ' WHERE created_at LIKE ?'
+        params = (trade_date + '%',)
+    sql += ' ORDER BY created_at, id'
+    return [signal_from_row(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def load_active_signals(conn: sqlite3.Connection, trade_date: str | None = None) -> list[Signal]:
+    return [signal for signal in load_signals(conn, trade_date) if signal.status is SignalStatus.ACTIVE]
+
+
 def load_pending_correction_anchors(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [
         dict(row) for row in conn.execute(
             '''
-            SELECT signal_id, symbol, trade_date, qualifier,
-                   zone_low, zone_high
-            FROM correction_anchors
-            WHERE noticed_at IS NULL
-            ORDER BY trade_date, signal_id
+            SELECT ca.signal_id, ca.symbol, ca.trade_date, ca.qualifier,
+                   ca.zone_low, ca.zone_high, s.strategy_id
+            FROM correction_anchors ca
+            JOIN signals s ON s.id = ca.signal_id
+            WHERE ca.noticed_at IS NULL
+            ORDER BY ca.trade_date, ca.signal_id
             '''
         ).fetchall()
     ]
