@@ -53,6 +53,7 @@ def transition(
         signal_id=signal.id,
         from_status=signal.status.value,
         to_status=target.value,
+        event=event.value,
         reason=reason or event.value,
         price=price,
         created_at=timestamp,

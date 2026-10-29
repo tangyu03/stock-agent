@@ -161,12 +161,14 @@ def test_delayed_break_requires_close_price(tmp_db):
         valid_policy=SignalValidPolicy.UNTIL_STOPPED,
     )
     save_signals(conn, [stop])
-    try:
-        run_settle(conn, datetime(2026, 1, 1, 15, 5, tzinfo=UTC))
-    except ValueError as error:
-        assert 'missing close price' in str(error)
-    else:
-        raise AssertionError('missing close price must fail settlement')
+    result = run_settle(conn, datetime(2026, 1, 1, 15, 5, tzinfo=UTC))
+    assert result['retest_created'] == []
+    settlement = conn.execute(
+        'SELECT settlement_outcome, data_status FROM stop_settlements WHERE signal_id=?',
+        ('stop-1',),
+    ).fetchone()
+    assert settlement['settlement_outcome'] == 'PENDING_DATA'
+    assert settlement['data_status'] == 'MISSING'
 
 
 def test_non_weak_close_break_creates_retest(tmp_db):
@@ -255,11 +257,11 @@ def test_same_day_close_correction_persists_once_and_renders(tmp_db):
     }
     text = build_report('2026-01-01', market)
     assert '收盘处理（1条）' in text
-    assert '测试（300001）' in text
-    assert '当日收复' in text
+    assert 'RECOVERED_CORRECTION1' in text
+    assert '当日收复' not in text.split('破位区')[1].split('收盘处理')[0]
 
 
-def test_pool_stop_after_execute_now_is_suppressed_until_new_entry():
+def test_pool_stop_after_execute_now_is_rebuilt_next_evening():
     now = datetime(2026, 1, 2, tzinfo=UTC)
     row = {
         'symbol': '300001', 'strategy_id': 'pool', 'trend': 'UP',
@@ -273,12 +275,9 @@ def test_pool_stop_after_execute_now_is_suppressed_until_new_entry():
         break_qualifier='EXECUTE_NOW',
         valid_policy=SignalValidPolicy.UNTIL_STOPPED,
     )
-    assert build_pool_signals([row], now, [executed_stop]) == []
-
-    new_entry = _signal(status=SignalStatus.TRIGGERED).model_copy(update={
-        'created_at': now,
-    })
-    assert build_pool_signals([row], now, [executed_stop, new_entry])
+    rebuilt = build_pool_signals([row], now, [executed_stop])
+    assert [signal.tag for signal in rebuilt if signal.tag is SignalTag.STOP] == [SignalTag.STOP]
+    assert rebuilt[0].premise['prior_stop_id'] == executed_stop.id
 
 
 def test_rebuilt_pool_stop_records_prior_stop_id():
@@ -355,7 +354,7 @@ def test_correction_projection_merges_same_symbol_and_date(tmp_db):
         'trade_date': '2026-01-01',
     }
     text = build_report('2026-01-01', market)
-    assert '收盘处理（1条）' in text
+    assert '收盘处理（0条）' in text
 
 
 def test_correction_anchor_schema_supports_one_per_trade_date(tmp_db):

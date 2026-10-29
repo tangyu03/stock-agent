@@ -130,12 +130,12 @@ def test_report_covers_no_break_break_retest_and_judgments():
     assert '今日最高68.3摸到区间，收67.9未站上' in text
     assert '剩2日。（观察期内不出买点）' in text
     assert '失败股（300005） 确认破位' in text
-    assert '第1日最高68.3反抽至观察区间，收盘67.9未站回68.5，提前确认破位。观察哨关闭。' in text
+    assert '落库判决：确认破位；已观察1交易日。观察哨关闭。' in text
     assert '假破股（300006） 假破位' in text
-    assert '第1日收盘68.9站回68.5，量比1.4（达标），原止损逻辑失效。观察哨关闭。' in text
+    assert '落库判决：放量站回，假破位；原止损逻辑失效。已观察1日。观察哨关闭。' in text
     assert '原止损逻辑失效' in text
     assert '到期股（300007） 无反抽' in text
-    assert '1日窗口到期' in text
+    assert '落库判决：窗口到期未回抽；已观察1交易日' in text
     assert '再买股' in text and 'entry  10日线首动' in text
     assert '均线冷却：5日线档位冷却中' in text
     assert '5日线档位冷却中' in text
@@ -157,8 +157,8 @@ def test_candidate_shows_tail_reachability():
         ],
     }
     text = render_signal_report('2026-01-02', market, signals)
-    assert '穿越股' in text and '可达性（信号日评估，非明日结论）：盘中穿越，收盘未回；明日尾盘复检' in text
-    assert '远离股' in text and '可达性（信号日评估，非明日结论）：未触达；明日尾盘复检' in text
+    assert '穿越股' in text and '基准日参考：收盘69，高于买入区间，待有效日评估' in text
+    assert '远离股' in text and '基准日参考：收盘60，低于买入区间，待有效日评估' in text
 
 
 def test_break_slots_read_only_signal_date():

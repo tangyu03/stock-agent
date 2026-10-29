@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 import yaml
 
-from ..core.calendar import is_trading_day, load_holidays
+from ..core.calendar import is_trading_day, load_holidays, next_trading_day
 from ..core.generator import (
     Strategy,
     apply_size_hints,
@@ -26,17 +26,17 @@ from ..core.selector import COOLDOWN_STOP_COUNT, MA_FAMILY, cooled_out, select_s
 from ..core.trend import classify_trend, moving_average
 from ..data.guard import DataFreshnessGuard, check_quote_sanity, check_two_source
 from ..db.session import (
-    load_signals, save_context_marks, save_event_calendar, save_journal,
-    save_market_snapshots, save_report_signal_snapshot, save_signals,
+    load_market_snapshots, load_signals, save_context_marks, save_event_calendar,
+    save_journal, save_market_snapshots, save_report_signal_snapshot, save_signals,
 )
 from ..models.context_mark import ContextMark, ContextType
 from ..models.event_calendar import EventCalendar
 from ..models.journal import JournalEntry
 from ..models.signal import Signal, SignalRole, SignalSide, SignalStatus, SignalTag, SignalTrend, SignalValidPolicy
 from ..notify.render import render_report
-from ..stats import signal_quality
+from ..stats import attach_hypothetical_pnl, signal_quality
 from .restore_check import load_tail_prices
-from .settle import observation_pause_symbols
+from .settle import pool_protection_states
 
 
 
@@ -73,6 +73,7 @@ def build_context_marks(
                 level_low=float(zone[0]),
                 level_high=float(zone[1]),
                 label=str(row.get('label') or ''),
+                data_status=str(row.get('data_status') or 'OK'),
                 triggered_at=None,
                 created_at=created_at,
             ))
@@ -87,6 +88,7 @@ def build_evening_signals(
     existing_signals: list[Signal] | None = None,
     recent_stop_counts: Mapping[str, Mapping[str, int]] | None = None,
     same_ma_cooldown_days: int = 2,
+    skip_zw_symbols: set[str] | None = None,
 ) -> list[Signal]:
     rows: list[Signal] = []
     active_entries = {
@@ -95,25 +97,62 @@ def build_evening_signals(
         if signal.signal_role is SignalRole.ENTRY
         and signal.status in {SignalStatus.ACTIVE, SignalStatus.TRIGGERED}
     }
+    trade_date = created_at.date().isoformat()
     for plan in pool_plans:
         strategy = strategies.get(str(plan.get('strategy_id') or ''))
+        symbol = str(plan['symbol'])
         if strategy is None or not premise_ok(plan.get('premise_facts') or {}):
             continue
-        if (str(plan['symbol']), strategy.id) in active_entries:
+        if (symbol, strategy.id) in active_entries:
             continue
         if cooled_out(
             [strategy.id],
-            (recent_stop_counts or {}).get(str(plan['symbol']), {}),
+            (recent_stop_counts or {}).get(symbol, {}),
             same_ma_cooldown_days,
         ) == []:
             continue
         rows.extend(generate_entry(
             strategy,
-            str(plan['symbol']),
+            symbol,
             (float(plan['entry_low']), float(plan['entry_high'])),
             created_at,
             parent_id=plan.get('parent_id'),
         ))
+        # §4 generator：entry 生成时确保同 symbol 最多一条 ACTIVE stop
+        # 已有则重锚 parent；没有则按 Z/W 同生新建（池内路径覆盖的票除外）
+        if symbol in (skip_zw_symbols or set()):
+            continue
+        active_stop = next(
+            (
+                signal for signal in (existing_signals or [])
+                if signal.symbol == symbol
+                and signal.tag is SignalTag.STOP
+                and signal.status is SignalStatus.ACTIVE
+            ),
+            None,
+        )
+        parent_anchor = str(plan.get('parent_id') or f'pool:{symbol}')
+        if active_stop is not None:
+            if active_stop.parent_id != parent_anchor:
+                rows.append(active_stop.model_copy(update={'parent_id': parent_anchor}))
+            continue
+        if plan.get('stop_low') is None or plan.get('stop_high') is None:
+            continue
+        rows.append(_signal(
+            f'{trade_date}-{symbol}-{strategy.id}-stop', strategy.id, symbol,
+            'SELL', SignalTag.STOP,
+            (float(plan['stop_low']), float(plan['stop_high'])),
+            SignalTrend.UP, created_at, parent_anchor,
+            SignalValidPolicy.UNTIL_STOPPED,
+        ))
+        if plan.get('profit_low') is not None and plan.get('profit_high') is not None:
+            rows.append(_signal(
+                f'{trade_date}-{symbol}-{strategy.id}-profit', strategy.id, symbol,
+                'SELL', SignalTag.PROFIT,
+                (float(plan['profit_low']), float(plan['profit_high'])),
+                SignalTrend.UP, created_at, parent_anchor,
+                SignalValidPolicy.UNTIL_STOPPED,
+            ))
     return apply_size_hints(rows, market_tier_name)
 
 
@@ -197,6 +236,7 @@ def build_pool_signals(
     rows: list[Mapping[str, Any]],
     created_at: datetime,
     existing_signals: list[Signal] | None = None,
+    suppress_t_symbols: set[str] | None = None,
 ) -> list[Signal]:
     result: list[Signal] = []
     existing = list(existing_signals or [])
@@ -220,18 +260,6 @@ def build_pool_signals(
             and signal.status is SignalStatus.TRIGGERED
         ]
         prior_stop = max(prior_stops, key=lambda signal: signal.closed_at or signal.created_at, default=None)
-        if (
-            prior_stop is not None
-            and prior_stop.break_qualifier == 'EXECUTE_NOW'
-            and not any(
-                signal.symbol == symbol
-                and signal.tag is SignalTag.ENTER
-                and signal.status is SignalStatus.TRIGGERED
-                and signal.created_at > (prior_stop.closed_at or prior_stop.created_at)
-                for signal in existing
-            )
-        ):
-            continue
         for signal in [
             item for item in existing
             if item.symbol == symbol
@@ -276,15 +304,11 @@ def build_pool_signals(
             float(row['t_sell_zone'][0]), float(row['t_sell_zone'][1]),
         )
         include_t = trend is SignalTrend.UP
+        overlap_stop = False
+        t_suppressed = symbol in (suppress_t_symbols or set())
+        if include_t and t_suppressed:
+            include_t = False
         if include_t:
-            triggered_stops = [
-                item for item in existing
-                if item.symbol == symbol
-                and item.tag is SignalTag.STOP
-                and item.status is SignalStatus.TRIGGERED
-                and item.closed_at is not None
-                and item.closed_at.date() == created_at.date()
-            ]
             active_stops = [
                 item for item in existing
                 if item.symbol == symbol
@@ -296,7 +320,7 @@ def build_pool_signals(
                 <= min(item.zone_high, t_buy_zone[1])
                 for item in [desired[0], *active_stops]
             )
-            include_t = not triggered_stops and not overlap_stop
+            include_t = not overlap_stop
         if include_t and (
             t_buy_zone[0] <= 0 or t_buy_zone[0] >= t_buy_zone[1]
             or (t_buy_zone[1] - t_buy_zone[0]) / t_buy_zone[0] > 0.15
@@ -309,19 +333,19 @@ def build_pool_signals(
                     f'{trade_date}-{symbol}-t-buy', strategy_id, symbol,
                     'BUY', SignalTag.T,
                     t_buy_zone,
-                    trend, created_at, parent_id, SignalValidPolicy.SAME_DAY,
+                    trend, created_at, parent_id, SignalValidPolicy.INTRADAY,
                 ),
                 _signal(
                     f'{trade_date}-{symbol}-t-sell', strategy_id, symbol,
                     'SELL', SignalTag.T,
                     t_sell_zone,
-                    trend, created_at, parent_id, SignalValidPolicy.SAME_DAY,
+                    trend, created_at, parent_id, SignalValidPolicy.INTRADAY,
                 ),
             ])
 
         if not include_t and trend is SignalTrend.UP:
-            if triggered_stops:
-                reason = 'same_day_triggered_stop'
+            if t_suppressed:
+                reason = 'volatility_exceeded'
             elif overlap_stop:
                 reason = 't_buy_overlaps_stop'
             else:
@@ -342,7 +366,8 @@ def build_pool_signals(
                 and item.valid_policy is signal.valid_policy
                 and item.status is SignalStatus.ACTIVE
             ]
-            if candidates and signal.valid_policy is not SignalValidPolicy.SAME_DAY:
+            # T 每晚新建、不参与重锚（§3.2：T 不记 zone_update，滚动词只对 stop/profit）
+            if candidates and signal.signal_role is not SignalRole.T:
                 latest = max(candidates, key=lambda item: item.created_at)
                 result.append(latest.model_copy(update={
                     'strategy_id': signal.strategy_id,
@@ -889,6 +914,7 @@ def build_market_input(
         'watchlist_limit': watchlist_limit,
         'same_ma_cooldown_days': int(same_ma_cooldown_days),
         'recent_stop_counts': dict(recent_stops or {}),
+        'holidays': sorted(holiday.isoformat() for holiday in (holidays or set())),
         'name_map': dict(name_map or {}),
         'signal_rows': pool_signal_rows,
     }
@@ -899,7 +925,8 @@ def load_risk_config(config_path: str | Path) -> dict[str, Any]:
     return {
         'regulator_list': raw.get('regulator_list') or [],
         'lhb_dumpers': raw.get('lhb_dumpers') or [],
-        'watchlist_limit': raw.get('watchlist_limit'),
+        'watchlist_limit': raw.get('watchlist_max', raw.get('watchlist_limit')),
+        'circuit_breaker': raw.get('circuit_breaker') or {},
         'priority': raw.get('priority') or ['holding', 'index', 'sector', 'candidate'],
         'context_indices': (raw.get('market_context') or {}).get('indices') or ['sh000001'],
         'same_ma_cooldown_days': int(raw.get('reentry_rules', {}).get('same_ma_cooldown_days', 2)),
@@ -944,7 +971,11 @@ def fetch_market_input(
         if row.get('symbol') and row.get('name')
     }
     themes = sorted({row['theme_label'] for row in pool_rows} - {'unknown'})
-    sector_klines = {theme: akshare.sector_kline(theme, limit=60) for theme in themes}
+    # 盘中跑 plan 时东财板块日 K 会带当日实时 bar；按 signal_date 过滤，防止"超前"校验拒绝
+    sector_klines = {
+        theme: akshare.sector_kline(theme, limit=60, trade_date=trade_date)
+        for theme in themes
+    }
     config = load_risk_config(config_path)
     payload = build_market_input(
         pool_rows,
@@ -1027,12 +1058,17 @@ def fetch_market_input(
         payload.setdefault('sector_context', []).append({
             'symbol': theme,
             'zone': [float(mark['level_low']), float(mark['level_high'])],
-            'label': 'stale_sector_context',
+            'label': str(mark['label'] or theme),
+            'data_status': 'STALE',
         })
     return payload
 
 
-def signal_day_trigger_review(conn: sqlite3.Connection, trade_date: str) -> list[dict[str, Any]]:
+def signal_day_trigger_review(
+    conn: sqlite3.Connection,
+    trade_date: str,
+    event_source: str | None = None,
+) -> list[dict[str, Any]]:
     rows = conn.execute(
         '''
         SELECT
@@ -1045,13 +1081,19 @@ def signal_day_trigger_review(conn: sqlite3.Connection, trade_date: str) -> list
             COALESCE(t.zone_low, s.zone_low) AS zone_low,
             COALESCE(t.zone_high, s.zone_high) AS zone_high,
             COALESCE(t.parent_id, s.parent_id) AS parent_id,
+            COALESCE(t.root_id, s.root_id) AS root_id,
+            COALESCE(t.created_trade_date, s.created_trade_date) AS created_trade_date,
+            COALESCE(t.window_days, s.window_days) AS window_days,
             COALESCE(t.created_at, s.created_at) AS signal_created_at,
+            COALESCE(t.pair_id, s.pair_id) AS pair_id,
+            COALESCE(t.event_source, j.event_source) AS event_source,
             j.created_at AS triggered_at
         FROM journal j
         JOIN signals s ON s.id = j.signal_id
         LEFT JOIN signal_trigger_snapshots t
           ON t.signal_id = s.id AND t.triggered_at = j.created_at
         WHERE j.to_status='TRIGGERED' AND j.created_at LIKE ?
+          AND j.event_source NOT IN ('replay','backfill')
         ORDER BY j.created_at, s.id
         ''',
         (trade_date + '%',),
@@ -1070,8 +1112,13 @@ def signal_day_trigger_review(conn: sqlite3.Connection, trade_date: str) -> list
             'zone_low': row['zone_low'],
             'zone_high': row['zone_high'],
             'parent_id': row['parent_id'],
+            'root_id': row['root_id'],
+            'created_trade_date': row['created_trade_date'],
+            'window_days': row['window_days'],
             'created_at': row['signal_created_at'],
+            'pair_id': row['pair_id'],
             'triggered_at': str(row['triggered_at']),
+            'event_source': row['event_source'],
         })
     return reviewed
 
@@ -1090,19 +1137,46 @@ def run_evening(
 
     strategies = {strategy.id: strategy for strategy in load_strategies(strategies_path)}
     existing_signals = load_signals(conn)
-    paused_symbols = observation_pause_symbols(conn)
+    protection_states = pool_protection_states(conn)
+    # §7.4：BLOCKED（回踩观察中）暂停普通 enter；WAIT_REENTRY 正是“等待新 enter”，允许生成
+    blocked_symbols = {
+        symbol
+        for symbol, (mode, _reason) in protection_states.items()
+        if mode == 'BLOCKED'
+    }
+    paused_symbols = {
+        symbol
+        for symbol, (mode, _reason) in protection_states.items()
+        if mode != 'NORMAL'
+    }
     plans = list(payload.get('plans') or [])
     assignments = list(payload.get('assignments') or [])
     holdings = [
         row for row in (payload.get('holdings') or [])
         if str(row.get('symbol') or '') not in paused_symbols
     ]
-    holding_rows = build_holding_rows(holdings, created_at)
+    # §5 t_overlay.applies_to=pool：波动超限的持仓票禁 T，由池内路径统一执行
+    volatile_symbols = {
+        str(row.get('symbol') or '')
+        for row in holdings
+        if row.get('volatility_exceeded') and row.get('symbol')
+    }
+    pool_symbols = {
+        str(row.get('symbol') or '')
+        for row in (payload.get('signal_rows') or [])
+        if row.get('symbol')
+    }
+    # 同票不再走双路径：有 K 线（signal_rows 覆盖）的持仓票由池内路径统一生成 Z/W/T，
+    # holding 行退为缺 K 线票的兜底，避免 {date}-{symbol}-stop 同 id 静默覆盖
+    holding_rows = build_holding_rows(
+        [row for row in holdings if str(row.get('symbol') or '') not in pool_symbols],
+        created_at,
+    )
     if assignments:
         plans.extend(build_pool_plans(strategies.values(), assignments))
     plans = [
         plan for plan in plans
-        if str(plan.get('symbol') or '') not in paused_symbols
+        if str(plan.get('symbol') or '') not in blocked_symbols
     ]
     rows = build_evening_signals(
         strategies,
@@ -1112,6 +1186,11 @@ def run_evening(
         existing_signals,
         payload.get('recent_stop_counts') or {},
         int(payload.get('same_ma_cooldown_days') or 2),
+        skip_zw_symbols={
+            str(row.get('symbol') or '')
+            for row in (payload.get('signal_rows') or [])
+            if row.get('symbol')
+        },
     )
     cooled_candidates = expire_cooled_candidates(
         existing_signals,
@@ -1127,7 +1206,27 @@ def run_evening(
         ],
         created_at,
         existing_signals,
+        suppress_t_symbols=volatile_symbols,
     ))
+    valid_for = next_trading_day(
+        date.fromisoformat(trade_date),
+        load_holidays(payload.get('holidays')),
+    )
+    rows = [
+        signal.model_copy(update={
+            **(
+                {'valid_for': valid_for}
+                if signal.signal_role in {SignalRole.ENTRY, SignalRole.T}
+                else {}
+            ),
+            **(
+                {'pair_id': f'{signal.parent_id}:{valid_for.isoformat()}'}
+                if signal.signal_role is SignalRole.T
+                else {}
+            ),
+        })
+        for signal in rows
+    ]
     context_marks = build_context_marks(
         payload.get('index_context') or [],
         payload.get('sector_context') or [],
@@ -1145,7 +1244,8 @@ def run_evening(
     quality_rows = [
         dict(row)
         for row in conn.execute(
-            'SELECT id, symbol, strategy_id, tag, role, status, zone_low, zone_high, created_at FROM signals'
+            'SELECT id, symbol, strategy_id, tag, role, status, zone_low, zone_high, '
+            'created_at, valid_for, closed_at FROM signals'
         ).fetchall()
     ]
     market_rows = [
@@ -1157,9 +1257,11 @@ def run_evening(
         for assignment in assignments
     ]
     save_market_snapshots(conn, trade_date, market_rows)
+    # §9：EV_NEG 输入链——entry 假想成交于有效日收盘，window 个交易日后收盘估值
+    pnl_rows = attach_hypothetical_pnl(quality_rows, load_market_snapshots(conn))
     ev_negative = {
         strategy_id
-        for strategy_id, quality in signal_quality(quality_rows, market_rows).items()
+        for strategy_id, quality in signal_quality(pnl_rows, market_rows).items()
         if quality['ev_negative']
     }
     rows = [
@@ -1169,13 +1271,22 @@ def run_evening(
         for signal in rows
     ]
     save_signals(conn, rows)
-    for signal in cooled_candidates:
+    # 当晚生成的终态行统一落 journal（冷却/T 归零/trend_flip），此前只覆盖冷却一个来源
+    existing_by_id = {signal.id: signal for signal in existing_signals}
+    for signal in rows:
+        if signal.status not in {SignalStatus.EXPIRED, SignalStatus.INVALIDATED}:
+            continue
+        before = existing_by_id.get(signal.id)
+        if before is not None and before.status is not SignalStatus.ACTIVE:
+            continue
         save_journal(conn, JournalEntry(
             signal_id=signal.id,
-            from_status=SignalStatus.ACTIVE.value,
-            to_status=SignalStatus.EXPIRED.value,
-            reason='ma_family_cooldown',
+            from_status=(before.status.value if before else SignalStatus.ACTIVE.value),
+            to_status=signal.status.value,
+            event='eod',
+            reason=signal.status_reason or 'eod',
             created_at=created_at,
+            event_source='live_settle',
         ))
     snapshot_signals = [
         signal for signal in load_signals(conn)

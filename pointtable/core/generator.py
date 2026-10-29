@@ -181,12 +181,12 @@ def generate_holding_rows(
             _signal(
                 f'{created_at.date().isoformat()}-{symbol}-t-buy', 'holding',
                 symbol, 'BUY', SignalTag.T, support_zone, trend, created_at, parent_id,
-                SignalValidPolicy.SAME_DAY,
+                SignalValidPolicy.INTRADAY,
             ),
             _signal(
                 f'{created_at.date().isoformat()}-{symbol}-t-sell', 'holding',
                 symbol, 'SELL', SignalTag.T, resistance_zone, trend, created_at, parent_id,
-                SignalValidPolicy.SAME_DAY,
+                SignalValidPolicy.INTRADAY,
             ),
         ])
     if rows[-1].tag is SignalTag.PROFIT:

@@ -20,7 +20,7 @@ polling:
   regular_minutes: 10
   tail_minutes: 1
 
-watchlist_limit: 25
+watchlist_max: 25
 priority:
   - holding
   - index
@@ -31,6 +31,11 @@ holidays: []
 
 reentry_rules:
   same_ma_cooldown_days: 2
+
+circuit_breaker:
+  volume_tier: LOW
+  index_trend: DOWN
+  benchmark_index: sh000001
 
 stats:
   entry_reachability_mode: tail_approx
@@ -45,7 +50,7 @@ selector:
   retest_volume_min: 1.2
 
 t_overlay:
-  applies_to: holding
+  applies_to: pool
   disable_when_volatility_exceeded: true
 
 market_context:

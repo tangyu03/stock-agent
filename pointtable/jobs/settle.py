@@ -4,14 +4,14 @@ from datetime import date, datetime
 
 from ..core.lifecycle import JournalEntry, TransitionEvent, transition
 from ..core.calendar import trading_days_between
-from ..core.volume import BreakQualifier, SettlementOutcome
+from ..core.volume import BreakQualifier, SettlementOutcome, is_circuit_day, resolve_effective_qualifier
 from ..models.signal import Signal, SignalRole, SignalSide, SignalStatus, SignalTag, SignalValidPolicy
 import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any
 from ..db.session import (
     load_signals, save_correction_anchor, save_correction_event, save_journal,
-    save_signal, save_zone_snapshot,
+    save_market_day, save_signal, save_stop_settlement, save_zone_snapshot,
 )
 from ..models.journal import JournalRecordType
 
@@ -29,6 +29,10 @@ def expire_intraday(signals: list[Signal], now: datetime) -> list[Signal]:
                 signal.valid_policy is SignalValidPolicy.NEXT_DAY
                 and now.date() > signal.created_at.date()
             )
+        )
+        and (
+            signal.valid_for is None
+            or now.date() >= signal.valid_for
         )
     ]
     return [
@@ -64,29 +68,6 @@ def create_retest_confirm(
     })
 
 
-def apply_trend_flip(
-    signals: list[Signal],
-    stop_zone: tuple[float, float],
-    now: datetime,
-) -> list[Signal]:
-    updated: list[Signal] = []
-    for signal in signals:
-        if signal.tag is SignalTag.STOP:
-            updated.append(signal.model_copy(update={
-                'zone_low': float(stop_zone[0]),
-                'zone_high': float(stop_zone[1]),
-            }))
-        elif signal.tag is SignalTag.T and signal.side is SignalSide.BUY:
-            updated.append(signal.model_copy(update={
-                'status': SignalStatus.INVALIDATED,
-                'status_reason': 'trend_flip',
-                'closed_at': now,
-            }))
-        else:
-            updated.append(signal)
-    return updated
-
-
 def settle_retest(
     retest_signal: Signal,
     passed: bool,
@@ -115,7 +96,7 @@ def stop_break_qualifier(stop_signal: Signal) -> BreakQualifier:
             return BreakQualifier(part)
         except ValueError:
             continue
-    return BreakQualifier.DELAY_OBSERVE
+    return BreakQualifier.UNCLASSIFIED
 
 
 def expire_retest(
@@ -133,8 +114,20 @@ def expire_retest(
     )
     if elapsed < window_days:
         return None
-    return transition(
+    from .watch import retest_verdict_facts
+
+    facts = retest_verdict_facts(
         retest_signal,
+        outcome='EXPIRED',
+        now=now,
+        window_days=window_days,
+        observed_days=elapsed,
+    )
+    updated = retest_signal.model_copy(update={
+        'premise': {**retest_signal.premise, 'verdict_facts': facts},
+    })
+    return transition(
+        updated,
         TransitionEvent.EOD,
         'retest_window_expired',
         now=now,
@@ -164,7 +157,7 @@ def observation_pause_symbols(conn: sqlite3.Connection) -> set[str]:
         '''
         SELECT symbol, MAX(closed_at) AS closed_at
         FROM signals
-        WHERE tag='retest_confirm' AND status IN ('TRIGGERED','EXPIRED','INVALIDATED')
+        WHERE tag='retest_confirm' AND status IN ('TRIGGERED','EXPIRED')
         GROUP BY symbol
         '''
     ).fetchall()
@@ -185,6 +178,77 @@ def observation_pause_symbols(conn: sqlite3.Connection) -> set[str]:
         if active_stop is None and triggered_enter is None:
             paused.add(symbol)
     return paused
+
+
+def pool_protection_states(conn: sqlite3.Connection) -> dict[str, tuple[str, str]]:
+    states: dict[str, tuple[str, str]] = {}
+    for row in conn.execute(
+        '''
+        SELECT symbol, status, MAX(closed_at) AS closed_at
+        FROM signals
+        WHERE tag='retest_confirm' AND status IN ('ACTIVE','TRIGGERED','EXPIRED','INVALIDATED')
+        GROUP BY symbol, status
+        '''
+    ):
+        symbol = str(row['symbol'])
+        if str(row['status']) == 'ACTIVE':
+            states[symbol] = ('BLOCKED', 'retest_active')
+            continue
+        if str(row['status']) == 'INVALIDATED':
+            states[symbol] = ('NORMAL', 'retest_invalidated')
+            continue
+        active_stop = conn.execute(
+            "SELECT 1 FROM signals WHERE symbol=? AND tag='stop' AND status='ACTIVE' LIMIT 1",
+            (symbol,),
+        ).fetchone()
+        triggered_enter = conn.execute(
+            '''
+            SELECT 1 FROM signals
+            WHERE symbol=? AND tag='enter' AND status='TRIGGERED' AND created_at > ?
+            LIMIT 1
+            ''',
+            (symbol, row['closed_at'] or ''),
+        ).fetchone()
+        if active_stop is None and triggered_enter is None:
+            reason = 'retest_confirmed' if str(row['status']) == 'TRIGGERED' else 'retest_expired'
+            states[symbol] = ('WAIT_REENTRY', reason)
+
+    settlements = conn.execute(
+        '''
+        SELECT s.symbol AS symbol, ss.settlement_outcome AS settlement_outcome,
+               ss.occurred_at AS occurred_at
+        FROM stop_settlements ss
+        JOIN signals s ON s.id = ss.signal_id
+        ORDER BY ss.occurred_at DESC
+        '''
+    ).fetchall()
+    settled_symbols: set[str] = set()
+    for row in settlements:
+        symbol = str(row['symbol'])
+        # 最新一次结算定状态；观察哨存续（BLOCKED）不被结算结果降级
+        if symbol in settled_symbols or states.get(symbol, ('', ''))[0] == 'BLOCKED':
+            continue
+        settled_symbols.add(symbol)
+        outcome = str(row['settlement_outcome'] or '')
+        if outcome == 'EXECUTE_NOW':
+            triggered_enter = conn.execute(
+                '''
+                SELECT 1 FROM signals
+                WHERE symbol=? AND tag='enter' AND status='TRIGGERED' AND created_at > ?
+                LIMIT 1
+                ''',
+                (symbol, row['occurred_at'] or ''),
+            ).fetchone()
+            if triggered_enter is None:
+                states[symbol] = ('WAIT_REENTRY', 'execute_now')
+            else:
+                states[symbol] = ('NORMAL', 'reentered')
+        elif outcome == 'LIMIT_EXEMPT':
+            states[symbol] = ('NORMAL', 'limit_exempt')
+    for symbol in list(states):
+        if states[symbol][0] == 'WATCHING':
+            states[symbol] = ('BLOCKED', states[symbol][1])
+    return states
 
 
 
@@ -228,7 +292,17 @@ def run_settle(
     market_tier: str = 'NORMAL',
     index_trend: str = 'UP',
     created_before: date | None = None,
+    event_source: str = 'live_settle',
+    run_id: str | None = None,
+    code_version: str = 'local',
+    input_snapshot_id: str | None = None,
+    circuit_breaker: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from .watch import retest_verdict_facts
+
+    circuit_config = dict(circuit_breaker or {})
+    volume_tier = str(circuit_config.get('volume_tier') or 'LOW')
+    index_trend_rule = str(circuit_config.get('index_trend') or 'DOWN')
     all_signals = load_signals(conn)
     if created_before is not None:
         all_signals = [
@@ -236,13 +310,63 @@ def run_settle(
             if signal.created_at.date() < created_before
         ]
     original_signals = {signal.id: signal for signal in all_signals}
+    circuit_day = is_circuit_day(
+        market_tier,
+        index_trend,
+        volume_tier=volume_tier,
+        index_trend_rule=index_trend_rule,
+    )
+    save_market_day(
+        conn,
+        now.date().isoformat(),
+        market_tier,
+        index_trend,
+        evaluated_at=now,
+        volume_tier=volume_tier,
+        index_trend_rule=index_trend_rule,
+    )
+    def persist_stop_settlement(
+        stop_signal: Signal,
+        raw_qualifier: str | None,
+        effective: BreakQualifier,
+        outcome: str,
+        close_price: float | None,
+        correction_scene: str | None = None,
+        data_status: str = 'OK',
+    ) -> None:
+        save_stop_settlement(
+            conn,
+            signal_id=stop_signal.id,
+            trade_date=now.date().isoformat(),
+            raw_qualifier=raw_qualifier,
+            effective_qualifier=effective.value,
+            circuit_day=circuit_day,
+            close_price=close_price,
+            zone_low=stop_signal.zone_low,
+            zone_high=stop_signal.zone_high,
+            settlement_outcome=outcome,
+            occurred_at=now,
+            correction_scene=correction_scene,
+            event_source=event_source,
+            data_status=data_status,
+            code_version=code_version,
+            input_snapshot_id=input_snapshot_id,
+        )
     for signal in [item for item in all_signals if item.status is SignalStatus.ACTIVE]:
         if signal.signal_role not in {SignalRole.STOP, SignalRole.PROFIT, SignalRole.T}:
             continue
         touched_price = None
         if signal.side is SignalSide.BUY and float((low_prices or {}).get(signal.symbol, 0)) <= signal.zone_high:
             touched_price = signal.zone_high
-        elif signal.side is SignalSide.SELL and float((high_prices or {}).get(signal.symbol, 0)) >= signal.zone_low:
+        elif (
+            signal.side is SignalSide.SELL
+            and float(
+                (high_prices or {}).get(
+                    signal.symbol,
+                    (close_prices or {}).get(signal.symbol, 0),
+                )
+            ) >= signal.zone_low
+        ):
             touched_price = signal.zone_low
         if touched_price is None:
             continue
@@ -265,6 +389,13 @@ def run_settle(
         })
         save_signal(conn, signal)
         save_journal(conn, journal)
+        if (
+            signal.signal_role is SignalRole.STOP
+            and signal.status is SignalStatus.TRIGGERED
+        ):
+            from .watch import invalidate_t_buy_on_stop
+
+            invalidate_t_buy_on_stop(conn, signal, now)
     all_signals = load_signals(conn)
     if created_before is not None:
         all_signals = [
@@ -322,38 +453,65 @@ def run_settle(
         and signal.closed_at.date() == now.date()
     ]:
         if stop.break_qualifier:
-            qualifier = BreakQualifier(stop.break_qualifier)
+            try:
+                qualifier = BreakQualifier(stop.break_qualifier)
+            except ValueError:
+                qualifier = BreakQualifier.UNCLASSIFIED
+            data_status = 'ANOMALOUS' if qualifier is BreakQualifier.UNCLASSIFIED else 'OK'
         elif stop.symbol in (break_contexts or {}):
             context = (break_contexts or {})[stop.symbol]
             from .watch import stop_break_decision
 
             qualifier, _ = stop_break_decision(context)
+            data_status = 'MISSING' if qualifier is BreakQualifier.UNCLASSIFIED else 'OK'
         else:
             qualifier = stop_break_qualifier(stop)
+            data_status = 'MISSING'
+        effective_qualifier = resolve_effective_qualifier(
+            qualifier.value,
+            circuit_day,
+        )
         close_price = (close_prices or {}).get(stop.symbol)
-        if qualifier is not None and qualifier.value == 'LIMIT_EXEMPT':
+        raw_qualifier_value = stop.break_qualifier or qualifier.value
+        if effective_qualifier is BreakQualifier.LIMIT_EXEMPT:
+            persist_stop_settlement(
+                stop, raw_qualifier_value, effective_qualifier,
+                'LIMIT_EXEMPT', close_price, data_status=data_status,
+            )
             continue
-        if qualifier.value == 'EXECUTE_NOW':
+        if effective_qualifier is BreakQualifier.EXECUTE_NOW:
             updated_stop = stop.model_copy(update={
-                'status_reason': f'settle_execute_now:{stop.status_reason}',
-                'settlement_outcome': SettlementOutcome.STILL_BROKEN.value,
+                'status_reason': (
+                    'settle_circuit_execute_now:' + stop.status_reason
+                    if circuit_day
+                    else 'settle_execute_now:' + stop.status_reason
+                ),
+                'settlement_outcome': SettlementOutcome.EXECUTE_NOW.value,
             })
             save_signal(conn, updated_stop)
+            persist_stop_settlement(
+                stop, raw_qualifier_value, effective_qualifier,
+                'EXECUTE_NOW', close_price, data_status=data_status,
+            )
             save_correction_anchor(
                 conn,
                 signal_id=stop.id,
                 symbol=stop.symbol,
                 trade_date=now.date().isoformat(),
-                qualifier=qualifier.value,
+                qualifier=effective_qualifier.value,
                 zone_low=stop.zone_low,
                 zone_high=stop.zone_high,
                 created_at=now,
             )
             continue
-        if close_price is None:
-            raise ValueError(
-                f'missing close price for delayed break settlement: {stop.symbol}'
+        if qualifier is BreakQualifier.UNCLASSIFIED or close_price is None:
+            persist_stop_settlement(
+                stop, raw_qualifier_value, effective_qualifier,
+                'PENDING_DATA', close_price, data_status=(
+                    'MISSING' if close_price is None else data_status
+                ),
             )
+            continue
         if close_price >= stop.zone_low:
             updated_stop = stop.model_copy(update={
                 'settlement_outcome': SettlementOutcome.SAME_DAY_RECOVERED.value,
@@ -369,25 +527,15 @@ def run_settle(
                 trigger='same_day_close',
                 notice=notice,
                 created_at=now,
+                scene='same_day_recover',
+                dedup_key=f'{stop.id}:{now.date().isoformat()}:same_day_recover',
+                event_source=event_source,
             )
             if inserted:
                 correction_notices.append(notice)
-            continue
-        if market_tier == 'LOW' and index_trend == 'DOWN':
-            updated_stop = stop.model_copy(update={
-                'settlement_outcome': SettlementOutcome.WEAK_MARKET_EXECUTE.value,
-                'status_reason': f'settle_weak_market_execute:{stop.status_reason}',
-            })
-            save_signal(conn, updated_stop)
-            save_correction_anchor(
-                conn,
-                signal_id=stop.id,
-                symbol=stop.symbol,
-                trade_date=now.date().isoformat(),
-                qualifier=BreakQualifier.EXECUTE_NOW.value,
-                zone_low=stop.zone_low,
-                zone_high=stop.zone_high,
-                created_at=now,
+            persist_stop_settlement(
+                stop, raw_qualifier_value, effective_qualifier,
+                'RECOVERED_CORRECTION', close_price, 'same_day_recover',
             )
             continue
         retest = create_retest_confirm(
@@ -398,6 +546,10 @@ def run_settle(
         save_signal(conn, retest)
         existing_ids.add(retest.id)
         created_retests.append(retest.id)
+        persist_stop_settlement(
+            stop, raw_qualifier_value, effective_qualifier,
+            'CREATE_RETEST', close_price,
+        )
 
     prices = close_prices or {}
     retest_candidates = load_signals(conn)
@@ -412,10 +564,52 @@ def run_settle(
     ]:
         price = prices.get(retest.symbol)
         volume_ratio = (volume_ratios or {}).get(retest.symbol)
+        high = (high_prices or {}).get(retest.symbol)
+        # §7.5 三终态统一由 settle 收盘结案：TRIGGERED/INVALIDATED 的判定依据是收盘价与
+        # 收盘量比，收盘处理时点才可得；watch 盘中只累积观察事实，不迁移状态（见 fangan.md 实现注记）
+        # 判决事实：入区事实与期间最高价逐日累积
+        observation = dict(retest.premise.get('retest_observation') or {})
+        touched_today = (
+            (high is not None and float(high) >= retest.zone_low)
+            or (
+                price is not None
+                and retest.zone_low <= float(price) < retest.zone_high
+            )
+        )
+        if touched_today:
+            observation['ever_touched'] = True
+            touch_candidates = [
+                float(value) for value in (high, price)
+                if value is not None and float(value) >= retest.zone_low
+            ]
+            if touch_candidates:
+                observation['max_high'] = max(
+                    float(observation.get('max_high') or 0.0),
+                    max(touch_candidates),
+                )
+        base = retest.model_copy(update={
+            'premise': {**retest.premise, 'retest_observation': observation},
+        })
+        observed_days = trading_days_between(
+            retest.created_at.date(), now.date(), holidays
+        )
         settled = False
-        if price is not None and price >= retest.zone_high:
-            if volume_ratio is not None and volume_ratio >= retest_volume_min:
-                updated, journal = settle_retest(retest, True, price, now)
+        if price is not None and float(price) >= retest.zone_high:
+            # INVALIDATED：收盘站上区间上沿且量比达标
+            if volume_ratio is not None and float(volume_ratio) >= retest_volume_min:
+                updated, journal = settle_retest(base, True, float(price), now)
+                updated = updated.model_copy(update={'premise': {
+                    **updated.premise,
+                    'verdict_facts': retest_verdict_facts(
+                        base,
+                        outcome='INVALIDATED',
+                        now=now,
+                        close=float(price),
+                        volume_ratio=float(volume_ratio),
+                        window_days=retest_window_days,
+                        observed_days=observed_days,
+                    ),
+                }})
                 save_signal(conn, updated)
                 save_journal(conn, journal)
                 settled_retests.append(retest.id)
@@ -428,19 +622,35 @@ def run_settle(
                     trigger='retest_pass',
                     notice=notice,
                     created_at=now,
+                    scene='retest_invalidated',
+                    dedup_key=f'{updated.id}:{now.date().isoformat()}:retest_invalidated',
+                    event_source=event_source,
                 )
                 correction_notices.append(notice)
                 settled = True
-        elif price is not None and retest.zone_low <= price < retest.zone_high:
-            updated, journal = settle_retest(retest, False, price, now)
+        elif price is not None and observation.get('ever_touched'):
+            # TRIGGERED：曾进入观察区间，收盘未站上区间上沿
+            updated, journal = settle_retest(base, False, float(price), now)
+            updated = updated.model_copy(update={'premise': {
+                **updated.premise,
+                'verdict_facts': retest_verdict_facts(
+                    base,
+                    outcome='TRIGGERED',
+                    now=now,
+                    close=float(price),
+                    window_days=retest_window_days,
+                    observed_days=observed_days,
+                ),
+            }})
             save_signal(conn, updated)
             save_journal(conn, journal)
             settled_retests.append(retest.id)
             settled = True
         if settled:
             continue
-        
-        expired_retest = expire_retest(retest, now, retest_window_days, holidays)
+        if touched_today:
+            save_signal(conn, base)
+        expired_retest = expire_retest(base, now, retest_window_days, holidays)
         if expired_retest is not None:
             expired_signal, journal = expired_retest
             save_signal(conn, expired_signal)

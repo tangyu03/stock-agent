@@ -22,13 +22,13 @@ def _price(value: Any) -> str:
 
 
 _INDEX_NAMES = {
-    'sh000001': '上证',
-    'sz399001': '创业板',
-    'sh000688': '科创',
+    'sh000001': '上证指数',
+    'sz399001': '深证成指',
+    'sh000688': '科创50',
 }
 
 
-def render_header(market: Mapping[str, Any]) -> str:
+def render_header(market: Mapping[str, Any], report_date: str | None = None) -> str:
     amount = market.get('amount_yi')
     tier = str(market.get('tier', '')).upper()
     parts: list[str] = []
@@ -63,12 +63,22 @@ def render_header(market: Mapping[str, Any]) -> str:
             continue
         label = _text(mark.get('label')) or _text(mark.get('code'))
         zone = f"{_price(mark.get('level_low'))}–{_price(mark.get('level_high'))}"
-        sector_parts.append(f'{"板块数据过期" if label == "stale_sector_context" else label} {zone}')
+        suffix = '（板块数据过期）' if str(mark.get('data_status') or 'OK').upper() == 'STALE' else ''
+        sector_parts.append(f'{label}{suffix} {zone}')
     if sector_parts:
         parts.append('板块 ' + '；'.join(sector_parts))
     if market.get('sector_down') and bool(market.get('pool_reversal')):
         parts.append('资金总要找个宣泄口')
-    return '。'.join(parts) + ('。' if parts else '')
+    facts: list[str] = []
+    base_date = _text(market.get('signal_date') or market.get('trade_date'))
+    valid_date = _text(report_date or market.get('report_date') or market.get('valid_for'))
+    if base_date and valid_date:
+        facts.append(f'数据基准日：{base_date}｜计划有效日：{valid_date}')
+    if base_date:
+        facts.append(f"报告状态：{_text(market.get('report_status') or '已结算')}")
+        facts.append(f"熔断日：{'是' if market.get('circuit_day') else '否'}")
+    prefix = '\n'.join(facts)
+    return prefix + ('\n' if prefix and parts else '') + '。'.join(parts) + ('。' if parts else '')
 
 
 def render_index_points(market: Mapping[str, Any]) -> str:
@@ -193,9 +203,15 @@ def render_trigger_review(rows: Iterable[Mapping[str, Any]], names: Mapping[str,
         tag = _text(row.get('tag'))
         name = (names or {}).get(symbol) or _text(row.get('name')) or symbol
         kind = _TAG_LABELS.get(tag, tag)
+        side = _text(row.get('side'))
         strategy = _strategy_label(strategy_id)
+        if tag == 't' and side:
+            kind = f'{kind} {side}'
         kind_text = f'{kind}（对应 {strategy}）' if strategy else kind
         metadata = f"｜signal_id={signal_id}" if signal_id else ''
+        pair_id = _text(row.get('pair_id'))
+        if pair_id:
+            metadata += '｜pair_id=' + pair_id
         triggered_at = _text(row.get('triggered_at'))
         if triggered_at:
             metadata += f"｜触发={triggered_at}"
@@ -223,6 +239,36 @@ def render_ev_negative(market: Mapping[str, Any]) -> str:
     return '【EV_NEG 记录】：' + '、'.join(_strategy_label(str(item)) for item in strategies) + '（仅记录，不推送预警）。'
 
 
+def _render_break_with_settlement(
+    signal: Signal,
+    names: Mapping[str, str],
+    settlement: Mapping[str, Any] | None,
+    market: Mapping[str, Any],
+) -> str:
+    raw_qualifier = _text((settlement or {}).get('raw_qualifier')) or signal.break_qualifier
+    effective_qualifier = _text((settlement or {}).get('effective_qualifier'))
+    outcome = _text((settlement or {}).get('settlement_outcome')) or signal.settlement_outcome
+    line = (
+        f"{_signal_name(signal, names)} stop {_price(signal.zone_low)}–{_price(signal.zone_high)}"
+        f"（原始定性：{_BREAK_QUALIFIER_LABELS.get(raw_qualifier, raw_qualifier or '未分类')}"
+    )
+    if effective_qualifier:
+        line += (
+            "｜有效定性："
+            + _BREAK_QUALIFIER_LABELS.get(effective_qualifier, effective_qualifier)
+        )
+    if settlement is not None:
+        circuit = bool(settlement.get('circuit_day'))
+        line += '｜熔断日：是' if circuit else '｜熔断日：否'
+        close_price = settlement.get('close_price')
+        if close_price is not None:
+            line += '｜收盘价 ' + _price(close_price)
+    if outcome:
+        line += '｜收盘结果：' + _SETTLEMENT_OUTCOME_LABELS.get(outcome, outcome)
+    line += "）" + chr(10) + '  ' + _break_settlement_note(signal, settlement)
+    return line
+
+
 def render_report(
     report_date: str,
     market: Mapping[str, Any],
@@ -230,7 +276,10 @@ def render_report(
     signal_rows: list[Signal] | None = None,
 ) -> str:
     if signal_rows is not None:
-        return render_signal_report(report_date, market, signal_rows)
+        return render_signal_report(
+            report_date, market, signal_rows,
+            stop_settlements=list(market.get('stop_settlements') or []),
+        )
     lines = [f'【{report_date} 复盘】', render_header(market)]
     ev_negative = render_ev_negative(market)
     if ev_negative:
@@ -280,12 +329,15 @@ _BREAK_QUALIFIER_LABELS = {
     'DIVERGENCE': '量价背离',
     'LIMIT_EXEMPT': '涨停豁免',
     'SAME_DAY_RECOVERED': '收盘收复（历史字段）',
+    'UNCLASSIFIED': '定性待补',
 }
 
 _SETTLEMENT_OUTCOME_LABELS = {
+    'EXECUTE_NOW': '当日执行',
     'STILL_BROKEN': '收盘仍破',
     'WEAK_MARKET_EXECUTE': '弱市执行',
     'SAME_DAY_RECOVERED': '收复止损区下沿',
+    'PENDING_DATA': '待补数据',
 }
 
 _STATUS_REASON_LABELS = {
@@ -355,6 +407,8 @@ def _signal_line(signal: Signal, names: Mapping[str, str]) -> str:
         line += f"｜前提 {premise}"
     if signal.valid_policy.value == 'next_day':
         line += '｜次日有效'
+    elif signal.valid_for:
+        line += '｜有效 ' + signal.valid_for.isoformat()
     if signal.activation == 'trailing':
         line += '｜移动止盈'
     return line
@@ -423,58 +477,59 @@ def _signal_spot_line(signal: Signal, market: Mapping[str, Any]) -> str:
 def _entry_reachability_note(signal: Signal, market: Mapping[str, Any]) -> str:
     assignment = _assignment(signal, market)
     close = assignment.get('est_close')
-    low = assignment.get('low')
-    high = assignment.get('high')
-    if close is None or low is None or high is None:
+    if close is None:
         return ''
     zone_low = float(signal.zone_low)
     zone_high = float(signal.zone_high)
-    crossed = float(low) <= zone_high and float(high) >= zone_low
-    close_in_zone = zone_low * 0.997 <= float(close) <= zone_high * 1.003
-    if crossed and not close_in_zone:
-        return '    可达性（信号日评估，非明日结论）：盘中穿越，收盘未回；明日尾盘复检'
-    if not crossed:
-        return '    可达性（信号日评估，非明日结论）：未触达；明日尾盘复检'
-    return ''
+    close_value = float(close)
+    if close_value > zone_high:
+        position = '高于买入区间'
+    elif close_value < zone_low:
+        position = '低于买入区间'
+    else:
+        position = '落入买入区间'
+    return f'    基准日参考：收盘{close_value:.3g}，{position}，待有效日评估'
 
 
-def _break_execution_note_with_market(signal: Signal, market: Mapping[str, Any]) -> str:
-    qualifier = signal.break_qualifier or 'NOT_CLASSIFIED'
-    assignment = _assignment(signal, market)
-    close = assignment.get('est_close')
-    facts = []
-    volume_ratio = assignment.get('volume_ratio')
-    active_delta = assignment.get('active_delta')
-    if volume_ratio is not None:
-        facts.append(f'量比{float(volume_ratio):.2f}')
-    if active_delta is not None:
-        facts.append(f'外盘-内盘{float(active_delta):+,.0f}')
-    fact_text = f"｜{'；'.join(facts)}" if facts else ''
-    if close is not None:
-        close_value = float(close)
-        if close_value < float(signal.zone_low):
-            if qualifier == 'EXECUTE_NOW':
-                return f'收盘定性：收盘{close_value:.3g}仍破{_price(signal.zone_low)}，当日执行，不立哨。{fact_text}'
-            return f'收盘定性：收盘{close_value:.3g}仍破{_price(signal.zone_low)}，反抽观察哨生效。{fact_text}'
-        return f'收盘结果：收盘{close_value:.3g}收复止损区下沿{_price(signal.zone_low)}，当日假破位，纠错提醒。{fact_text}'
-    if qualifier == 'EXECUTE_NOW':
-        return f'今日执行依据：主动放量算跌破。当天走，不立观察哨。{fact_text}'
-    if qualifier in {'DELAY_OBSERVE', 'DIVERGENCE'}:
-        return f'收盘定性待补：收盘破{_price(signal.zone_low)}→生成观察哨；收盘收复→当日假破位。{fact_text}'
-    if qualifier == 'LIMIT_EXEMPT':
-        return f'涨停价豁免，不产生观察哨。{fact_text}'
-    return f'破位定性缺失，按延迟观察处理。{fact_text}'
+def _candidate_audit_note(market: Mapping[str, Any], valid_count: int) -> str:
+    reason_labels = {
+        'active_retest_confirm': '观察哨存续',
+        'missing_kline': '缺K线',
+        'stale_kline': 'K线过期',
+        'insufficient_closes': '均线数据不足',
+        'no_strategy': '前提不满足',
+        'lhb_data_unavailable': '龙虎榜数据不可用',
+    }
+    counts: dict[str, int] = {}
+    for row in (market.get('rejected') or []):
+        reason = str(row.get('reason') or 'unknown') if isinstance(row, Mapping) else 'unknown'
+        counts[reason] = counts.get(reason, 0) + 1
+    generated = market.get('pool_total')
+    if generated is None:
+        generated = valid_count + sum(counts.values())
+    reason_text = '｜'.join(
+        f'{reason_labels.get(reason, reason)}{count}'
+        for reason, count in sorted(counts.items())
+    ) or '无排除'
+    return f'候选对账：生成{generated}｜{reason_text}｜有效候选{valid_count}'
 
 
-def _break_execution_note(signal: Signal) -> str:
-    qualifier = signal.break_qualifier or 'NOT_CLASSIFIED'
-    if qualifier == 'EXECUTE_NOW':
-        return '今日执行依据：主动放量算跌破。当天走，不立观察哨。'
-    if qualifier in {'DELAY_OBSERVE', 'DIVERGENCE'}:
-        return f'收盘定生死：收盘破{_price(signal.zone_low)}→生成观察哨；收盘收复→当日假破位，纠错提醒'
-    if qualifier == 'LIMIT_EXEMPT':
-        return '涨停豁免，不产生观察哨。'
-    return '破位定性缺失，按延迟观察处理。'
+def _break_settlement_note(signal: Signal, settlement: Mapping[str, Any] | None) -> str:
+    outcome = _text((settlement or {}).get('settlement_outcome'))
+    close = (settlement or {}).get('close_price')
+    close_text = f'收盘{_price(close)}' if close is not None else '收盘价缺失'
+    data_status = _text((settlement or {}).get('data_status') or 'OK')
+    if outcome == 'PENDING_DATA':
+        return f'待补数据（{data_status}）：已触发 stop，不默认定性，不生成后续动作。'
+    if outcome == 'EXECUTE_NOW':
+        return f'{close_text}，按落库事实当日执行，不立观察哨。'
+    if outcome == 'RECOVERED_CORRECTION':
+        return f'{close_text}收复止损区下沿{_price(signal.zone_low)}，当日假破位，纠错提醒。'
+    if outcome == 'CREATE_RETEST':
+        return f'{close_text}仍破{_price(signal.zone_low)}，生成反抽观察哨。'
+    if outcome == 'LIMIT_EXEMPT':
+        return '涨停价豁免，不产生观察哨。'
+    return '结算事实缺失，报告待补数据。'
 
 
 def _merge_correction_rows(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -554,6 +609,16 @@ def _render_candidate_groups(
     return lines
 
 
+_PROTECTION_REASON_LABELS = {
+    'retest_active': '回踩观察哨存续',
+    'retest_confirmed': '回踩确认破位',
+    'retest_expired': '回踩窗口到期',
+    'execute_now': '破位当日执行',
+    'reentered': '新enter已触发',
+    'limit_exempt': '涨停价豁免',
+}
+
+
 def _render_pool_groups(
     signals: list[Signal],
     entries: list[Signal],
@@ -561,6 +626,7 @@ def _render_pool_groups(
     names: Mapping[str, str],
     report_date: str,
     observations: list[Signal],
+    protection_states: Mapping[str, tuple[str, str]] | None = None,
 ) -> list[str]:
     by_symbol: dict[str, list[Signal]] = {}
     for signal in signals:
@@ -630,6 +696,18 @@ def _render_pool_groups(
             f"  提示：观察哨存续（{_price(signal.zone_low)}–{_price(signal.zone_high)}，剩{remaining}日），"
             "保护语义由观察哨承担，本票暂不生成 stop/profit/t"
         )
+    # §8 保护状态：信号缺失的票也要显示结构化原因
+    protection_mode_labels = {
+        'BLOCKED': '回踩观察中，暂停普通 stop/profit/t 与普通 enter',
+        'WAIT_REENTRY': '等待新 enter，保护语义挂起',
+    }
+    shown_symbols = {signal.symbol for signal in signals} | {signal.symbol for signal in observations}
+    for symbol, (mode, reason) in (protection_states or {}).items():
+        if mode == 'NORMAL' or symbol in shown_symbols:
+            continue
+        mode_text = protection_mode_labels.get(mode, mode)
+        reason_text = _PROTECTION_REASON_LABELS.get(reason, reason or '未标注')
+        lines.append(f'{names.get(symbol, symbol)}（{symbol}）保护状态：{mode_text}（{reason_text}）')
     return lines
 
 
@@ -709,44 +787,36 @@ def _retest_observation_line(signal: Signal, report_date: str, market: Mapping[s
     )
 
 
-def _retest_judgment_note(signal: Signal, report_date: str, market: Mapping[str, Any]) -> str:
-    assignment = _assignment(signal, market)
-    close = assignment.get('est_close')
-    high = assignment.get('high')
-    window = _retest_window_days(market)
-    if signal.status is SignalStatus.TRIGGERED:
-        detail = f"（最高{_price(high)}）" if high is not None else ''
-        return f"{window}日反抽未收复{_price(signal.zone_high)}{detail}，原支撑确认转为压力。观察哨关闭。"
-    if signal.status is SignalStatus.INVALIDATED:
-        volume = assignment.get('volume_ratio')
-        volume_text = f"，量比{_price(volume)}（达标）" if volume is not None else ''
-        close_text = f"收盘{_price(close)}" if close is not None else ''
-        return f"{close_text}收复观察区间上沿{_price(signal.zone_high)}{volume_text}，原止损逻辑失效。观察哨关闭。"
-    return f"{window}日窗口到期，价格未回抽{_price(signal.zone_low)}–{_price(signal.zone_high)}。观察哨关闭。"
-
-
 def _retest_judgment_note_with_market(signal: Signal, report_date: str, market: Mapping[str, Any]) -> str:
-    assignment = _assignment(signal, market)
-    close = assignment.get('est_close')
-    high = assignment.get('high')
+    '''§7.5 判决区：优先渲染落库 verdict_facts（观察窗口/期间最高/入区事实/收盘与上沿），
+    旧数据无 verdict_facts 时回退到状态+观察天数。'''
+    facts = signal.premise.get('verdict_facts') or {}
+    if facts.get('outcome'):
+        window_text = (
+            f"{_text(facts.get('window_start'))}至{_text(facts.get('window_end'))}"
+            if facts.get('window_start') and facts.get('window_end')
+            else f"已观察{_price(facts.get('observed_days')) or '?'}交易日"
+        )
+        high_text = f"，期间最高{_price(facts.get('max_high'))}" if facts.get('max_high') is not None else ''
+        if facts['outcome'] == 'TRIGGERED':
+            close_text = (
+                f"，结案日收盘{_price(facts.get('close'))}未站上上沿{_price(facts.get('zone_high'))}"
+                if facts.get('close') is not None
+                else '，结案日收盘价缺失'
+            )
+            touch_text = '，期间曾进入观察区间' if facts.get('ever_touched') else ''
+            return f'判决事实：观察窗口{window_text}{high_text}{touch_text}{close_text}。原支撑确认转为压力，观察哨关闭。'
+        if facts['outcome'] == 'INVALIDATED':
+            close_text = f"收盘{_price(facts.get('close'))}" if facts.get('close') is not None else '收盘价缺失'
+            volume_text = f"，量比{_price(facts.get('volume_ratio'))}" if facts.get('volume_ratio') is not None else ''
+            return f'判决事实：观察窗口{window_text}，{close_text}放量站上上沿{_price(facts.get("zone_high"))}{volume_text}。原止损逻辑失效，观察哨关闭。'
+        return f'判决事实：观察窗口{window_text}{high_text}，期间从未进入观察区间{_price(facts.get("zone_low"))}–{_price(facts.get("zone_high"))}。观察哨关闭。'
     observed = _retest_elapsed_days(signal, report_date, market)
     if signal.status is SignalStatus.TRIGGERED:
-        touched = (
-            high is not None
-            and float(high) >= float(signal.zone_low)
-            and (close is None or float(close) < float(signal.zone_high))
-        )
-        if touched:
-            return (
-                f'第{observed}日最高{_price(high)}反抽至观察区间，'
-                f'收盘{_price(close)}未站回{_price(signal.zone_high)}，提前确认破位。观察哨关闭。'
-            )
-        return f'第{observed}日确认破位，未形成有效反抽。观察哨关闭。'
+        return f'落库判决：确认破位；已观察{observed}交易日。观察哨关闭。'
     if signal.status is SignalStatus.INVALIDATED:
-        volume = assignment.get('volume_ratio')
-        volume_text = f'，量比{_price(volume)}（达标）' if volume is not None else ''
-        return f'第{observed}日收盘{_price(close)}站回{_price(signal.zone_high)}{volume_text}，原止损逻辑失效。观察哨关闭。'
-    return f'{observed}日窗口到期，价格未回抽{_price(signal.zone_low)}—{_price(signal.zone_high)}。观察哨关闭。'
+        return f'落库判决：放量站回，假破位；原止损逻辑失效。已观察{observed}日。观察哨关闭。'
+    return f'落库判决：窗口到期未回抽；已观察{observed}交易日。观察哨关闭。'
 
 
 def _cooldown_note(signal: Signal, market: Mapping[str, Any]) -> str:
@@ -802,6 +872,7 @@ def render_signal_report(
     report_date: str,
     market: Mapping[str, Any],
     signals: list[Signal],
+    stop_settlements: list[Mapping[str, Any]] | None = None,
 ) -> str:
     names = {str(code): str(name) for code, name in (market.get('name_map') or {}).items()}
     scenario_date = str(market.get('signal_date') or report_date)
@@ -824,6 +895,10 @@ def render_signal_report(
             pool_by_key[key] = signal
     pool_signals = list(pool_by_key.values())
     signal_date = _text(market.get('signal_date') or report_date)
+    settlements_by_signal = {
+        str(row['signal_id']): row for row in (stop_settlements or [])
+        if _text(row.get('trade_date')) == signal_date
+    }
     breaks = [
         signal for signal in signals
         if signal.signal_role is SignalRole.STOP
@@ -837,7 +912,9 @@ def render_signal_report(
         and signal.status in {SignalStatus.TRIGGERED, SignalStatus.EXPIRED, SignalStatus.INVALIDATED}
         and signal.closed_at and signal.closed_at.date().isoformat() == signal_date
     ]
-    lines = [f'【{report_date} 交易计划】', render_header(market)]
+    market_for_projection = dict(market)
+    market_for_projection.setdefault('report_date', report_date)
+    lines = [f'【{report_date} 交易计划】', render_header(market_for_projection, report_date)]
     trigger_review = list(market.get('execution_review') or [])
     lines.append(f'A0 信号日（{signal_date}）触发回顾')
     lines.append(render_trigger_review(trigger_review, names))
@@ -853,49 +930,59 @@ def render_signal_report(
         candidate_note += f"，池子 {market['pool_total']}→{market['watchlist_limit']}"
     lines.append(f'候选（{len({signal.symbol for signal in entries})}只，{candidate_note}）：')
     lines.extend(_render_candidate_groups(entries, pool_signals, market, names) or ['无'])
+    lines.append(_candidate_audit_note(market, len({signal.symbol for signal in entries})))
     observed_symbols = {signal.symbol for signal in observations}
     shown_pool_signals = [signal for signal in pool_signals if signal.symbol not in observed_symbols]
     pool_symbols = {signal.symbol for signal in shown_pool_signals} | {signal.symbol for signal in observations}
     lines.append(f'池内票区（{len(pool_symbols)}只）：')
-    lines.extend(_render_pool_groups(shown_pool_signals, signals, market, names, report_date, observations) or ['无'])
+    lines.extend(_render_pool_groups(
+        shown_pool_signals, signals, market, names, report_date, observations,
+        protection_states=market.get('protection_states'),
+    ) or ['无'])
     lines.append(f'破位区（{len(breaks)}条）：')
     lines.extend([
-        f"{_signal_name(signal, names)} stop {_price(signal.zone_low)}–{_price(signal.zone_high)}"
-        f"（原始定性：{_BREAK_QUALIFIER_LABELS.get(signal.break_qualifier or '', signal.break_qualifier or '未分类')}"
-        + (
-            f"｜收盘结果：{_SETTLEMENT_OUTCOME_LABELS.get(signal.settlement_outcome, signal.settlement_outcome)}"
-            if signal.settlement_outcome else ''
-        )
-        + "）"
-        + chr(10) + '  ' + _break_execution_note_with_market(signal, market)
+        _render_break_with_settlement(signal, names, settlements_by_signal.get(signal.id), market)
         for signal in breaks
     ] or ['无'])
-    correction_trigger_labels = {
-        'execute_now': '当日执行',
-        'same_day_close': '当日收复',
-        'retest_pass': '回踩确认',
-        'post_break_retest': '破位后回踩',
+    # 收盘处理计数只统计信号日当天的结算，避免历史结算混入当日总数
+    today_settlements = list(settlements_by_signal.values())
+    settlement_counts: dict[str, int] = {}
+    for row in today_settlements:
+        key = str(row.get('settlement_outcome') or 'PENDING_DATA')
+        settlement_counts[key] = settlement_counts.get(key, 0) + 1
+    observation_closures = len(judgments)
+    closing_total = len(today_settlements) + observation_closures
+    correction_scene_labels = {
+        'same_day_recover': '当日收复',
+        'after_execute_now': '执行后反抽',
+        'retest_invalidated': '假破位确认',
+        'retest_pass': '假破位确认',
+        'post_break_retest': '执行后反抽',
     }
-    anchor_rows = []
-    for row in (market.get('correction_anchors') or []):
-        low = float(row['zone_low'])
-        high = float(row['zone_high'])
-        anchor_rows.append({
-            **dict(row),
-            'trigger': correction_trigger_labels['execute_now'],
-            'notice': f'弱市执行：收盘仍破 {low:.3g}，当日执行，不立哨。',
-        })
     corrections = list(market.get('correction_events') or [])
     corrections = [
-        {**dict(row), 'trigger': correction_trigger_labels.get(row['trigger'], row['trigger'])}
+        {
+            **dict(row),
+            'scene': correction_scene_labels.get(
+                row.get('scene') or row.get('trigger'),
+                row.get('scene') or row.get('trigger'),
+            ),
+        }
         for row in corrections
+        if (row.get('scene') or row.get('trigger')) in {
+            'same_day_recover', 'after_execute_now', 'retest_invalidated', 'retest_pass', 'post_break_retest'
+        }
     ]
-    corrections = _merge_correction_rows(anchor_rows + corrections)
-    lines.append(f'收盘处理（{len(corrections)}条）：')
+    corrections = _merge_correction_rows(corrections)
+    summary_text = '｜'.join(
+        f'{_SETTLEMENT_OUTCOME_LABELS.get(key, key)}{count}'
+        for key, count in sorted(settlement_counts.items())
+    ) + f'｜观察哨结案{observation_closures}'
+    lines.append(f'收盘处理（{closing_total}条）：{summary_text}')
     lines.extend([
         (
             f"{names.get(str(row['symbol']), str(row['symbol']))}"
-            f"（{row['symbol']}）｜{row['trigger']}｜{row['notice']}"
+            f"（{row['symbol']}）｜{row.get('scene') or row.get('trigger')}｜{row['notice']}"
         )
         for row in corrections
     ] or ['无'])

@@ -15,7 +15,9 @@ def signal_reachability(
     market_rows: Iterable[Mapping[str, Any]] = (),
     *,
     tail_approx_tolerance: float = 0.003,
+    as_of: date | None = None,
 ) -> dict[str, dict[str, Any]]:
+    evaluation_date = as_of or date.today()
     market_by_date_symbol = {
         (str(row.get('trade_date')), str(row['symbol'])): row
         for row in market_rows
@@ -28,10 +30,20 @@ def signal_reachability(
     }
 
     def market_for_row(row: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        row_date = str(row.get('valid_for') or row.get('created_at') or '')[:10]
         return market_by_date_symbol.get(
-            (str(row.get('created_at') or '')[:10], str(row.get('symbol'))),
+            (row_date, str(row.get('symbol'))),
             market_by_symbol.get(str(row.get('symbol'))),
         )
+
+    def is_validity_ended(row: Mapping[str, Any]) -> bool:
+        valid_for = row.get('valid_for')
+        if valid_for is None:
+            return True
+        try:
+            return date.fromisoformat(str(valid_for)[:10]) <= evaluation_date
+        except ValueError:
+            return False
 
     grouped: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -41,7 +53,8 @@ def signal_reachability(
         total = len(items)
         audited_items = [
             row for row in items
-            if (market := market_for_row(row)) is not None
+            if is_validity_ended(row)
+            and (market := market_for_row(row)) is not None
             and not market.get('two_source_anomaly')
             and not row.get('audit_excluded')
         ]
@@ -49,9 +62,13 @@ def signal_reachability(
         daily_reachable = 0
         unreachable = 0
         for row in items:
-            row_date = str(row.get('created_at') or '')[:10]
             market = market_for_row(row)
-            if market is None or market.get('two_source_anomaly') or row.get('audit_excluded'):
+            if (
+                not is_validity_ended(row)
+                or market is None
+                or market.get('two_source_anomaly')
+                or row.get('audit_excluded')
+            ):
                 continue
             zone_low = float(row.get('zone_low') or 0)
             zone_high = float(row.get('zone_high') or 0)
@@ -95,6 +112,51 @@ def signal_reachability(
     return report
 
 
+def attach_hypothetical_pnl(
+    rows: Iterable[Mapping[str, Any]],
+    market_rows: Iterable[Mapping[str, Any]],
+    *,
+    window: int = 5,
+) -> list[dict[str, Any]]:
+    '''§9 分策略假想期望输入：entry 按有效日收盘假设成交，按 window 个交易日后收盘估值。
+    缺任一价格或成交日两源异常时保持 None，不伪造 0。'''
+    snapshots: dict[tuple[str, str], Mapping[str, Any]] = {}
+    dates_by_symbol: dict[str, list[str]] = {}
+    for row in market_rows:
+        symbol = str(row.get('symbol') or '')
+        trade_date = str(row.get('trade_date') or '')[:10]
+        if not symbol or not trade_date:
+            continue
+        snapshots.setdefault((trade_date, symbol), row)
+        dates = dates_by_symbol.setdefault(symbol, [])
+        if trade_date not in dates:
+            dates.append(trade_date)
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item.setdefault('hypothetical_pnl_pct', None)
+        role = str(item.get('role') or item.get('tag') or '')
+        # 假想成交样本为策略的买入成交：entry 与 T
+        if role in ('entry', 't') and str(item.get('status')) == 'TRIGGERED':
+            base_date = str(item.get('valid_for') or item.get('created_at') or '')[:10]
+            symbol = str(item.get('symbol') or '')
+            fill_row = snapshots.get((base_date, symbol))
+            fill = fill_row.get('est_close') if fill_row else None
+            later_dates = [d for d in sorted(dates_by_symbol.get(symbol, [])) if d > base_date]
+            if (
+                fill is not None
+                and float(fill) > 0
+                and len(later_dates) >= window
+                and not (fill_row or {}).get('two_source_anomaly')
+            ):
+                exit_row = snapshots.get((later_dates[window - 1], symbol))
+                exit_close = exit_row.get('est_close') if exit_row else None
+                if exit_close is not None:
+                    item['hypothetical_pnl_pct'] = (float(exit_close) / float(fill) - 1) * 100
+        enriched.append(item)
+    return enriched
+
+
 def signal_quality(
     rows: Iterable[Mapping[str, Any]],
     market_rows: Iterable[Mapping[str, Any]] = (),
@@ -121,14 +183,18 @@ def signal_quality(
         for row in items:
             if str(row.get('status')) != 'TRIGGERED':
                 continue
-            row_date = str(row.get('created_at') or '')[:10]
+            row_date = str(row.get('valid_for') or row.get('created_at') or '')[:10]
             market = market_by_date_symbol.get((row_date, str(row.get('symbol'))))
             if market is None:
                 market = market_by_symbol.get(str(row.get('symbol')))
             if row.get('audit_excluded') or (market or {}).get('two_source_anomaly'):
                 continue
             triggered.append(row)
-        pnl_values = [float(row.get('hypothetical_pnl_pct') or 0) for row in triggered]
+        pnl_values = [
+            float(row['hypothetical_pnl_pct'])
+            for row in triggered
+            if row.get('hypothetical_pnl_pct') is not None
+        ]
         expectancy = sum(pnl_values) / len(pnl_values) if pnl_values else None
         rolling_values = pnl_values[-50:]
         rolling_expectancy = sum(rolling_values) / len(rolling_values) if rolling_values else None
@@ -138,7 +204,11 @@ def signal_quality(
             'touch_rate': len(triggered) / total if total else 0.0,
             'mechanical_expectancy': expectancy,
             'rolling_expectancy': rolling_expectancy,
-            'ev_negative': rolling_expectancy is not None and len(triggered) >= 30 and rolling_expectancy <= 0,
+            'ev_negative': (
+                rolling_expectancy is not None
+                and len(pnl_values) >= 30
+                and rolling_expectancy <= 0
+            ),
             'reachability': signal_reachability(
                 items,
                 market_rows,
@@ -263,6 +333,8 @@ def _kline_rows(
 ) -> list[Mapping[str, Any]]:
     if stock_klines is not None:
         return list(stock_klines.get(symbol, ()))
+
+    from .data import akshare
 
     return list(akshare.stock_kline(symbol, trade_date=end_date, limit=120))
 

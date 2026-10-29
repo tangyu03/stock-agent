@@ -1,0 +1,1 @@
+{"trade_date": "2026-01-01", "signal_rows": [{"symbol": "300001", "strategy_id": "pool", "trend": "UP", "stop_zone": [9.0, 9.2], "profit_zone": [11.0, 11.2], "t_buy_zone": [10.0, 10.2], "t_sell_zone": [11.0, 11.2], "parent_id": "pool:300001"}]}

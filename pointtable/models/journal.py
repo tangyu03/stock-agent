@@ -21,8 +21,19 @@ class JournalEntry(BaseModel):
     to_status: str
     reason: str = ""
     price: Optional[float] = None
+    event: Optional[str] = None
+    qualifier: Optional[str] = None
+    old_zone: Optional[tuple[float, float]] = None
+    new_zone: Optional[tuple[float, float]] = None
     record_type: JournalRecordType = JournalRecordType.TRANSITION
+    event_source: str = 'live_settle'
     created_at: datetime
+    occurred_at: Optional[datetime] = None
+    recorded_at: Optional[datetime] = None
+    zone_snapshot_id: Optional[str] = None
+    run_id: Optional[str] = None
+    code_version: Optional[str] = None
+    input_snapshot_id: Optional[str] = None
 
     @field_validator("signal_id")
     @classmethod

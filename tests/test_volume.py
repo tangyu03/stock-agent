@@ -18,8 +18,15 @@ def test_passive_break_waits_for_close():
 
 def test_missing_active_delta_does_not_fake_execution():
     decision = break_qualifier(volume_ratio=1.5, active_delta=None)
-    assert decision.qualifier is BreakQualifier.DELAY_OBSERVE
+    assert decision.qualifier is BreakQualifier.UNCLASSIFIED
     assert decision.reason == 'active_delta_missing'
+    assert decision.data_status == 'MISSING'
+
+
+def test_missing_volume_ratio_does_not_fake_delay():
+    decision = break_qualifier(volume_ratio=None, active_delta=1000.0)
+    assert decision.qualifier is BreakQualifier.UNCLASSIFIED
+    assert decision.reason == 'volume_ratio_missing'
 
 
 def test_negative_active_delta_is_inner_dominance():

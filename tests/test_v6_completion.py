@@ -223,7 +223,8 @@ def test_evening_pipeline_and_market_fuse():
         }],
         'LOW', now,
     )
-    assert [row.tag for row in rows] == [SignalTag.ENTER]
+    # §4：entry 生成时 Z/W 同生 stop/profit 一起落库
+    assert [row.tag for row in rows] == [SignalTag.ENTER, SignalTag.STOP, SignalTag.PROFIT]
     assert build_context_marks([{'symbol': 'sh000001', 'zone': (3000, 3010)}], [], now.date(), now)[0].code == 'sh000001'
     assert market_tier(8000) == 'LOW'
 
@@ -259,7 +260,11 @@ def test_routine_auction_watch_settle_and_restore(tmp_db):
     assert result['invalidated'] == ['s-1']
     assert conn.execute('SELECT COUNT(*) FROM journal WHERE signal_id=?', ('s-1',)).fetchone()[0] == 1
 
-    result = run_watch(conn, 10.5, False, now, trade_date='2026-01-01')
+    result = run_watch(
+        conn, 10.5, False, now, trade_date='2026-01-01',
+        volume_ratio=0.7,
+        break_context={'300001': {'volume_ratio': 0.7, 'active_delta': 0}},
+    )
     assert result['touched'] == ['stop-1']
     assert dict(conn.execute('SELECT status FROM signals WHERE id=?', ('stop-1',)).fetchone())['status'] == 'TRIGGERED'
 
@@ -326,7 +331,7 @@ def test_settle_catches_up_close_touch_without_watch(tmp_db):
         ('stop-1',),
     ).fetchone()
     assert row['status'] == 'TRIGGERED'
-    assert row['status_reason'] == 'settle_close_touch:DELAY_OBSERVE:NOT_CLASSIFIED'
+    assert row['status_reason'] == 'settle_close_touch:UNCLASSIFIED:NOT_CLASSIFIED'
 
 
 def test_settle_resolves_retest_by_close(tmp_db):
@@ -394,10 +399,11 @@ def test_evening_cli_persists_signals(tmp_db):
     }), encoding='utf-8')
     try:
         assert main(['--db', str(tmp_db), 'evening', '--input', str(input_path)]) == 0
+        # §4：entry + Z/W 同生 stop/profit 共 3 行
         assert dict(get_connection().execute(
             'SELECT COUNT(*) AS count FROM signals WHERE created_at LIKE ?',
             ('2026-01-01%',),
-        ).fetchone())['count'] == 1
+        ).fetchone())['count'] == 3
     finally:
         input_path.unlink(missing_ok=True)
 

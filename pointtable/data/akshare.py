@@ -22,6 +22,12 @@ _CACHE_LOCK = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix='akshare')
 _EXECUTOR_LOCK = threading.Lock()
 _TENCENT_KLINE_URL = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get'
+_TENCENT_QUOTE_URL = 'https://qt.gtimg.cn/q='
+_EASTMONEY_KLINE_HOSTS = (
+    'push2his.eastmoney.com',
+    '21.push2his.eastmoney.com',
+    '90.push2his.eastmoney.com',
+)
 _TENCENT_QUOTE_URL = 'http://qt.gtimg.cn/q='
 _INDEX_AMOUNT_OVERRIDES_PATH = Path(__file__).with_name('index_amount_overrides.json')
 
@@ -156,7 +162,11 @@ def index_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> 
         symbol=symbol,
         start_date=start.isoformat().replace('-', ''),
         end_date=end.isoformat().replace('-', ''),
+        timeout=20,
+        retries=3,
     )
+    if rows is None:
+        rows = _eastmoney_index_kline_direct(symbol, start, end)
     records = _tail(rows, trade_date, limit, inclusive=True)
     latest_date = records[-1].get('date') or records[-1].get('日期') if records else None
     needs_spot = (
@@ -183,6 +193,8 @@ def index_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> 
                 period='daily',
                 start_date=(date.fromisoformat(trade_date) - timedelta(days=10)).isoformat().replace('-', ''),
                 end_date=trade_date.replace('-', ''),
+                timeout=20,
+                retries=3,
             ))
             hist_row = next(
                 (
@@ -197,28 +209,8 @@ def index_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> 
         if override_amount is not None:
             records[-1]['amount'] = float(override_amount)
             records[-1]['成交额'] = float(override_amount)
-    if records and not is_current_signal_day and _latest_amount(records[-1]) is None:
-        hist_symbol = symbol[-6:]
-        hist_rows = _records(cached_ak(
-            'index_zh_a_hist',
-            symbol=hist_symbol,
-            period='daily',
-            start_date=(date.fromisoformat(trade_date) - timedelta(days=10)).isoformat().replace('-', ''),
-            end_date=trade_date.replace('-', ''),
-        ))
-        hist_row = next(
-            (
-                row for row in reversed(hist_rows)
-                if str(row.get('trade_date') or row.get('date') or row.get('日期') or '').replace('-', '')
-                == trade_date.replace('-', '')
-            ),
-            None,
-        )
-        if hist_row is not None and _latest_amount(hist_row) is not None:
-            records[-1]['amount'] = _latest_amount(hist_row)
-            records[-1]['成交额'] = _latest_amount(hist_row)
     if records and is_current_signal_day and _latest_amount(records[-1]) is None:
-        spot_rows = _records(cached_ak('stock_zh_index_spot_sina'))
+        spot_rows = _records(cached_ak('stock_zh_index_spot_sina', retries=2))
         spot = next((row for row in spot_rows if str(row.get('代码')) == symbol), None)
         if spot is not None and trade_date:
             spot_date = date.fromisoformat(trade_date)
@@ -228,6 +220,13 @@ def index_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> 
                 records[-1]['close'] = spot.get('最新价') or records[-1].get('close') or records[-1].get('收盘')
                 records[-1]['日期'] = spot_date
                 records[-1]['date'] = spot_date
+    if records and is_current_signal_day and _latest_amount(records[-1]) is None:
+        quote = _tencent_realtime_quote(symbol)
+        if quote is not None and str(quote.get('date') or '') == str(trade_date):
+            records[-1]['amount'] = quote['amount']
+            records[-1]['成交额'] = quote['amount']
+            if quote.get('close'):
+                records[-1]['close'] = quote['close']
     if not records or len(records) < min(limit, 20) or _latest_amount(records[-1]) is None:
         records = _tencent_kline(
             symbol,
@@ -454,6 +453,62 @@ def _tencent_quote_parts(symbols: Sequence[str]) -> list[list[str]]:
     return parts
 
 
+def _eastmoney_index_kline_direct(symbol: str, start: date, end: date) -> list[dict[str, Any]]:
+    '''东财日 K 直连兜底：akshare 的 em 封装被网络环境间歇拦截时，轮询 CDN 镜像域名直取。
+    fields2 映射：f51=日期 f52=开盘 f53=收盘 f54=最高 f55=最低 f56=成交量 f57=成交额(元)。'''
+    secid = ('1.' if symbol.startswith(('sh', '6')) else '0.') + symbol[-6:]
+    for host in _EASTMONEY_KLINE_HOSTS:
+        try:
+            with requests.Session() as session:
+                session.trust_env = False
+                response = session.get(
+                    f'https://{host}/api/qt/stock/kline/get',
+                    params={
+                        'secid': secid,
+                        'fields1': 'f1,f2,f3,f4,f5',
+                        'fields2': 'f51,f52,f53,f54,f55,f56,f57',
+                        'klt': '101',
+                        'fqt': '0',
+                        'beg': start.isoformat().replace('-', ''),
+                        'end': end.isoformat().replace('-', ''),
+                    },
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0',
+                        'Referer': 'https://quote.eastmoney.com/',
+                    },
+                    timeout=8,
+                )
+            response.raise_for_status()
+            klines = (response.json().get('data') or {}).get('klines') or []
+        except (requests.RequestException, ValueError):
+            continue
+        records: list[dict[str, Any]] = []
+        for line in klines:
+            parts = str(line).split(',')
+            if len(parts) < 7:
+                continue
+            try:
+                amount = float(parts[6])
+            except (TypeError, ValueError):
+                continue
+            try:
+                records.append({
+                    'date': parts[0],
+                    'open': float(parts[1]),
+                    'close': float(parts[2]),
+                    'high': float(parts[3]),
+                    'low': float(parts[4]),
+                    'volume': float(parts[5]),
+                    'amount': amount,
+                    '成交额': amount,
+                })
+            except (TypeError, ValueError):
+                continue
+        if records:
+            return records
+    return []
+
+
 def _records(rows: Any) -> list[dict[str, Any]]:
     if rows is None:
         return []
@@ -481,6 +536,32 @@ def _tencent_symbol(symbol: str) -> str:
         return symbol
     prefix = 'sh' if symbol.startswith('6') else 'sz' if symbol.startswith(('0', '3')) else 'bj'
     return f'{prefix}{symbol}'
+
+
+def _tencent_realtime_quote(symbol: str) -> dict[str, Any] | None:
+    '''腾讯实时报价兜底：K 线源（6 字段）不带成交额，qt 实时串有——
+    fields[30] 前 8 位为日期，fields[37] 为成交额（单位万元）。'''
+    try:
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.get(
+                f'{_TENCENT_QUOTE_URL}{_tencent_symbol(symbol)}',
+                headers={'Referer': 'https://gu.qq.com/'},
+                timeout=8,
+            )
+        response.raise_for_status()
+        fields = response.text.split('~')
+        raw_date = str(fields[30] or '')[:8]
+        amount_wan = float(fields[37])
+        if len(raw_date) != 8 or amount_wan <= 0:
+            return None
+        return {
+            'date': f'{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}',
+            'amount': amount_wan * 10_000,
+            'close': float(fields[3]) if fields[3] else None,
+        }
+    except (requests.RequestException, IndexError, TypeError, ValueError):
+        return None
 
 
 def _tencent_kline(symbol: str, start_date: str, end_date: str, limit: int) -> list[dict[str, Any]]:

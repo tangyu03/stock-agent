@@ -1,363 +1,526 @@
-# 文档三：信号全生命周期报告模板集（v4.1）
 
+# **文档三：信号全生命周期报告模板集（v4.2）**
 
+## **0. 三层建模总览**
 
-## 0. 三层建模总览
-
+```text
+第一层：实体与四状态机        第二层：因果链与结算事实       第三层：报告槽位
+────────────────────         ─────────────────────         ────────────────
+Signal: ACTIVE →             enter → stop →                report --date 读取
+TRIGGERED/EXPIRED/           收盘结算 → retest_confirm →    指定时点不可变快照，
+INVALIDATED                  恢复保护或新 enter             不产生状态、不重算分支
+（唯一状态机）                （parent_id/root_id接力）
 ```
-第一层：实体与四状态机        第二层：因果链               第三层：报告槽位
-────────────────────         ──────────────              ──────────────
-Signal: ACTIVE →             enter → stop →              report --date 读取
-TRIGGERED/EXPIRED/           retest_confirm →            当时状态快照，按
-INVALIDATED                  新 enter                    叙事顺序投影到槽位
-（唯一状态机）                （parent_id 接力）           （不产生状态）
-```
 
-- **状态机只有第一层**，四状态，不可逆。
-- **链不是状态机**，是 parent_id 连接的信号接力。
-- **报告是投影**，`report --date` 只读不写。
+- 状态机只有第一层，四状态，不可逆；
+- `break_qualifier` 是盘中原始定性，`effective_qualifier` 是熔断覆盖后的有效定性，`settlement_outcome` 是收盘结果，三者分开；
+- **收盘处理不是纠错**，纠错只是其中特定场景；
+- 报告是投影，只读不写。
 
-## 1. 实体与四状态机
+**日期口径：**T=数据基准日，R=计划有效日。`report --date R` 读取 T 日 settle/evening 完成后的快照。
+
+| 内容 | 使用快照 |
+|---|---|
+| A0 | T 日真实触发事件的触发时快照 |
+| 破位区 | 触发时 stop 快照＋T 日结算记录 |
+| 收盘处理 | T 日 stop 结算与观察哨结案事实 |
+| 候选区 | T 晚生成、valid_for=R 的 entry |
+| 池内票区 | T 晚 evening 后供 R 日使用的信号 |
+| 判决区 | closed_at 属于 T 日的 retest_confirm |
+
+A0 与池内票区可以引用不同 signal_id，不构成矛盾。未结算时只能输出 preview 并标记“未结算”。
+
+## **1. 实体与四状态机**
 
 | 实体 | 状态 | 说明 |
 |---|---|---|
-| Signal（role=entry） | ACTIVE → TRIGGERED / EXPIRED / INVALIDATED | 候选买点，触达即终态；ma_tomorrow 系仅在 trigger_window 内触发 |
-| Signal（role=stop） | 同上 | 池内票风控线；break_qualifier 记录定性 |
-| Signal（role=profit） | 同上 | 池内票止盈参考 |
-| Signal（role=t） | 同上 | 池内票做T参考；每晚新建、当日有效 |
-| Signal（role=retest_confirm） | 同上 | 观察哨，三终态即“判决” |
+| Signal（entry） | ACTIVE → TRIGGERED / EXPIRED / INVALIDATED | D 晚生成，R 日有效；ma_tomorrow 系仅窗口内触发 |
+| Signal（stop） | 同上 | 原始定性、有效定性与收盘结算分开 |
+| Signal（profit） | 同上 | 池内止盈参考 |
+| Signal（t） | 同上 | D 晚新建，R 日有效并配对 |
+| Signal（retest_confirm） | 同上 | 观察哨，三终态即判决 |
 | PoolEntry | in / out | 关注关系 |
-| ContextMark | ACTIVE / INACTIVE | 轻量环境标记 |
+| ContextMark | ACTIVE / INACTIVE | 环境标记，含数据质量状态 |
 
-**报告模板里不出现“S5 状态”“S7 迁移”**。出现的是“观察期存续”“判决后重新开放选股”。
+报告中不出现“S5 状态”“S7 迁移”。出现的是“观察期存续”“收盘处理”“等待新 enter”“假破位后恢复保护”。
 
-## 2. role 定义对照表
+## **2. role 定义对照表**
 
-| role | side | zone_policy | pair_required | parent | 触发方式 | 触发窗口 | 触发后行为 |
-|---|---|---|---|---|---|---|---|
-| entry | BUY | 当日有效（次一交易日） | 否 | 无 | 单点 | **ma_tomorrow 系 14:30–15:00；其他全天** | **成为后续保护行的 parent 锚点＋统计分母** |
-| stop | SELL | rolling（每日上移） | 否 | enter 或 pool | 单点 | 全天 | 产生 retest_confirm |
-| profit | SELL | **fixed 或 trailing** | 否 | enter 或 pool | 单点 | 全天 | 无 |
-| t | BUY/SELL | fixed（当日） | 是（当日配对） | enter 或 pool | 单点 | 全天 | 配对提示 |
-| retest_confirm | NEUTRAL | window(n) | 否 | enter 或 pool | 条件判定 | 全天 | 链终止或纠错 |
+| role | side | zone_policy | pair | parent | 有效与触发窗口 | 触发后行为 |
+|---|---|---|---|---|---|---|
+| entry | BUY | 次日单点区间 | 否 | 无 | valid_for=R；ma_tomorrow 系 14:30–15:00，其他全天 | 成为保护行 parent 锚点＋统计分母 |
+| stop | SELL | 按趋势滚动 | 否 | enter 或 pool | 全天 | 写原始定性并进入收盘结算 |
+| profit | SELL | fixed 或 trailing | 否 | enter 或 pool | 全天 | 无 |
+| t | BUY/SELL | fixed，次日有效 | 是 | enter 或 pool | valid_for=R，全天 | 配对提示 |
+| retest_confirm | NEUTRAL | window(n) | 否 | enter 或 pool | 条件判定，全天 | 链终止、纠错或恢复保护行 |
 
-**加新 role 的规则**：先填此表，原子组合与现有五个不同才配加。
+## **3. 因果链规则表**
 
-## 3. 因果链规则表
-
-| 触发 | 条件 | 产生 | parent_id |
+| 触发 | 条件 | 产生 | 后续保护行 |
 |---|---|---|---|
-| enter TRIGGERED | 客观触发入场 | 该 stop 的 parent 锚点更新为新 enter（无 stop 则新建） | — |
-| 池内票，每晚 evening | 趋势 UP/DOWN 且**无 ACTIVE retest_confirm** | 更新 stop、t、profit | → 最近 TRIGGERED enter 或 pool |
-| 池内票，观察哨存续 | 有 ACTIVE retest_confirm | **暂停生成 stop/profit/t** | — |
-| stop TRIGGERED | 写入 break_qualifier | 记 journal qualifier | — |
-| stop TRIGGERED | EXECUTE_NOW（或熔断日 DELAY/DIVERGENCE 视同） | retest_confirm | → 原 enter 或 pool |
-| stop TRIGGERED | DELAY/DIVERGENCE 且收盘<zone_low | retest_confirm | 同上 |
-| stop TRIGGERED | DELAY/DIVERGENCE 且收盘收复 | 纠错提醒（无新信号） | — |
-| stop TRIGGERED | LIMIT_EXEMPT | 不产生 retest_confirm | — |
-| retest_confirm TRIGGERED | 反抽不过 | 链终止，等新 enter | — |
-| retest_confirm INVALIDATED | 放量站回 | 纠错提醒；人买回需新 enter | — |
-| retest_confirm EXPIRED | 到期无反抽 | 链终止，等新 enter | — |
-| 任意时刻 | 三个前置检查通过＋价格到位＋（ma_tomorrow 系）14:30–15:00 窗口内 | 新 enter | 无（新链起点） |
+| entry 生成 | 前提与前置检查通过 | R 日 entry，必要时同生 stop | 同票最多一条 ACTIVE stop |
+| entry TRIGGERED | 有效日、窗口内触达 | parent 重锚或新建 stop | 恢复普通池内生成 |
+| 每晚 evening | 池内 UP、无暂停条件 | R 日 stop/profit/t | DOWN 不生成 BUY 行 |
+| stop TRIGGERED | 单点触碰 | 原始 break_qualifier | 同票未触发 T_BUY 连坐作废 |
+| 熔断日结算 | DELAY/DIVERGENCE | 视同 EXECUTE_NOW（不论收盘是否收复） | 不立哨；等待新 enter |
+| 非熔断仍破 | DELAY/DIVERGENCE，收盘低于下沿 | retest_confirm | 观察期暂停普通保护行 |
+| 非熔断收复 | DELAY/DIVERGENCE，收盘收复下沿 | 当日收复＋纠错事件 | 次日晚恢复生成 |
+| EXECUTE_NOW | 原始或有效定性 | 当日执行 | 不立哨；等待新 enter |
+| LIMIT_EXEMPT | 封板附近失真 | 封板豁免 | 不立哨；次日晚正常生成 |
+| retest TRIGGERED | 反抽不过 | 确认破位 | 暂停，等待新 enter |
+| retest EXPIRED | 到期从未入区 | 无反抽 | 暂停，等待新 enter |
+| retest INVALIDATED | 放量站回 | 假破位＋纠错 | 次日晚恢复保护行 |
+| EXECUTE_NOW 后反抽 | 回到原止损线附近 | after_execute_now 纠错 | 不生成观察哨或买点 |
 
-## 4. 报告槽位投影表
+## **4. 报告槽位投影表**
 
-| 槽位 | 读取条件 |
+| 槽位 | 读取条件与展示要求 |
 |---|---|
-| A0 信号日触发回顾 | 信号日进入 TRIGGERED 的全部 Signal |
-| 环境行 | context_marks（ACTIVE）＋ event_calendar |
-| 候选区 | ACTIVE 的 entry，经三个前置检查过滤；同票多策略全部列出不合并；超上限标 truncated；**ma_tomorrow 系附触发窗口** |
-| 池内票区 | 池内票的 ACTIVE stop/profit/t（原“持仓区”改名）；**观察哨存续期此区不显示该票保护行** |
-| 破位区 | 当日进入 TRIGGERED 的 stop，**附 break_qualifier** |
-| 观察区 | ACTIVE 的 retest_confirm |
-| 判决区 | 当日 signals.closed_at 的 retest_confirm 终态 |
+| 环境行 | T 日指数、有效 context_marks、事件日历；过期数据单独标记 |
+| 候选区 | valid_for=R 的 ACTIVE entry；同票多策略全部列出 |
+| 池内票区 | T 晚供 R 日使用的 stop/profit/t；缺失显示生命周期原因 |
+| A0 触发回顾 | T 日真实 TRIGGERED 事件；主报告可汇总，审计版显示完整事件 |
+| 破位区 | T 日触发 stop；展示原始定性、弱市覆盖和收盘结果 |
+| 收盘处理 | T 日 stop 结算与观察哨结案；主报告默认汇总，审计版可列明细 |
+| 观察区 | T 晚仍 ACTIVE 的 retest_confirm |
+| 判决区 | closed_at 属于 T 日的 retest_confirm 终态与判决事实 |
 
-**三个约束**：
+约束：
 
-1. **同一只票可同时在候选区和池内票区出现，不折叠。**
-2. **观察区与判决区互斥**。
-3. **判决区只显示当天刚结案的**；回看走“近期已结案”小节。
+1. 候选区和池内票区不折叠；
+2. 同一 retest_confirm 不得同时进入观察区与判决区；
+3. 判决区只显示当天结案；
+4. 收盘处理不等于纠错；不设顶级“纠错区”；
+5. 当日执行、生成观察哨、封板豁免不计纠错；
+6. 破位区与收盘处理区不得在主报告中重复整表明细。
 
-## 5. 依据等级
+## **5. 依据等级**
 
-- **A｜原文明确**
+- **A｜本版方案明确**
 - **B｜语义推导**
 - **C｜工程近似，可配置**
 
-## 6. 各槽位模板
+## **6. 各槽位模板**
 
-### 6.1 A0 信号日触发回顾
+### **6.1 报告头与环境行**
 
-```
-A0 信号日（2026-10-27）触发回顾
-触发：天孚通信 entry first_move_5d 208.0–209.5（14:47 窗口内单点触发）
-触发：深科达 stop 68.0（13:42 TRIGGERED，DELAY_OBSERVE）
-```
+```text
+【2026-10-28 交易计划】
+数据基准日：2026-10-27｜计划有效日：2026-10-28
+报告状态：已结算
 
-### 6.2 环境行
-
-```
 环境：
-  上证 3201.5（-0.4%）｜深证 10876.2（-0.7%）｜创业板 2154.8（-1.1%）
-  光模块：主线，池内 1/3｜半导体设备：退潮
-  时间：周五收摊｜财报T-1：XX
+  量能 6724.14亿｜量能档位：LOW
+  上证 3648.30/MA5 3681.47（低于MA5 0.90%）
+  深证成指 11245.70/MA5 11503.10（低于MA5 2.24%）
+  科创50 1252.28/MA5 1312.49（低于MA5 4.59%）
+  光模块：退潮｜半导体设备：轮动
+  板块上下文：存储数据过期，不参与破位定性
+  熔断日：是/否（读取市场日快照）
 ```
 
-### 6.3 候选区
+指数名称由固定映射生成，不得将 `sz399001` 显示为创业板。
 
-**五种策略各自独立，同票多策略全部列出，不合并。**
+### **6.2 A0 信号日触发回顾**
 
+主报告汇总：
+
+```text
+A0 信号日（2026-10-27）触发回顾：
+  共触发28条｜stop 19｜t 8｜retest_confirm 1
+  完整触发时快照见审计附录
 ```
-候选（2只）：
+
+审计版逐条：
+
+```text
+触发：大普微 stop 310.959–314.1｜14:02
+  signal_id=sig_...｜strategy_id=...｜parent=...
+  zone_snapshot=zs_...｜source=live_watch
+
+触发：创世纪 t_buy 10.22–11.48｜10:18
+  signal_id=sig_...｜配对：t_sell sig_...／未配对
+```
+
+要求：展示触发时刻；T 必须区分 t_buy/t_sell（读结构化 side，不解析 signal_id 字符串），配对信息由现有配对逻辑推导；entry 能审计触发窗口；A0 不与 T 晚最终 ACTIVE 集硬对齐；replay/backfill 不进默认生产 A0。
+
+### **6.3 候选区**
+
+五种策略独立，同票多策略全部列出，不合并。
+
+```text
+候选（2只，不合并同票多策略）：
 
 天孚通信
-  entry  first_move_5d  208.0–209.5
-    触发窗口：14:30–15:00
-    前提：5日线上行 + 光模块主线第6日 + 未进监管 + 榜不烂
-    失效：收盘破207.8（明日MA5）
+  entry  first_move_5d  208.00–209.50
+    有效日：2026-10-28｜触发窗口：14:30–15:00
+    前提：5日线上行＋光模块主线＋未进监管＋榜不烂
+    基准日参考：收盘211.20，高于买入区间，待有效日评估
+    失效：收盘低于207.80（失效阈值）
     依据：5日线买在明天的位置，破5日就是卖点
-  entry  volume_breakout  207.5–208.5
-    触发窗口：全天有效
-    前提：放量站上207.0关键位 + 收阳量能确认 + 未进监管
-    失效：收盘跌破207.0
 
-深科达  entry  first_move_10d  65.2–65.8
-  触发窗口：14:30–15:00
-  前提：回调深（自破位日-4.1%）+ 10日线方向未死 + 未进监管
-  失效：收盘破65.2
-  均线冷却：5日线档位冷却中（10.18、10.21两次止损），该档不出买点
+  entry  volume_breakout  207.50–208.50
+    有效日：2026-10-28｜触发窗口：全天有效
+    前提：放量站上207.00关键位＋收阳量能确认＋未进监管
+    失效：收盘低于207.00
 
-候选超过 watchlist 上限时按截断规则输出，截断项标 truncated。
-仓位提示：量能LOW 时在行尾附“仓位提示：减半（量能LOW）”。
+深科达
+  entry  first_move_10d  65.20–65.80
+    有效日：2026-10-28｜触发窗口：14:30–15:00
+    前提：回调充分＋10日线方向未死＋未进监管
+    失效：收盘低于65.20（区间下沿）
+    均线冷却：5日线家族暂停，10日线不受影响
 ```
 
-**EV_NEG 行**：
+约束：失效阈值不得高于买入区间下沿；“明日 MA／区间下沿／MA×系数”按真实来源命名；有效日未结束时只显示“基准日参考”，不输出未触达/不可达结论；超上限标 truncated；候选与池内 stop 重合时提示“空仓看买点，池内保护看 stop”；LOW 时附“仓位提示：减半（量能LOW）”。
 
-```
-XX  entry  first_move_5d  26.3–26.5  [EV_NEG：该策略近50笔期望≤0，仅记录]
+EV_NEG 只能绑定真实策略：
+
+```text
+[EV_NEG：strategy=first_move_5d，近50笔期望≤0，仅记录]
 ```
 
-### 6.4 竞价快照
+禁止“【EV_NEG记录】：池内”。EV_NEG 不过滤候选。
 
-```
+### **6.4 竞价快照**
+
+```text
 竞价：天孚通信 弱转强，量比3.2定格，高开0.8%
-今日候选 208.0–209.5 正常生效
+今日候选 208.00–209.50 正常生效
 
-竞价：XX 强转弱，昨日涨停今低开-2.1%，量比0.6
+竞价：×× 强转弱，昨日涨停今低开-2.1%，量比0.6
 今日全部BUY信号已作废（INVALIDATED, reason=auction_weak）
 
-竞价：XX 一字首开（limit_up_break），量比5.8定格，开盘+1.2%
-量+开盘涨幅需动态判断，系统不自动定性
+竞价：×× 一字首开（limit_up_break），量比5.8定格，开盘+1.2%
+量与开盘涨幅需动态判断，系统不自动定性
 
 竞价：天孚通信 中性，无操作含义
 ```
 
-### 6.5 盘中买入提醒
+### **6.5 盘中买入提醒**
 
-**触发语义：单点触碰即触发，ma_tomorrow 系 entry 受 14:30–15:00 窗口约束。**
+```text
+触发：天孚通信 entry first_move_5d 208.00–209.50
+14:47 价格在区间内，且处于有效日触发窗口，单点触碰即 TRIGGERED
 
-```
-触发：天孚通信 entry first_move_5d 208.0–209.5
-14:47 价格在区间内，窗口内单点触碰即 TRIGGERED，已推送
+忽略：天孚通信 entry first_move_5d 208.00–209.50
+10:23 价格在区间内，但窗口外，不触发、不推送
 
-忽略：天孚通信 entry first_move_5d 208.0–209.5
-10:23 价格在区间内，但窗口外（14:30 前），不触发、不推送
-
-撤销：XX entry first_move_5d（premise_broken）
+撤销：×× entry first_move_5d（premise_broken）
 该股今日进入监管名单，生成前提已破坏，未触发部分全部作废
 ```
 
-### 6.6 池内票区（原“持仓区”）
+### **6.6 池内票区**
 
-**池内票的 stop/profit/t 全生成。同一只票也可在候选区出现，不折叠。观察哨存续期此票不显示保护行。**
+同一只票可同时出现在候选区与池内票区，不折叠。
 
-```
+正常 UP：
+
+```text
 天孚通信（UP）
   量价：+5.3%，量比1.31，主动差+9.4%
   板块：光模块主线，池内排名1/3
-  履历：该票自上次 entry 触达至今 +12.4%
-  点位：stop 211.5–212.3（明日MA5=212.3，每日上移）｜t买 208.0–209.5，t卖 220.0–221.5
-  提示：无｜T配对：t买已生成，t卖未触发（14:30已提醒）
-  同位置买点前提满足（entry first_move_5d 208.0–209.5，触发窗口 14:30–15:00），空仓可看候选区
+  履历：自上次 entry 触达至今 +12.4%
+  点位：stop 211.50–212.30｜profit 220.00–221.50
+  做T（次日有效）：t_buy 208.00–209.50｜t_sell 220.00–221.50
+  T配对：t_buy已生成，t_sell未触发
+```
 
-天孚通信（刚触达次日）
-  履历：昨日14:47 entry 触达 @208.6
-  点位：stop 211.5–212.3（入场时同生，非后补）
+正常 DOWN：
 
+```text
 臻宝科技（DOWN）
-  量价：-3.2%，量比0.7，主动差-11.2%
-  板块：退潮
-  点位：stop 200.3–201.0
-  提示：趋势DOWN，支撑区间已转为卖出线。无T行、无BUY行。
-
-深科达（直接加 pool，无 enter 履历）
-  点位：stop 65.2–65.8（parent=pool:深科达）
-  提示：无 enter 履历，保护行按合成 parent 生成
-
-深科达（观察哨存续期）
-  提示：观察哨存续（68.0–68.5，剩2日），保护语义由观察哨承担，本票暂不生成 stop/profit/t
+  点位：stop 200.30–201.00｜profit 218.00–220.00
+  提示：趋势DOWN，不生成T_BUY及其他BUY行
 ```
 
-profit 行按 moban.md 另行渲染；size_hint 的 T_BUY t-size 结果附在 T 行尾。
+观察哨存续：
 
-### 6.7 破位区（当日 TRIGGERED 的 stop）
-
-```
-今日破位（2只）：
-
-天孚通信 stop 211.5（EXECUTE_NOW）
-  板块行无触发，指数行无触发，个股独跌+量比1.8
-  今日执行依据：主动放量算跌破。当天走，不立观察哨。
-
-深科达 stop 68.0（DELAY_OBSERVE）
-  板块“半导体设备”13:42已触发（context_marks triggered_at），疑似被带崩
-  收盘定生死：收盘破68.0→生成观察哨；收盘收复→当日假破位，纠错提醒
-
-触发对账：触发2
+```text
+深科达（观察哨存续）
+  提示：观察哨68.00–68.50，剩2日
+  普通stop/profit/t暂停，由观察哨承担观察语义
 ```
 
-**熔断日变体**：
+等待新 enter：
 
-```
-今日破位（2只）：
-
-深科达 stop 68.0（DELAY_OBSERVE → 熔断日视同 EXECUTE_NOW）
-  板块“半导体设备”已触发，疑似被带崩
-  熔断日破位定性取消延迟判决：当日按 EXECUTE_NOW 处理，不等收盘
-
-纠错提醒：天孚通信 stop 211.5（EXECUTE_NOW 破位日 10.21）
-今日价格反抽回 211.0，接近原止损线 211.5
-主动放量破位定性不变；若你当日未走，此处是纠错参考。追不追，是你。
-[push_correction_notice, scene=after_execute_now]
+```text
+深科达（DOWN）
+  点位：无普通保护行
+  保护状态：确认破位／EXECUTE_NOW后链终止，等待新enter
 ```
 
-**当日收复纠错提醒（统一文案）**：
+假破位后恢复：
 
-```
-收复：深科达收回 68.0 上方
-上午破位（DELAY_OBSERVE），14:10收复止损位
-收复止损位，可按纪律纠错。追不追，是你。
-[push_correction_notice]
+```text
+深科达（DOWN）
+  点位：stop 64.80–65.30｜profit ...
+  保护状态：假破位结案后按最新行情重建
+  前序signal_id=sig_...｜当前signal_id=sig_...
 ```
 
-### 6.8 观察区（ACTIVE 的 retest_confirm）
+T 未生成：
 
+```text
+大普微（UP）
+  点位：stop ...｜profit ...
+  T状态：未生成｜原因：<结构化reason>
 ```
+
+没有 stop 时，不得统一写“支撑区间已转为卖出线”，必须显示真实生命周期原因。
+
+### **6.7 破位区**
+
+破位区展示逐条依据，收盘处理区负责汇总。
+
+普通 EXECUTE_NOW：
+
+```text
+博杰股份 stop 84.2391–85.0900
+  原始定性：EXECUTE_NOW
+  收盘结算：收盘78.81仍低于84.2391，当日执行，不立观察哨
+  保护状态：等待新enter
+```
+
+弱市覆盖：
+
+```text
+博杰股份 stop 84.2391–85.0900
+  原始定性：DELAY_OBSERVE
+  弱市处理：熔断日视同 EXECUTE_NOW
+  收盘结算：当日执行，不立观察哨，不产生当日收复纠错
+  保护状态：等待新enter
+```
+
+非熔断日仍破：
+
+```text
+深科达 stop 68.00–68.50
+  原始定性：DELAY_OBSERVE
+  收盘结算：收盘67.80低于68.00，生成观察哨
+```
+
+非熔断日收复：
+
+```text
+创世纪 stop 11.1058–11.2180
+  原始定性：DELAY_OBSERVE
+  收盘结算：收盘11.20收复止损下沿11.1058，当日假破位，不立观察哨
+  纠错提醒：收复止损下沿，可按纪律纠错。
+  [push_correction_notice, scene=same_day_recover]
+  保护状态：次日晚恢复正常生成
+```
+
+LIMIT_EXEMPT：
+
+```text
+×× stop ...
+  原始定性：LIMIT_EXEMPT
+  收盘结算：封板附近失真，不立观察哨，次日晚正常生成保护行
+```
+
+数据不足：
+
+```text
+×× stop ...
+  原始定性：待补数据
+  数据状态：MISSING/STALE/ANOMALOUS
+  收盘结算：暂未完成，不默认按DELAY_OBSERVE处理
+```
+
+EXECUTE_NOW 后反抽附项（不计入当日 stop 触发数）：
+
+```text
+纠错附项：天孚通信
+  原stop于10.21判EXECUTE_NOW，原signal_id=sig_...
+  今日价格反抽接近原止损线211.50，原破位定性不变
+  仅作纠错参考，不生成观察哨或买点
+  [push_correction_notice, scene=after_execute_now]
+```
+
+### **6.8 收盘处理区**
+
+收盘处理是独立结算视图，包含当日执行、当日收复、生成观察哨、封板豁免及观察哨结案，**不等于纠错**。
+
+主报告默认只显示汇总：
+
+```text
+收盘处理（2026-10-27）：
+  stop结算：共19条
+    当日执行 8｜当日收复 11｜生成观察哨 0｜封板豁免 0｜待补数据 0
+  观察哨结案：共1条
+    确认破位 1｜假破位 0｜无反抽 0
+  纠错事件：共11条
+    当日收复 11｜EXECUTE_NOW后反抽 0｜假破位站回 0
+```
+
+审计版列明细：
+
+```text
+signal_id=...｜raw=DELAY_OBSERVE｜effective=EXECUTE_NOW
+circuit_day=true｜outcome=EXECUTE_NOW
+close=78.81｜zone_snapshot=...｜source=live_settle
+
+signal_id=...｜raw=DELAY_OBSERVE｜effective=DELAY_OBSERVE
+circuit_day=false｜outcome=RECOVERED_CORRECTION
+close=11.20｜correction_scene=same_day_recover
+```
+
+统计约束：收盘处理数＝全部已完成结算记录数；纠错事件数＝仅三种 correction_scene 的事件数；当日执行不得进入纠错事件数；重复生成报告不得增加纠错事件数；只有 notice_status=pushed 才能写“已推送”。
+
+### **6.9 观察区**
+
+```text
 观察哨（1个）：
-深科达：破位日10.21（DELAY_OBSERVE），反抽观察68.0–68.5，未回抽，剩2日。（观察期内不出买点）
-
-观察哨（1个，摸到了没收复）：
-深科达：破位日10.21，反抽观察68.0–68.5。今日最高68.3摸到区间，收67.9未站上。
-明日收盘仍在68.5下方→确认破位。剩1日。（观察期内不出买点）
+深科达：破位日10.21（DELAY_OBSERVE）
+  观察区间68.00–68.50，尚未进入区间，剩2个交易日
+  观察期内不出买点，普通保护行暂停
 ```
 
-### 6.9 判决区（当日 signals.closed_at 的 retest_confirm 终态）
+摸到但未收复：
 
-**三种终态各有结案时刻，不是固定 T+3。**
-
+```text
+观察哨（1个）：
+深科达：破位日10.21
+  观察区间68.00–68.50
+  今日最高68.30进入区间，收盘67.90未站上68.50
+  剩1个交易日
 ```
+
+### **6.10 判决区**
+
+TRIGGERED 必须证明“曾入区但未收复”：
+
+```text
 判决：深科达 确认破位（TRIGGERED）
-三日反抽未收复68.5（最高68.3），原支撑确认转为压力
-观察哨关闭。后续：价格到10日线附近再看买点。
+  观察期第2个交易日最高68.30，进入观察区间68.00–68.50
+  收盘67.90，未站上区间上沿68.50
+  观察哨关闭；普通保护行暂停，等待新enter
+```
 
-判决：深科达 假破位（INVALIDATED）
-收盘68.9收复观察区间上沿68.5，量比1.4（达标）
-原止损逻辑失效，明日起恢复正常池内票保护行（止损线按最新均线重算）
-提醒：收复止损位，可按纪律纠错。追不追，是你。[push_correction_notice]
+EXPIRED 必须证明“窗口到期且从未入区”：
 
+```text
 判决：深科达 无反抽（EXPIRED）
-3日窗口到期，价格未回抽68.0–68.5
-观察哨关闭。后续：继续阴跌→10日线前提满足时候选区出点位；企稳回升→无买点，等趋势重建
-利润或纪律，是你。
+  观察窗口共3个交易日，期间最高价从未进入68.00–68.50
+  窗口到期，观察哨关闭；普通保护行暂停，等待新enter
 ```
 
-**判决区只显示当天刚结案的**；前一日结案的不再出现，回看走“近期已结案”小节。
+INVALIDATED 必须证明放量站回：
 
-### 6.10 判决后候选区
-
+```text
+判决：深科达 假破位（INVALIDATED）
+  收盘68.90站上观察区间上沿68.50，量比1.40，满足收复条件
+  观察哨关闭；下一evening恢复正常池内保护行
+  纠错提醒：可按纪律纠错，不自动产生买点
+  [push_correction_notice, scene=retest_invalidated]
 ```
+
+“未形成有效反抽”不得单独作为终态依据。
+
+### **6.11 判决后候选区**
+
+```text
 候选（1只）：
-深科达  entry  first_move_10d  65.2–65.8
-触发窗口：14:30–15:00
-前提：回调深（自破位日-4.1%）+ 10日线方向未死 + 未进监管
-失效：收盘破65.2
-均线冷却：5日线档位冷却中（10.18、10.21两次止损），该档不出买点
+深科达
+  entry  first_move_10d  65.20–65.80
+    有效日：2026-10-28｜触发窗口：14:30–15:00
+    前提：回调充分＋10日线方向未死＋未进监管
+    失效：收盘低于65.20
+    均线冷却：5日线家族暂停，10日线不受影响
 ```
 
-**闭环验收点**：同一只票，破位区里从 stop 终态消失，候选区里在下一档均线重新出现，冷却说明证明系统记得它为什么离开过。
+闭环验收点：同一只票从 stop 终态进入观察、判决或等待新 enter；满足下一档均线前提时候选区出现新 entry；冷却说明解释为何不是原来的 5 日线策略；新旧信号通过 signal_id、root_id 和时间快照衔接。
 
-## 7. 典型路径示例（因果链的实例，不是状态机）
+## **7. 典型路径示例**
 
-**路径一：破5→反抽摸不过→确认破位→10日线再买**
+**路径一：破5→反抽不过→确认破位→10日线再买**
 
-```
-10.21 stop TRIGGERED（DELAY_OBSERVE），收盘仍破 → settle 生成 retest_confirm
-      池内票区不再显示该票保护行（观察哨存续）
-10.22 观察期 ACTIVE，未回抽，剩2日
-10.24 摸到68.3未站上 → watch 判 TRIGGERED，当日判决区“确认破位”
-10.28 价格跌到10日线附近，检查一放行、检查二5日线暂停、检查三前提满足
-      → generator 生成新 entry（first_move_10d，触发窗口 14:30–15:00）
-14:47 窗口内触碰 → entry TRIGGERED → 池内票保护行恢复（新 stop parent 指向新 enter）
-```
-
-**路径二：破5→放量站回→人纠错买回**
-
-```
-10.21 stop TRIGGERED，生成 retest_confirm
-10.23 收盘站上68.5、量比达标 → watch 判 INVALIDATED＋纠错提醒
-      原 STOP 状态不迁移、不发买点；人买回需新 entry
-      价格在5日线上方远离均线，检查三前提不满足 → 不出信号，等
+```text
+10.21 stop TRIGGERED，原始DELAY_OBSERVE，非熔断日，收盘仍破
+      → settle生成retest_confirm，普通保护行暂停
+10.24 最高入区、收盘未站上 → retest TRIGGERED
+      → 判决区展示入区与未收复事实，继续等待新enter
+10.28 价格到10日线附近，三个前置检查通过（5日线家族冷却）
+      → 生成first_move_10d，valid_for=次一交易日
+有效日14:47窗口内触碰 → entry TRIGGERED → 保护行恢复
 ```
 
-**路径三：破5→观察期里价格横跳**
+**路径二：破5→放量站回→假破位→恢复保护**
 
+```text
+10.21 stop TRIGGERED，生成retest_confirm
+10.23 收盘站上上沿且量比达标 → retest INVALIDATED＋纠错事件
+原stop状态不迁移，不自动发买点
+下一evening恢复正常池内保护行；人工买回仍需新entry
 ```
-10.21 stop TRIGGERED，生成 retest_confirm
-10.22–10.24 观察期 ACTIVE，价格横跳
-      检查一存续中挡住 → 该票零买点输出（反抽不是买点）
-      池内票区不显示该票保护行
+
+**路径三：非熔断日当日收复**
+
+```text
+stop盘中TRIGGERED，原始DELAY_OBSERVE，收盘收复zone_low
+→ RECOVERED_CORRECTION＋same_day_recover纠错，不生成观察哨
+→ 下一evening恢复正常保护行
 ```
 
-## 8. 迁移审计＋依据等级
+**路径四：熔断日统一执行**
 
-| 因果规则 | 触发条件 | 实现落点 | 动作/边界 | 依据等级 | 验收锚点 | 未覆盖风险 |
-|---|---|---|---|---|---|---|
-| entry 生成 | 策略前提满足＋三个前置检查通过 | generator + selector | 同票多策略全部输出；**Z/W 同生＝确保存在并关联** | A | 五策略正向；同票全部推送；同 symbol 只有一条 ACTIVE stop | watchlist 截断 |
-| entry 触发 | 单点触碰＋（ma_tomorrow 系）窗口内 | watch | 窗口外忽略 | A | **test_trigger_window** | — |
-| 竞价作废 | strong_to_weak | auction_call | 当日 BUY 全 INVALIDATED | A | 强转弱；一字首开不定性 | 一字首开靠人 |
-| stop/profit/t 触发 | 单点触碰 | watch | 触达即 TRIGGERED | A | 多次 watch 只推送一次 | 数据源假报价由 guard 拦 |
-| break_qualifier 写入 | stop 触发后 | watch | 写 signals + journal qualifier | A | **test_settle_branches** | — |
-| premise_broken | 监管/烂榜/题材变化 | evening 重检 | 撤销提醒 | A | 撤销一条 | — |
-| 入场同生 | ENTRY 生成 | generator | 止损与买点同生 | A | 同生一条 | — |
-| 池内票生成 | 趋势 | evening | UP 挂 T；DOWN 无 BUY；**观察哨存续期暂停** | A | **test_reentry_checks** | — |
-| stop 定性 | 触及止损 | volume + watch | 四路输出 | A | 四路各一条 | 封板数据失真 |
-| EXECUTE_NOW→不生成 | 当天执行 | settle | 不生成 retest_confirm，当天走 | A | 不调用 create_retest_confirm | — |
-| EXECUTE_NOW 后反抽回原线 | 前序 stop 是 EXECUTE_NOW | watch | 纠错提醒（无新信号） | B | 反抽回原线推提醒一条 | — |
-| DELAY/DIVERGENCE→retest | 收盘<zone_low | settle | 与收复分支互斥 | A | 仍破/收复各一条 | — |
-| 熔断日 DELAY/DIVERGENCE | LOW+指数DOWN | settle | 视同 EXECUTE_NOW | B | **test_settle_branches** | — |
-| DELAY/DIVERGENCE→纠错 | 收盘收复 | settle | 统一纠错函数 | A | 两条路径文案一致 | — |
-| LIMIT_EXEMPT→次日 | 封板 | settle | 不生成 retest_confirm | B | 封板不生成 | — |
-| retest 三终态 | 摸到未过/站回/到期 | watch + settle | 三终态互斥；按 closed_at 查 | A/C | 三终态各一条 | 量比1.2是C级 |
-| 观察期存续禁买 | ACTIVE retest | generator | 该票零买点；**暂停 stop/profit/t 生成** | A | 存续零输出；不生成保护行 | — |
-| 同均线冷却 | 同均线两次 STOP | generator | 该家族暂停，不冷整票 | B | 5日线暂停不影响10日线 | 窗口2日是C级 |
-| 判决后再买 | 结案＋价格到位 | generator | 10日线前提自然满足 | A/B | 结案后10日线出现 | — |
+```text
+circuit_day=true，原始DELAY_OBSERVE/DIVERGENCE
+→ effective=EXECUTE_NOW
+无论收盘是否收复：当日执行、不立哨、不走普通收复纠错
+→ 普通保护行暂停，等待新enter；原始qualifier保留供审计
+```
 
-**表外三行单列**：
+**路径五：观察期价格横跳**
 
-- **生成层不合并**（A）：同票多策略全部输出全部推送。
-- **depth 废弃**（A）：选股由三个前置检查＋价格位置决定。
-- **双周期确认删除**（A）：单点触碰；防脏数据由 guard；**entry 时间窗约束补偿**（A2）。
+```text
+观察哨ACTIVE期间：该票零买点、普通stop/profit/t暂停
+价格横跳不自动产生纠错或新entry，等待三终态之一结案
+```
 
-## 9. 架构边界
+## **8. 迁移审计与依据等级**
 
-- **盘中“摸到压力位过不去”的时效**受纯 CLI 手动 watch 频率限制。
-- **`retest_volume_min=1.2`、`retest_window_days=3`、`same_ma_cooldown_days=2`** 均为工程近似，C 级。
-- **entry 可达性为尾盘近似**：上午穿过、尾盘未回 → 判不可达；日 K 全天可达率并列输出。
-- **depth 参数已废弃**。
-- **双周期确认已删除**：采样粒度由人控制，防毛刺职能由 guard 承担；entry 时间窗约束补偿语义缺陷。
-- **观察区与判决区互斥**。
-- **判决区只显示当天刚结案的**。
-- **pool 是关注范围，不是持仓清单**：同一只票可同时在候选区和池内票区出现，不折叠。
-- **unreachable 指标可信度依赖两源同源**：guard 加两源对账；异常日不纳入审计。
-- EXECUTE_NOW 破位当天走、不立哨；若未走，反抽回原止损线附近只推纠错提醒，不生成 retest_confirm、不进观察区、不进判决区。
----
+| 规则 | 实现落点 | 依据 | 验收锚点 |
+|---|---|---|---|
+| entry/T 晚生成、次日有效（valid_for 显式化） | generator/watch/settle | A | test_t_next_session_validity |
+| entry 窗口约束 | watch | A | test_trigger_window |
+| 原始 qualifier 落库不被覆盖 | watch/journal | A | qualifier与settlement分离 |
+| 熔断日整分支视同 EXECUTE_NOW | market_snapshot/settle | A | test_circuit_day_uniform |
+| 收盘四路结果 | settle | A | test_settle_branches |
+| 保护行矩阵（EXECUTE_NOW 等待新 enter；INVALIDATED 恢复） | generator/evening | A（本版定稿） | test_pool_protection_matrix |
+| 终态 stop 不原地更新；同票一条 ACTIVE stop | lifecycle/generator | A | test_stop_terminal_immutable |
+| stop 触发后 T_BUY 连坐 | watch/lifecycle | A/B | test_zone_invariants |
+| 三种纠错场景；收盘处理≠纠错 | correction_event/render/stats | A | test_correction_projection |
+| A0 使用触发时快照 | report/journal | A | test_report_as_of_snapshot |
+| 历史重放隔离 | replay/journal/stats | A | test_live_replay_isolation |
+| EV_NEG 只绑定 strategy、不过滤 | stats/render/generator | A | test_ev_neg_subject |
+| 过期 context 不参与定性；缺失不默认 DELAY | guard/volume | A | test_data_quality_gate |
+| retest 三终态保存判决事实 | watch/settle | A | test_retest_verdict_facts |
+| retest_volume_min=1.2 / window_days=3 / cooldown_days=2 | config | C | 可配置 |
+| 主报告汇总、审计版明细 | render | B | 两视图事实一致 |
+
+## **9. 架构边界**
+
+- 盘中时效受纯 CLI 人工 watch 频率限制；
+- retest_volume_min、retest_window_days、same_ma_cooldown_days 为 C 级工程近似；
+- entry 可达性主口径为尾盘近似，日 K 全天可达率并列输出；有效日未结束只显示基准日参考；
+- depth 与双周期确认继续废弃；
+- 报告不重算业务分支；A0 不与最终 ACTIVE 集硬对齐；两日点位相同不能单独证明快照复用；
+- 收盘处理可以独立成区，但不是纠错同义词；纠错不是 Signal，不形成新状态机；
+- 过期 context 不参与破位定性；真实触发与 replay/backfill 分开报告、分开统计；
+- pool 是关注范围，不是持仓清单；候选区与池内票区不折叠；
+- 观察区与判决区对同一观察哨互斥；判决区只显示当天结案；
+- EXECUTE_NOW 后反抽只纠错，不生成观察哨或买点；
+- 主报告与审计报告只能从同一事实源生成。
+
+## **10. 默认主报告与审计视图**
+
+主报告顺序：
+
+```text
+报告头与环境 → 今日候选 → 池内变化与异常 → A0触发汇总
+→ 破位区逐条依据 → 收盘处理汇总 → 观察区 → 判决区
+```
+
+审计视图增加：完整 A0 事件、完整池内点位、signal_id/parent_id/root_id、zone_snapshot_id、raw/effective qualifier 与 circuit_day、settlement_outcome/data_status、correction_scene/notice_status、event_source/occurred_at/recorded_at、code_version/input_snapshot_id、完整收盘处理明细、近期已结案。

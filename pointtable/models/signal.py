@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import time, datetime
+from datetime import date, time, datetime
 from enum import Enum
 from typing import Optional
 
@@ -78,6 +78,11 @@ class Signal(BaseModel):
     trend: SignalTrend
     activation: Optional[str] = None
     valid_policy: SignalValidPolicy
+    valid_for: Optional[date] = None
+    pair_id: Optional[str] = None
+    root_id: Optional[str] = None
+    created_trade_date: Optional[date] = None
+    window_days: Optional[int] = None
     status: SignalStatus = SignalStatus.ACTIVE
     status_reason: str = ""
     parent_id: Optional[str] = None
@@ -108,15 +113,28 @@ class Signal(BaseModel):
                 SignalTag.PROFIT: SignalRole.PROFIT,
                 SignalTag.T: SignalRole.T,
                 SignalTag.RETEST_CONFIRM: SignalRole.RETEST_CONFIRM,
-            }.get(self.tag)
+        }.get(self.tag)
         if self.role is None:
             raise ValueError("context and time rows must use ContextMark or event_calendar")
+        expected_role = {
+            SignalTag.ENTER: SignalRole.ENTRY,
+            SignalTag.STOP: SignalRole.STOP,
+            SignalTag.PROFIT: SignalRole.PROFIT,
+            SignalTag.T: SignalRole.T,
+            SignalTag.RETEST_CONFIRM: SignalRole.RETEST_CONFIRM,
+        }.get(self.tag)
+        if expected_role is not None:
+            self.role = expected_role
         if self.zone_low >= self.zone_high:
             raise ValueError("zone_low must be less than zone_high")
         if self.signal_role is SignalRole.RETEST_CONFIRM and self.side is not SignalSide.NEUTRAL:
             self.side = SignalSide.NEUTRAL
         if self.tag in _PARENT_REQUIRED_TAGS and not self.parent_id:
             raise ValueError(f"{self.tag.value} requires parent_id")
+        if self.root_id is None:
+            self.root_id = self.parent_id or f"pool:{self.symbol}"
+        if self.created_trade_date is None:
+            self.created_trade_date = self.created_at.date()
         if self.status in {SignalStatus.EXPIRED, SignalStatus.INVALIDATED} and not self.closed_at:
             raise ValueError(f"terminal status {self.status.value} requires closed_at")
         return self

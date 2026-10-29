@@ -14,11 +14,13 @@ import yaml
 from .db.session import (
     get_connection,
     init_db,
+    load_market_day,
     load_pending_correction_anchors,
     load_correction_events,
     load_event_calendar,
     load_market_snapshots,
     load_report_signal_snapshot,
+    load_stop_settlements,
     signal_from_row,
     set_database_path,
 )
@@ -177,6 +179,7 @@ def build_report(
     market_for_report = dict((market or {}).get('market') or market or {})
     market_for_report['assignments'] = list((market or {}).get('assignments') or [])
     market_for_report['signal_rows'] = list((market or {}).get('signal_rows') or [])
+    market_for_report['rejected'] = list((market or {}).get('rejected') or [])
     market_for_report['name_map'] = {
         **{str(code): str(name) for code, name in ((market or {}).get('name_map') or {}).items()},
         **name_by_symbol,
@@ -205,7 +208,34 @@ def build_report(
         if anchor['trade_date'] == signal_date
     ]
     market_for_report['correction_events'] = load_correction_events(get_connection(), signal_date)
+    market_for_report['stop_settlements'] = load_stop_settlements(
+        get_connection(), signal_date, event_source='live_settle',
+    )
     market_for_report['execution_review'] = signal_day_trigger_review(get_connection(), signal_date)
+    # §0.1 报告头生产者：数据基准日结算行 + 报告快照齐备才算“已结算”
+    market_day = load_market_day(get_connection(), signal_date)
+    settled = market_day is not None and report_snapshot is not None
+    market_for_report['report_status'] = '已结算' if settled else '未结算'
+    if market_day is not None:
+        market_for_report['circuit_day'] = bool(market_day['circuit_day'])
+    else:
+        # 结算行缺失时按当日量能分层/指数趋势现算（§5 circuit_breaker 规则）
+        from .core.volume import is_circuit_day
+
+        circuit_config = risk_config.get('circuit_breaker') or {}
+        market_for_report['circuit_day'] = is_circuit_day(
+            str(market_for_report.get('tier') or (market or {}).get('tier', '')),
+            str(market_for_report.get('index_trend') or (market or {}).get('index_trend', '')),
+            volume_tier=str(circuit_config.get('volume_tier') or 'LOW'),
+            index_trend_rule=str(circuit_config.get('index_trend') or 'DOWN'),
+        )
+    # §8 保护状态：缺失时报告也要显示结构化原因
+    from .jobs.settle import pool_protection_states
+
+    market_for_report['protection_states'] = {
+        symbol: [mode, reason]
+        for symbol, (mode, reason) in pool_protection_states(get_connection()).items()
+    }
     market_for_report['ev_negative_strategies'] = sorted({
         signal.strategy_id
         for signals in by_symbol.values()
@@ -365,6 +395,17 @@ def build_parser() -> argparse.ArgumentParser:
     settle.add_argument('--retest-window-days', type=int)
     settle.add_argument('--retest-volume-min', type=float)
     settle.add_argument('--holidays-json', type=Path)
+    replay = commands.add_parser('replay', help='§3.2 重放：event_source=replay 复算指定信号日收盘')
+    replay.add_argument('--date', required=True, help='信号日（created_before 前产生的信号参与复算）')
+    replay.add_argument('--now')
+    replay.add_argument('--stop-zones-json', type=Path)
+    replay.add_argument('--close-prices-json', type=Path)
+    replay.add_argument('--market-json', type=Path)
+    replay.add_argument('--volume-ratios-json', type=Path)
+    replay.add_argument('--break-contexts-json', type=Path)
+    replay.add_argument('--retest-window-days', type=int)
+    replay.add_argument('--retest-volume-min', type=float)
+    replay.add_argument('--holidays-json', type=Path)
     restore = commands.add_parser('restore')
     restore.add_argument('--close-price', type=float, required=True)
     restore_check = commands.add_parser('restore-check')
@@ -556,15 +597,62 @@ def main(argv: list[str] | None = None) -> int:
             holidays=set(holidays) if holidays is not None else risk_config['holidays'],
             market_tier=str(market_fields.get('tier') or 'NORMAL'),
             index_trend=str(market_fields.get('index_trend') or 'UP'),
+            circuit_breaker=risk_config.get('circuit_breaker') or {},
+        ), ensure_ascii=False, indent=2))
+    elif args.command == 'replay':
+        # §3.2 event_source=replay：以当时的输入复算收盘处理，run_id 标记本次重放
+        replay_now = datetime.fromisoformat(args.now) if args.now else datetime.now(timezone.utc)
+        zone_path = args.stop_zones_json or args.market_json
+        replay_stop_zones = json.loads(zone_path.read_text(encoding='utf-8-sig')) if zone_path else None
+        if replay_stop_zones and args.market_json and not args.stop_zones_json:
+            replay_stop_zones = replay_stop_zones.get('stop_zones')
+        replay_market = json.loads(args.market_json.read_text(encoding='utf-8-sig')) if args.market_json else {}
+        replay_fields = replay_market.get('market') if isinstance(replay_market.get('market'), dict) else replay_market
+        replay_holidays = json.loads(args.holidays_json.read_text(encoding='utf-8-sig')) if args.holidays_json else None
+        replay_config = load_risk_config(Path(__file__).parents[1] / 'config' / 'config.yaml')
+        run_id = f'replay-{args.date}-{replay_now.strftime("%Y%m%dT%H%M%S")}'
+        print(json.dumps(run_settle(
+            get_connection(),
+            replay_now,
+            stop_zones=replay_stop_zones,
+            close_prices=(
+                json.loads(args.close_prices_json.read_text(encoding='utf-8-sig'))
+                if args.close_prices_json else None
+            ),
+            volume_ratios=(
+                json.loads(args.volume_ratios_json.read_text(encoding='utf-8-sig'))
+                if args.volume_ratios_json else None
+            ),
+            break_contexts=(
+                json.loads(args.break_contexts_json.read_text(encoding='utf-8-sig'))
+                if args.break_contexts_json else None
+            ),
+            retest_window_days=(
+                args.retest_window_days
+                if args.retest_window_days is not None
+                else replay_config['retest_window_days']
+            ),
+            retest_volume_min=(
+                args.retest_volume_min
+                if args.retest_volume_min is not None
+                else replay_config['retest_volume_min']
+            ),
+            holidays=set(replay_holidays) if replay_holidays is not None else replay_config['holidays'],
+            market_tier=str(replay_fields.get('tier') or 'NORMAL'),
+            index_trend=str(replay_fields.get('index_trend') or 'UP'),
+            created_before=date.fromisoformat(args.date) + timedelta(days=1),
+            event_source='replay',
+            run_id=run_id,
+            circuit_breaker=replay_config.get('circuit_breaker') or {},
         ), ensure_ascii=False, indent=2))
     elif args.command == 'restore':
         print(json.dumps(run_restore(get_connection(), args.close_price), ensure_ascii=False, indent=2))
     elif args.command == 'restore-check':
-        from .jobs.restore_check import find_unpaired_t_buy
+        from .jobs.restore_check import cascade_violations, find_unpaired_t_buy
 
         conn = get_connection()
         t_signals = [signal_from_row(row) for row in conn.execute("SELECT * FROM signals WHERE tag='t'").fetchall()]
-        unpaired, _ = find_unpaired_t_buy(t_signals, trade_date=args.date)
+        unpaired, _ = find_unpaired_t_buy(t_signals, trade_date=args.date, active_only=True)
         tail_prices = load_tail_prices(conn, args.date)
         signals_by_id = {signal.id: signal for signal in t_signals}
         rows = []
@@ -591,7 +679,10 @@ def main(argv: list[str] | None = None) -> int:
                 'resistance_zone_high': sell.zone_high if sell else signal.zone_high,
                 'minutes_since_tail': int((datetime.now(timezone.utc) - captured_at).total_seconds() / 60) if captured_at else None,
             })
-        print(json.dumps({'unpaired_t_buy': rows}, ensure_ascii=False, indent=2))
+        print(json.dumps({
+            'unpaired_t_buy': rows,
+            'cascade_violations': cascade_violations(t_signals),
+        }, ensure_ascii=False, indent=2))
     elif args.command == 'evening':
         print(json.dumps(run_evening(get_connection(), args.input), ensure_ascii=False, indent=2))
     elif args.command == 'next-routine':

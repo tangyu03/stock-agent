@@ -27,6 +27,7 @@ class ContextMark(BaseModel):
     level_high: float
     label: str = ""
     status: ContextStatus = ContextStatus.ACTIVE
+    data_status: str = 'OK'
     triggered_at: Optional[datetime] = None
     created_at: datetime
 

@@ -27,3 +27,10 @@ def trading_days_between(start: date, end: date, holidays: set[date] | None = No
         is_trading_day(current, holidays)
         for current in (start + timedelta(days=offset) for offset in range(1, (end - start).days + 1))
     )
+
+
+def next_trading_day(value: date, holidays: set[date] | None = None) -> date:
+    current = value + timedelta(days=1)
+    while not is_trading_day(current, holidays):
+        current += timedelta(days=1)
+    return current

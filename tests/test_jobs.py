@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from pointtable.core.auction import AuctionPattern
 from pointtable.jobs.auction_call import apply_auction
-from pointtable.jobs.settle import apply_trend_flip, create_retest_confirm, expire_intraday
+from pointtable.jobs.settle import create_retest_confirm, expire_intraday
 from pointtable.jobs.watch import confirm_touch
 from pointtable.models.signal import (
     Signal, SignalSide, SignalStatus, SignalTag, SignalTrend, SignalValidPolicy,
@@ -57,16 +57,3 @@ def test_same_day_t_expires_at_settle():
         'created_at': datetime(2026, 1, 1, tzinfo=UTC),
     })
     assert expire_intraday([row], now)[0].status is SignalStatus.EXPIRED
-
-
-def test_trend_flip_rolls_stop_and_invalidates_t_buy():
-    now = datetime(2026, 1, 2, tzinfo=UTC)
-    stop = _signal(SignalTag.STOP, SignalValidPolicy.UNTIL_STOPPED, 'evt-0')
-    t_buy = _signal(SignalTag.T, parent_id='evt-0')
-    t_sell = _signal(SignalTag.T, parent_id='evt-0').model_copy(update={'side': SignalSide.SELL})
-    rows = apply_trend_flip([stop, t_buy, t_sell], (9.0, 9.2), now)
-    assert (rows[0].zone_low, rows[0].zone_high) == (9.0, 9.2)
-    assert rows[1].status is SignalStatus.INVALIDATED
-    assert rows[1].status_reason == 'trend_flip'
-    assert rows[1].closed_at == now
-    assert rows[2].status is SignalStatus.ACTIVE

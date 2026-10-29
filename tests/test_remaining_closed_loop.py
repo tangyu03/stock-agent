@@ -10,6 +10,7 @@ from pointtable.db.session import (
     init_db,
     load_market_snapshots,
     save_journal,
+    save_market_snapshots,
     save_signals,
     set_database_path,
 )
@@ -74,6 +75,7 @@ def test_stop_break_decision_and_context_does_not_change_transition(tmp_db):
     }
     assert stop_break_decision(active_context)[0] is BreakQualifier.EXECUTE_NOW
     assert stop_break_decision(passive_context)[0] is BreakQualifier.DELAY_OBSERVE
+    assert stop_break_decision({'volume_ratio': 1.5})[0] is BreakQualifier.UNCLASSIFIED
     assert stop_break_decision({'volume_ratio': 1.5})[1] == 'active_delta_missing'
     assert stop_break_decision(None)[1] == 'NOT_CLASSIFIED'
 
@@ -124,8 +126,8 @@ def test_find_unpaired_t_buy_rules(tmp_db):
     buy = _signal()
     sell = _signal('2026-01-01-300001-t-sell', 'SELL')
     unpaired, violations = find_unpaired_t_buy([buy, sell])
-    assert [item.signal_id for item in unpaired] == [buy.id]
-    assert violations == [buy.id]
+    assert unpaired == []
+    assert violations == []
 
 
 def test_five_day_performance_and_pool_report(tmp_db):
@@ -198,6 +200,15 @@ def test_run_evening_marks_ev_negative_strategy(tmp_db):
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
         ))
     conn.commit()
+    # §9 假想期望输入：成交日收盘 10.0，其后 5 个快照日收盘 9.0 → 期望为负
+    for day_index in range(6):
+        save_market_snapshots(conn, f'2026-01-0{day_index + 1}', [{
+            'symbol': '300001',
+            'est_close': 10.0 if day_index == 0 else 9.0,
+            'low': 9.0,
+            'high': 10.5,
+            'volume_ratio': 1.0,
+        }])
     payload = {
         'trade_date': '2026-01-01',
         'created_at': '2026-01-01T15:30:00+08:00',

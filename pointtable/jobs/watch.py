@@ -36,7 +36,8 @@ def confirm_touch(
         ):
             return signal, 'retest_pass'
         if signal.zone_low <= price < signal.zone_high:
-            return signal, 'retest_fail'
+            # §7.5：盘中入区只是事实，确认破位须收盘未站上上沿，由 settle 结案
+            return signal, 'retest_touch'
         return None, 'not_in_zone'
     in_zone = signal.zone_low <= price <= signal.zone_high
     if not in_zone:
@@ -78,6 +79,8 @@ def qualify_break(
         return BreakQualifier.DIVERGENCE
     if decision.qualifier is BreakQualifier.EXECUTE_NOW:
         return BreakQualifier.EXECUTE_NOW
+    if decision.qualifier is BreakQualifier.UNCLASSIFIED:
+        return BreakQualifier.UNCLASSIFIED
     activity = active_or_passive(stock_triggered, sector_triggered, index_triggered)
     if activity is Activity.ACTIVE:
         return BreakQualifier.EXECUTE_NOW
@@ -86,14 +89,16 @@ def qualify_break(
 
 def stop_break_decision(context: Mapping[str, Any] | None) -> tuple[BreakQualifier, str]:
     if not context:
-        return BreakQualifier.DELAY_OBSERVE, 'NOT_CLASSIFIED'
+        return BreakQualifier.UNCLASSIFIED, 'NOT_CLASSIFIED'
     decision = break_qualifier(
-        float(context.get('volume_ratio') or 0),
+        float(context['volume_ratio']) if context.get('volume_ratio') is not None else None,
         float(context['active_delta']) if context.get('active_delta') is not None else None,
         bool(context.get('divergence', False)),
         bool(context.get('limit_up', False)),
     )
     if decision.qualifier is BreakQualifier.EXECUTE_NOW:
+        return decision.qualifier, decision.reason
+    if decision.qualifier is BreakQualifier.UNCLASSIFIED:
         return decision.qualifier, decision.reason
     if decision.qualifier in {BreakQualifier.LIMIT_EXEMPT, BreakQualifier.DIVERGENCE}:
         return decision.qualifier, decision.reason
@@ -106,6 +111,71 @@ def stop_break_decision(context: Mapping[str, Any] | None) -> tuple[BreakQualifi
         BreakQualifier.EXECUTE_NOW if activity is Activity.ACTIVE else BreakQualifier.DELAY_OBSERVE,
         decision.reason,
     )
+
+
+def record_retest_touch(signal: Signal, price: float) -> Signal:
+    '''§7.5 判决事实：入区事实与期间最高价持续累积在 premise。'''
+    observation = dict(signal.premise.get('retest_observation') or {})
+    observation['ever_touched'] = True
+    observation['max_high'] = max(float(observation.get('max_high') or 0.0), float(price))
+    return signal.model_copy(update={
+        'premise': {**signal.premise, 'retest_observation': observation},
+    })
+
+
+def retest_verdict_facts(
+    signal: Signal,
+    *,
+    outcome: str,
+    now: datetime,
+    close: float | None = None,
+    volume_ratio: float | None = None,
+    window_days: int | None = None,
+    observed_days: int | None = None,
+) -> dict[str, Any]:
+    observation = dict(signal.premise.get('retest_observation') or {})
+    facts: dict[str, Any] = {
+        'outcome': outcome,
+        'judged_at': now.isoformat(timespec='seconds'),
+        'judged_date': now.date().isoformat(),
+        'window_start': signal.created_at.date().isoformat(),
+        'window_end': now.date().isoformat(),
+        'zone_low': signal.zone_low,
+        'zone_high': signal.zone_high,
+        'ever_touched': bool(observation.get('ever_touched')),
+        'close': close,
+    }
+    if observation.get('max_high') is not None:
+        facts['max_high'] = observation.get('max_high')
+    if volume_ratio is not None:
+        facts['volume_ratio'] = volume_ratio
+    if window_days is not None:
+        facts['window_days'] = window_days
+    if observed_days is not None:
+        facts['observed_days'] = observed_days
+    return facts
+
+
+def invalidate_t_buy_on_stop(
+    conn: sqlite3.Connection,
+    stop_signal: Signal,
+    now: datetime,
+) -> list[str]:
+    '''§4 区间不变量4：stop 盘中 TRIGGERED 后，同票未触发的 ACTIVE T_BUY 连坐 INVALIDATED。'''
+    invalidated: list[str] = []
+    for row in load_active_signals(conn):
+        if (
+            row.symbol == stop_signal.symbol
+            and row.signal_role is SignalRole.T
+            and row.side is SignalSide.BUY
+        ):
+            updated, journal = transition(
+                row, TransitionEvent.PREMISE_BROKEN, 'stop_triggered', now=now
+            )
+            save_signal(conn, updated)
+            save_journal(conn, journal)
+            invalidated.append(updated.id)
+    return invalidated
 
 
 def process_touch(
@@ -125,6 +195,8 @@ def process_touch(
     )
     if touched is None:
         return None, None, reason
+    if reason == 'retest_touch':
+        return record_retest_touch(signal, price), None, reason
     event = (
         TransitionEvent.PREMISE_BROKEN
         if reason == 'retest_pass'
@@ -133,6 +205,17 @@ def process_touch(
     updated, journal = transition(
         signal, event, reason, price, now=now
     )
+    if reason == 'retest_pass':
+        updated = updated.model_copy(update={'premise': {
+            **updated.premise,
+            'verdict_facts': retest_verdict_facts(
+                updated,
+                outcome='INVALIDATED',
+                now=now or datetime.now(),
+                close=price,
+                volume_ratio=volume_ratio,
+            ),
+        }})
     return updated, journal, reason
 
 
@@ -159,6 +242,7 @@ def context_from_marks(conn: sqlite3.Connection, symbol: str, now: datetime) -> 
             '''
             SELECT 1 FROM context_marks
             WHERE date=? AND context_type=? AND code=?
+              AND COALESCE(data_status, 'OK') = 'OK'
               AND label <> 'stale_sector_context'
               AND triggered_at IS NOT NULL AND triggered_at >= ? AND triggered_at <= ?
             LIMIT 1
@@ -191,6 +275,7 @@ def run_watch(
 ) -> dict[str, Any]:
     touched: list[str] = []
     invalidated: list[str] = []
+    cascaded_ids: set[str] = set()
     broken_ids = set(broken_signal_ids or ())
     break_decisions: list[dict[str, str]] = []
     correction_notices: list[str] = []
@@ -201,6 +286,14 @@ def run_watch(
                 touch_context_mark(conn, mark.date.isoformat(), mark.context_type, mark.code, now)
         conn.commit()
     for signal in load_active_signals(conn):
+        if signal.id in cascaded_ids:
+            continue
+        if (
+            signal.signal_role in {SignalRole.ENTRY, SignalRole.T}
+            and signal.valid_for is not None
+            and now.date() != signal.valid_for
+        ):
+            continue
         signal_price = (prices or {}).get(signal.symbol) if prices is not None else price
         if signal_price is None:
             continue
@@ -223,7 +316,13 @@ def run_watch(
             volume_ratio=volume_ratio,
             retest_volume_min=retest_volume_min,
         )
+        if updated is not None and journal is None:
+            # 盘中入区（retest_touch）：只累积判决事实，不迁移状态
+            save_signal(conn, updated)
+            touched.append(signal.id)
+            continue
         if updated is not None and journal is not None:
+            journal = journal.model_copy(update={'event_source': 'live_watch'})
             if decision is not None:
                 updated = updated.model_copy(update={'break_qualifier': decision[0].value})
                 qualified_reason = f"{reason}:{decision[0].value}:{decision[1]}"
@@ -242,6 +341,11 @@ def run_watch(
                     'reason': decision[0].value,
                 }))
             touched.append(signal.id)
+            if (
+                signal.tag is SignalTag.STOP
+                and updated.status is SignalStatus.TRIGGERED
+            ):
+                cascaded_ids.update(invalidate_t_buy_on_stop(conn, updated, now))
             if reason == 'retest_pass':
                 
                 notice = correction_notice(updated, 'retest_pass')
@@ -253,6 +357,9 @@ def run_watch(
                     trigger='retest_pass',
                     notice=notice,
                     created_at=now,
+                    scene='retest_invalidated',
+                    dedup_key=f'{updated.id}:{now.date().isoformat()}:retest_invalidated',
+                    event_source='live_watch',
                 )
                 correction_notices.append(notice)
     
@@ -274,6 +381,9 @@ def run_watch(
                 trigger='post_break_retest',
                 notice=notice,
                 created_at=now,
+                scene='after_execute_now',
+                dedup_key=f"{anchor['signal_id']}:{now.date().isoformat()}:after_execute_now",
+                event_source='live_watch',
             )
             correction_notices.append(notice)
     conn.commit()

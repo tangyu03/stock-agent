@@ -5,7 +5,7 @@ import pytest
 from pointtable.core.auction import AuctionPattern, classify_auction
 from pointtable.core.calendar import is_trading_day, load_holidays
 from pointtable.core.volume import BreakQualifier
-from pointtable.db.session import get_connection, init_db, save_journal, save_signals, set_database_path
+from pointtable.db.session import get_connection, init_db, load_signals, save_journal, save_signals, set_database_path
 from pointtable.jobs.evening import signal_day_trigger_review, volume_breakout_decision
 from pointtable.jobs.settle import run_settle
 from pointtable.jobs.watch import stop_break_decision

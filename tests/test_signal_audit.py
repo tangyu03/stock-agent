@@ -1,6 +1,6 @@
 import json
-import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -8,14 +8,17 @@ from pointtable.cli import build_report
 from pointtable.db.session import (
     get_connection,
     init_db,
+    load_signals,
     save_report_signal_snapshot,
     save_journal,
     save_signal,
+    save_stop_settlement,
     set_database_path,
 )
 from pointtable.core.lifecycle import JournalEntry
 from pointtable.jobs.evening import build_pool_signals, run_evening, signal_day_trigger_review
 from pointtable.jobs.settle import run_settle
+from pointtable.jobs.settle import observation_pause_symbols, pool_protection_states
 from pointtable.jobs.watch import run_watch
 from pointtable.models.signal import Signal, SignalSide, SignalTag, SignalTrend, SignalValidPolicy, SignalStatus
 
@@ -117,10 +120,6 @@ def test_report_snapshot_replay_survives_later_signal_mutation(tmp_db):
     created_at = datetime(2026, 1, 1, 15, 30, tzinfo=UTC)
     stop = _signal('2026-01-01-300001-stop', 10.0, 10.2, created_at)
     save_signal(conn, stop)
-    run_watch(conn, 10.0, False, day_one, prices={'300001': 10.1})
-    input_path = tmp_path / 'evening.json'
-    input_path.write_text(json.dumps({'trade_date': '2026-01-01'}), encoding='utf-8')
-    run_evening(conn, input_path, '2026-01-01')
     save_report_signal_snapshot(conn, '2026-01-01', [stop])
     market = {
         'trade_date': '2026-01-01',
@@ -140,7 +139,43 @@ def test_report_snapshot_replay_survives_later_signal_mutation(tmp_db):
     assert first_report.count('10') > 0
 
 
-def test_two_day_trigger_chain_keeps_a0_as_of_snapshot(tmp_db, tmp_path):
+def test_report_reads_stop_settlement_fact_not_mutable_signal_row(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    created_at = datetime(2026, 1, 1, 15, 30, tzinfo=UTC)
+    stop = _signal('2026-01-01-300001-stop', 10.0, 10.2, created_at).model_copy(
+        update={'break_qualifier': 'DELAY_OBSERVE'}
+    )
+    save_signal(conn, stop)
+    save_report_signal_snapshot(conn, '2026-01-01', [stop])
+    save_stop_settlement(
+        conn,
+        signal_id=stop.id,
+        trade_date='2026-01-01',
+        raw_qualifier='DELAY_OBSERVE',
+        effective_qualifier='EXECUTE_NOW',
+        circuit_day=True,
+        close_price=9.9,
+        zone_low=stop.zone_low,
+        zone_high=stop.zone_high,
+        settlement_outcome='EXECUTE_NOW',
+        occurred_at=created_at,
+    )
+    market = {
+        'trade_date': '2026-01-01',
+        'name_map': {'300001': '测试'},
+        'spot_prices': {'300001': 9.9},
+    }
+    report = build_report('2026-01-01', market)
+    assert '原始定性：延迟观察' in report
+    assert '有效定性：立即执行' in report
+    assert '熔断日：是' in report
+    assert '收盘价 9.9' in report
+    assert '收盘结果：当日执行' in report
+
+
+def test_two_day_trigger_chain_keeps_a0_as_of_snapshot(tmp_db):
     set_database_path(tmp_db)
     init_db()
     conn = get_connection()
@@ -155,7 +190,7 @@ def test_two_day_trigger_chain_keeps_a0_as_of_snapshot(tmp_db, tmp_path):
     })
     save_signal(conn, stop)
     run_watch(conn, 10.0, False, day_one, prices={'300001': 10.1})
-    input_path = tmp_path / 'evening.json'
+    input_path = Path('test-two-day-evening.json')
     input_path.write_text(json.dumps({'trade_date': '2026-01-01'}), encoding='utf-8')
     run_evening(conn, input_path, '2026-01-01')
     conn.execute(
@@ -164,4 +199,125 @@ def test_two_day_trigger_chain_keeps_a0_as_of_snapshot(tmp_db, tmp_path):
     conn.commit()
     reviewed = signal_day_trigger_review(conn, '2026-01-01')
     assert (reviewed[0]['zone_low'], reviewed[0]['zone_high']) == (10.0, 10.2)
-    assert build_report('2026-01-02', {'trade_date': '2026-01-02'}).count('10') > 0
+    assert build_report('2026-01-02', {'trade_date': '2026-01-01'}).count('10') > 0
+
+
+def test_t_is_next_session_valid_and_paired(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    input_path = Path('test-t-validity.json')
+    input_path.write_text(json.dumps({
+        'trade_date': '2026-01-01',
+        'signal_rows': [{
+            'symbol': '300001', 'strategy_id': 'pool', 'trend': 'UP',
+            'stop_zone': (9.0, 9.2), 'profit_zone': (11.0, 11.2),
+            't_buy_zone': (10.0, 10.2), 't_sell_zone': (11.0, 11.2),
+            'parent_id': 'pool:300001',
+        }],
+    }), encoding='utf-8')
+    run_evening(conn, input_path, '2026-01-02')
+    t_rows = [
+        signal for signal in load_signals(conn)
+        if signal.signal_role.value == 't'
+    ]
+    assert [signal.side.value for signal in t_rows] == ['BUY', 'SELL']
+    assert all(signal.valid_for is not None and signal.valid_for.isoformat() == '2026-01-02' for signal in t_rows)
+    assert len({signal.pair_id for signal in t_rows}) == 1
+
+    run_watch(conn, 10.1, False, datetime(2026, 1, 1, 14, 0, tzinfo=UTC), prices={'300001': 10.1})
+    assert all(signal.status.value == 'ACTIVE' for signal in load_signals(conn) if signal.signal_role.value == 't')
+    run_watch(conn, 10.1, False, datetime(2026, 1, 2, 14, 0, tzinfo=UTC), prices={'300001': 10.1})
+    assert any(signal.status.value == 'TRIGGERED' for signal in load_signals(conn) if signal.signal_role.value == 't')
+
+
+def test_circuit_day_recovered_close_still_executes(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    stop = _signal('2026-01-01-300001-stop', 10.0, 10.2, datetime(2026, 1, 1, 10, tzinfo=UTC)).model_copy(
+        update={'break_qualifier': 'DELAY_OBSERVE'}
+    )
+    save_signal(conn, stop)
+    run_settle(
+        conn, datetime(2026, 1, 1, 15, 5, tzinfo=UTC),
+        close_prices={'300001': 10.1},
+        market_tier='LOW', index_trend='DOWN',
+    )
+    row = conn.execute(
+        'SELECT settlement_outcome FROM signals WHERE id=?', (stop.id,)
+    ).fetchone()
+    assert row['settlement_outcome'] == 'EXECUTE_NOW'
+    assert conn.execute('SELECT COUNT(*) AS n FROM correction_events').fetchone()['n'] == 0
+    assert conn.execute('SELECT circuit_day FROM market_days').fetchone()['circuit_day'] == 1
+
+
+def test_protection_pause_distinguishes_retest_terminal_states(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    confirmed = _signal(
+        'retest-confirmed', 10.0, 10.2, datetime(2026, 1, 1, 10, tzinfo=UTC)
+    ).model_copy(update={
+        'tag': SignalTag.RETEST_CONFIRM,
+        'side': SignalSide.NEUTRAL,
+        'status': SignalStatus.TRIGGERED,
+    })
+    invalidated = confirmed.model_copy(update={
+        'id': 'retest-invalidated',
+        'symbol': '300002',
+        'status': SignalStatus.INVALIDATED,
+        'closed_at': datetime(2026, 1, 1, 10, tzinfo=UTC),
+    })
+    save_signal(conn, confirmed)
+    save_signal(conn, invalidated)
+    paused = observation_pause_symbols(conn)
+    assert '300001' in paused
+    assert '300002' not in paused
+
+
+def test_pool_protection_states_matrix(tmp_db):
+    set_database_path(tmp_db)
+    init_db()
+    conn = get_connection()
+    created_at = datetime(2026, 1, 1, 10, tzinfo=UTC)
+    rows = [
+        _signal('retest-active', 10, 10.2, created_at).model_copy(update={
+            'symbol': '300001', 'tag': SignalTag.RETEST_CONFIRM,
+            'side': SignalSide.NEUTRAL, 'status': SignalStatus.ACTIVE,
+        }),
+        _signal('retest-expired', 10, 10.2, created_at).model_copy(update={
+            'symbol': '300002', 'tag': SignalTag.RETEST_CONFIRM,
+            'side': SignalSide.NEUTRAL, 'status': SignalStatus.EXPIRED,
+        }),
+        _signal('retest-invalidated', 10, 10.2, created_at).model_copy(update={
+            'symbol': '300003', 'tag': SignalTag.RETEST_CONFIRM,
+            'side': SignalSide.NEUTRAL, 'status': SignalStatus.INVALIDATED,
+        }),
+        _signal('300004-stop', 10, 10.2, created_at).model_copy(update={
+            'symbol': '300004',
+        }),
+        _signal('300005-stop', 10, 10.2, created_at).model_copy(update={
+            'symbol': '300005',
+        }),
+    ]
+    for signal in rows:
+        save_signal(conn, signal)
+    save_stop_settlement(
+        conn, signal_id='300004-stop', trade_date='2026-01-01',
+        raw_qualifier='DELAY_OBSERVE', effective_qualifier='EXECUTE_NOW',
+        circuit_day=True, close_price=9.8, zone_low=10, zone_high=10.2,
+        settlement_outcome='EXECUTE_NOW', occurred_at=created_at,
+    )
+    save_stop_settlement(
+        conn, signal_id='300005-stop', trade_date='2026-01-01',
+        raw_qualifier='LIMIT_EXEMPT', effective_qualifier='LIMIT_EXEMPT',
+        circuit_day=False, close_price=10.1, zone_low=10, zone_high=10.2,
+        settlement_outcome='LIMIT_EXEMPT', occurred_at=created_at,
+    )
+    states = pool_protection_states(conn)
+    assert states['300001'] == ('BLOCKED', 'retest_active')
+    assert states['300002'] == ('WAIT_REENTRY', 'retest_expired')
+    assert states['300003'] == ('NORMAL', 'retest_invalidated')
+    assert states['300004'] == ('WAIT_REENTRY', 'execute_now')
+    assert states['300005'] == ('NORMAL', 'limit_exempt')

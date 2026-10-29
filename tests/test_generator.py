@@ -98,7 +98,7 @@ def test_pool_signal_trend_updates_existing_rows():
     assert all(signal.status is SignalStatus.EXPIRED for signal in rows if signal.tag is SignalTag.T)
 
 
-def test_pool_t_buy_is_suppressed_by_triggered_or_overlapping_stop():
+def test_pool_t_buy_suppresses_overlap_and_invalid_zones_only():
     now = datetime(2026, 1, 2, tzinfo=UTC)
     row = {
         'symbol': '300001', 'strategy_id': 'pool', 'trend': 'UP',
@@ -113,7 +113,7 @@ def test_pool_t_buy_is_suppressed_by_triggered_or_overlapping_stop():
     assert [
         signal.tag for signal in build_pool_signals([row], now, [triggered_stop])
         if signal.tag is SignalTag.T
-    ] == []
+    ] == [SignalTag.T, SignalTag.T]
     conflicting = dict(row, t_buy_zone=(9.1, 9.3))
     assert [
         signal.tag for signal in build_pool_signals([conflicting], now)
