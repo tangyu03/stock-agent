@@ -63,28 +63,31 @@
 - **前提破坏**：作废并产生撤销提醒。
 - **retest_confirm 判定**：按 §7.5 形成三终态及判决事实。
 
-**人触发（可选，不驱动状态机）：**t-size；pool 编辑；config 编辑；push-file 人工推送；replay 历史回放。
+**人触发（可选，不驱动状态机）：**t-size；pool 编辑（编辑 config/pool.yaml 后执行 pool-sync）；config 编辑；push-file 人工推送；replay 历史回放。
 
 ## **2. 项目结构**
 
 ```text
 pointtable/
 ├── config/
-│   ├── strategies.yaml / config.yaml / theme_map.yaml
+│   ├── strategies.yaml / config.yaml / theme_map.yaml / pool.yaml
 ├── pointtable/
 │   ├── models/
 │   │   ├── signal.py / journal.py / settlement.py / correction.py
 │   │   ├── pool.py / context_mark.py / snapshot.py
-│   ├── data/  akshare.py / guard.py / mock.py
+│   ├── data/  akshare.py / normalize.py / resolvers.py / guard.py / mock.py
+│   ├── domain/  rules.py / reconciliation.py（纯函数：候选评估规则与 §8 对账闭合）
 │   ├── core/  ma / trend / volume / auction / lhb / sector
 │   │        selector.py / generator.py / lifecycle.py
-│   ├── jobs/  evening / auction_call / watch / restore_check / settle / replay
+│   ├── db/  session.py（连接生命周期与 schema 迁移）/ repo.py（表级读写）/ migrate.py
+│   ├── jobs/  evening / auction_call / watch / restore_check / settle（含 replay）
+│   │        shadow / cutover / migration / reporting（报告投影）/ pool_admin（池子命令）
 │   ├── notify/ push.py / render.py
-│   ├── stats.py / cli.py
+│   ├── stats.py / cli.py（argparse 与调度，实现散在各专职模块）
 └── tests/
 ```
 
-`core/` 为纯判断与纯生成，不 import data/db/notify，CI 强制。
+`core/` 与 `domain/` 为纯判断与纯生成，不 import data/db/notify，CI 强制。K 线兜底为声明式引擎：`data/resolvers.py` 的 `resolve_kline` 按 fetcher 链声明兜底顺序，`akshare.py` 只声明 `_INDEX_*`/`_STOCK_*`/`_SECTOR_*` fetcher 与语义参数（min_rows / require_amount / last_resort）。
 
 ## **3. 数据模型**
 
@@ -175,7 +178,7 @@ stop 收盘结算独立落库：
 - **pool**：date / symbol / theme_label。关注范围，不是持仓清单。
 - **tail_snapshots**：date / symbol / price，14:30 写入；ma_tomorrow 优先取它，fallback 收盘价须标注口径。
 - **context_marks**：date / context_type / code / level_low / level_high / label / triggered_at / **data_status**。evening 生成，watch 更新 triggered_at；不接 lifecycle，不进分策略统计；**过期 context 不参与破位两级查询**。
-- **market_snapshots**：trade_date、指数收盘与趋势、量能与档位、**circuit_day**、circuit_rule_version、两源对账状态。circuit_day 是市场交易日级事实，同一交易日同一规则版本只有一个有效值。
+- **market_snapshots**：trade_date、指数收盘与趋势、量能（沪/深/两市合计三字段，档位只按合计计算；沪=sh000001 上证指数、深=sz399106 深证综指，均为全样本口径——深证成指 399001 仅 500 只成分股，其成交额≠深市总额，只作走势展示不做量能计算）、**circuit_day**、circuit_rule_version、两源对账状态。circuit_day 是市场交易日级事实，同一交易日同一规则版本只有一个有效值。
 - **zone_snapshots**：初始区间、每次滚动区间、触发时区间、结算使用区间。
 
 指数显示名固定映射：`sh000001=上证指数，sz399001=深证成指，sh000688=科创50`。
@@ -360,6 +363,7 @@ def settle_stop(stop, close, day):
 | 非熔断 DELAY/DIVERGENCE 收盘仍破 | 新建 | 按观察哨存续处理 |
 | 非熔断 DELAY/DIVERGENCE 收盘收复 | 不建 | 恢复正常生成 |
 | 原始或有效 EXECUTE_NOW | 不建 | **暂停普通保护行，等待新 enter** |
+| stop 结算 data_status=ANOMALOUS（定性待补） | 不建 | 维持池内保护行；抑制该 symbol 新 entry（对账记“未决破位待补”），直至定性补齐或人工结案 |
 | LIMIT_EXEMPT | 不建 | 恢复正常生成 |
 | retest TRIGGERED | 已结案 | 暂停普通保护行，等待新 enter |
 | retest EXPIRED | 已结案 | 暂停普通保护行，等待新 enter |
@@ -371,6 +375,7 @@ def settle_stop(stop, close, day):
 - “恢复正常生成”指重新进入普通规则，不保证所有 role 必然生成；趋势或数据条件不满足时记录原因；
 - 等待新 enter 期间，新 entry 仍可按 Z/W 同生 stop；
 - 所有重建使用新 signal_id，旧终态 stop 不原地更新；
+- 未决 ANOMALOUS 只抑制 entry 生成，不删除池内保护行——卖出保护不因数据缺失而撤走；
 - 同 symbol 同时刻最多一条 ACTIVE stop；
 - 暂停与恢复由统一的纯函数判定，输出 `NORMAL / WATCHING / WAIT_REENTRY / BLOCKED` 及结构化 reason，供 evening 与报告共用。
 
@@ -432,7 +437,9 @@ if same_ma_stop_count(symbol, ma_n=5, days=cfg.reentry_rules.same_ma_cooldown_da
 3. 判决区只显示当天结案，回看走“近期已结案”；
 4. **收盘处理不等于纠错**；不设顶级“纠错区”；
 5. 破位区与收盘处理区不得在主报告中重复整表明细；
-6. A0 与最终 ACTIVE 集不同不构成错误。
+6. A0 与最终 ACTIVE 集不同不构成错误；
+7. **候选对账必须闭合**：生成总数（池内成员数）= 有效候选 + 各阶段处置之和；selector 阶段（前提、K 线、观察哨、龙虎榜）与生成阶段（策略缺失、区间几何、premise、同票重复、家族冷却、保护暂停、未决 ANOMALOUS）的处置统一计入，禁止静默丢票；
+8. 池内票区计数=池内成员总数，含保护挂起、仅有状态行的票；A0 中 parent=pool 的保护行标“对应 池内”（同生出处作后缀），不得标成“对应 某策略”冒充真实 enter 链；兜底/回放触发必须投影 event_source。
 
 ## **9. 统计**
 
@@ -472,6 +479,10 @@ if same_ma_stop_count(symbol, ma_n=5, days=cfg.reentry_rules.same_ma_cooldown_da
 | 重放不推送、不进正式 A0 与统计；同输入重复回放结果一致 | test_live_replay_isolation |
 | 可达性只评价已结束有效期的信号 | test_reachability |
 | 无非法状态迁移 | test_lifecycle |
+| 量能固定样例：沪+深合计定档（2026-10-29：7156.21+8408.96=15565.17→HIGH），单一指数 amount 不得直接定档 | test_shenji4_fixes |
+| 候选对账闭合：生成阶段每次丢弃都有结构化处置记录，各处置之和+有效候选=池内成员数 | test_shenji4_fixes |
+| 未决 ANOMALOUS 抑制新 entry、维持池内保护；对账记“未决破位待补” | test_shenji4_fixes |
+| pool 伪家族不产生冷却标签；A0 parent=pool 标“对应 池内（·X同生）”；兜底触发投影 event_source | test_shenji4_fixes |
 
 连续两日全链路验收在隔离数据库执行：同一初始快照 → T 日 watch → settle → evening → R 日 watch → settle → evening，校验 signal_id、parent、root、zone_snapshot、settlement、correction_event、event_source，而不是比较两份报告表面点位是否一致。
 
@@ -490,6 +501,12 @@ if same_ma_stop_count(symbol, ma_n=5, days=cfg.reentry_rules.same_ma_cooldown_da
 | 熔断日仅“收盘仍破”才视同 EXECUTE_NOW | 改为 DELAY/DIVERGENCE 整分支视同，收复也不例外 |
 | 当日执行计入纠错、“纠错区”混合全部结算 | 改为“收盘处理”区，纠错仅三场景独立计数 |
 | “池内”作为 EV_NEG 主体 | 仅绑定 strategy_id；EV_NEG 不过滤候选 |
+| 量能取单一指数行情 amount、档位随之失真 | 拆沪/深/合计三字段，档位只按两市合计计算（circuit_day 判定同步修正） |
+| selector/生成阶段静默丢票、对账无法闭合 | 全部处置结构化记录并计入对账（§8 约束 7） |
+| 未决 ANOMALOUS 票照常出新 entry | §7.4 增补 ANOMALOUS 行：维持保护、抑制 entry |
+| pool/holding 伪家族计入冷却标签 | 冷却归族只认 ma5/ma10（§7.7） |
+| A0 同生 stop 标“对应 某策略”冒充 enter 链 | parent=pool 标“对应 池内”，同生出处作后缀；投影 event_source |
+| 报告状态“已结算”掩盖定性待补 | 存在 ANOMALOUS 结算时标注“已结算｜定性待补N” |
 | 缺失数据默认 DELAY_OBSERVE、过期 context 参与定性 | 数据质量与业务定性分离 |
 | A0 必须等于前日最终 ACTIVE 集、用当前行重绘历史 | 使用触发时事件与区间快照 |
 | replay/backfill 混入正式 A0 | 真实触发与重放隔离 |

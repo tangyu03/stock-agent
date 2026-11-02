@@ -32,6 +32,7 @@ python -m pointtable.cli --db pointtable/data/pointtable.db stats --date 2026-10
 python -m pointtable.cli --db pointtable/data/pointtable.db holdings
 python -m pointtable.cli --db pointtable/data/pointtable.db pool
 python -m pointtable.cli --db pointtable/data/pointtable.db pool-add --date 2026-10-22 --symbol 300001 --theme AI --role candidate
+python -m pointtable.cli --db pointtable/data/pointtable.db pool-sync
 python -m pointtable.cli --db pointtable/data/pointtable.db pool-audit
 python -m pointtable.cli --db pointtable/data/pointtable.db migration-status
 python -m pointtable.cli --db pointtable/data/pointtable.db auction --date 2026-10-22 --pattern neutral
@@ -88,6 +89,8 @@ python -m pointtable.cli --db pointtable/data/pointtable.db report --date 2026-1
 报告按 signals 投影：A0信号日触发回顾、环境、候选、池内票区、破位区、观察区、判决区互不折叠。候选按股票分组并展示前提、失效和依据；池内票按股票分组合并展示止损、止盈和做T。观察哨存续票在池内票区只显示观察哨提示，不显示普通保护行。
 
 `pool.role` 区分 `holding/index/sector/candidate`；旧库自动补列，存量默认 `holding`。`holdings` 和报告只读取 `holding`，`market-input` 会按 `watchlist_limit` 和 priority 截断全部池内票。
+
+池子的常规编辑入口是 `config/pool.yaml`（声明式全量定义，含 symbol/theme/role）：改完执行 `pool-sync` 生成当日快照（当日行先删后插，历史日期不改写；空池、缺 symbol、重复 symbol、非法 role 拒绝同步），输出 JSON 对账 added/removed/changed/kept。theme 省略时按 theme_map.yaml 兜底。
 
 周末或长假后生成计划时，`market-input --date` 用最近收盘日；`report --date` 用目标交易日。例如周六/周日生成 10-26 计划：先用 `--date 2026-10-23` 生成 JSON，再用 `--date 2026-10-26` 渲染报告。
 
