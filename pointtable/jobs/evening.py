@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -19,12 +19,29 @@ from ..core.generator import (
     generate_entry,
     premise_ok,
 )
-from ..core.lhb import evaluate_lhb
-from ..core.ma import ma_tomorrow
 from ..core.sector import load_theme_map
-from ..core.selector import COOLDOWN_STOP_COUNT, MA_FAMILY, cooled_out, select_strategies
+from ..core.selector import COOLDOWN_STOP_COUNT, MA_FAMILY, cooled_out
 from ..core.trend import classify_trend, moving_average
-from ..data.guard import DataFreshnessGuard, check_quote_sanity, check_two_source
+from ..domain.reconciliation import record_rejection
+# re-export：迁移到 domain/rules.py 的纯函数仍从本模块出口（测试/调用方的兼容面）
+from ..domain.rules import (  # noqa: F401
+    SZ_AMOUNT_INDEX,
+    VOLUME_TIER_HIGH_MIN,
+    VOLUME_TIER_LOW_MAX,
+    CandidateContext,
+    _amount_yi,
+    _closes,
+    _latest,
+    _value,
+    _volume_ratio,
+    _zone,
+    evaluate_candidates,
+    fill_missing_spot_rows,
+    lhb_decision,
+    market_tier,
+    truncate_watchlist,
+    volume_breakout_decision,
+)
 from ..db.session import (
     load_market_snapshots, load_signals, save_context_marks, save_event_calendar,
     save_journal, save_market_snapshots, save_report_signal_snapshot, save_signals,
@@ -32,22 +49,11 @@ from ..db.session import (
 from ..models.context_mark import ContextMark, ContextType
 from ..models.event_calendar import EventCalendar
 from ..models.journal import JournalEntry
-from ..models.signal import Signal, SignalRole, SignalSide, SignalStatus, SignalTag, SignalTrend, SignalValidPolicy
+from ..models.signal import Signal, SignalRole, SignalStatus, SignalTag, SignalTrend, SignalValidPolicy
 from ..notify.render import render_report
 from ..stats import attach_hypothetical_pnl, signal_quality
 from .restore_check import load_tail_prices
 from .settle import pool_protection_states
-
-
-
-def market_tier(amount_yi: float, low_max: float = 9000, high_min: float = 13000) -> str:
-    if amount_yi < 0:
-        raise ValueError('amount_yi must not be negative')
-    if amount_yi < low_max:
-        return 'LOW'
-    if amount_yi >= high_min:
-        return 'HIGH'
-    return 'NORMAL'
 
 
 def build_context_marks(
@@ -89,6 +95,7 @@ def build_evening_signals(
     recent_stop_counts: Mapping[str, Mapping[str, int]] | None = None,
     same_ma_cooldown_days: int = 2,
     skip_zw_symbols: set[str] | None = None,
+    rejections: list[dict[str, str]] | None = None,
 ) -> list[Signal]:
     rows: list[Signal] = []
     active_entries = {
@@ -98,18 +105,29 @@ def build_evening_signals(
         and signal.status in {SignalStatus.ACTIVE, SignalStatus.TRIGGERED}
     }
     trade_date = created_at.date().isoformat()
+
+    def _reject(symbol: str, reason: str) -> None:
+        # §8 对账闭合：生成阶段的每一次丢弃都必须留下结构化处置记录
+        record_rejection(rejections, symbol, reason)
+
     for plan in pool_plans:
         strategy = strategies.get(str(plan.get('strategy_id') or ''))
         symbol = str(plan['symbol'])
-        if strategy is None or not premise_ok(plan.get('premise_facts') or {}):
+        if strategy is None:
+            _reject(symbol, 'strategy_config_missing')
+            continue
+        if not premise_ok(plan.get('premise_facts') or {}):
+            _reject(symbol, 'premise_failed')
             continue
         if (symbol, strategy.id) in active_entries:
+            _reject(symbol, 'duplicate_active_entry')
             continue
         if cooled_out(
             [strategy.id],
             (recent_stop_counts or {}).get(symbol, {}),
             same_ma_cooldown_days,
         ) == []:
+            _reject(symbol, 'ma_family_cooldown')
             continue
         rows.extend(generate_entry(
             strategy,
@@ -408,165 +426,6 @@ def evening_report(
 logger = logging.getLogger(__name__)
 
 
-logger = logging.getLogger(__name__)
-
-
-
-def _value(row: Mapping[str, Any], *keys: str) -> Any:
-    for key in keys:
-        if key in row:
-            return row[key]
-    return None
-
-
-def _sorted_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    normalized = [dict(row) for row in rows]
-    return sorted(
-        normalized,
-        key=lambda row: str(_value(row, 'trade_date', '日期', 'date') or ''),
-    )
-
-
-def _numeric(row: Mapping[str, Any], *keys: str) -> float | None:
-    try:
-        value = _value(row, *keys)
-        return float(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _closes(rows: Sequence[Mapping[str, Any]]) -> list[float]:
-    values = [_numeric(row, '收盘', 'close', 'Close') for row in _sorted_rows(rows)]
-    return [value for value in values if value is not None and value > 0]
-
-
-def _volume_ratio(rows: Sequence[Mapping[str, Any]], trade_date: Any = None) -> float | None:
-    '''Daily close volume ratio: today's volume divided by the prior five-day average.'''
-    ordered = _sorted_rows(rows)
-    if trade_date is not None:
-        target = str(trade_date)[:10]
-        latest_date = str(_value(ordered[-1] if ordered else {}, 'trade_date', '日期', 'date') or '')
-        if latest_date != target:
-            return None
-    if len(ordered) < 6:
-        return None
-    latest_volume = _numeric(ordered[-1], '成交量', 'volume', 'Volume')
-    prior_volumes = [_numeric(row, '成交量', 'volume', 'Volume') for row in ordered[-6:-1]]
-    if latest_volume is None or latest_volume <= 0:
-        return None
-    if not prior_volumes or any(volume is None or volume <= 0 for volume in prior_volumes):
-        return None
-    return round(latest_volume / (sum(prior_volumes) / len(prior_volumes)), 6)
-
-
-def _amount_yi(value: Any) -> float | None:
-    try:
-        amount = float(value)
-    except (TypeError, ValueError):
-        return None
-    if amount <= 0:
-        return None
-    return round(amount / 100_000_000 if amount >= 100_000_000 else amount, 2)
-
-
-def _latest(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
-    return _sorted_rows(rows)[-1] if rows else None
-
-
-def _zone(rows: Sequence[Mapping[str, Any]], lookback: int) -> tuple[float, float] | None:
-    tail = _sorted_rows(rows)[-lookback:]
-    lows = [_numeric(row, '最低', 'low', 'Low') for row in tail]
-    highs = [_numeric(row, '最高', 'high', 'High') for row in tail]
-    clean_lows = [value for value in lows if value and value > 0]
-    clean_highs = [value for value in highs if value and value > 0]
-    if not clean_lows or not clean_highs:
-        return None
-    return round(min(clean_lows), 6), round(max(clean_highs), 6)
-
-
-def _break_zone(level: float, width_pct: float) -> tuple[float, float]:
-    return round(level * (1 - width_pct), 6), round(level, 6)
-
-
-def volume_breakout_decision(
-    rows: Sequence[Mapping[str, Any]],
-    est_close: float,
-    *,
-    volume_ratio_threshold: float = 1.5,
-) -> tuple[bool, float | None]:
-    ordered = _sorted_rows(rows)
-    if len(ordered) < 6 or est_close <= 0:
-        return False, None
-    prior = ordered[:-1]
-    prior_highs = [_numeric(row, '最高', 'high', 'High') for row in prior]
-    prior_closes = [_numeric(row, '收盘', 'close', 'Close') for row in prior]
-    prior_volumes = [_numeric(row, '成交量', 'volume', 'Volume') for row in prior[-5:]]
-    valid_prior_highs = [value for value in prior_highs if value is not None and value > 0]
-    if not valid_prior_highs:
-        return False, None
-    key_level = max(valid_prior_highs)
-    prior_close = next((value for value in reversed(prior_closes) if value is not None and value > 0), None)
-    if not prior_volumes or any(value is None or value <= 0 for value in prior_volumes):
-        return False, key_level
-    latest = ordered[-1]
-    latest_volume = _numeric(latest, '成交量', 'volume', 'Volume')
-    latest_open = _numeric(latest, '开盘', 'open', 'Open')
-    if latest_volume is None or latest_volume <= 0:
-        return False, key_level
-    bullish = est_close > prior_close if latest_open is None else est_close > latest_open
-    avg_volume = sum(prior_volumes) / len(prior_volumes)
-    return (
-        bool(bullish and est_close > key_level and latest_volume >= avg_volume * volume_ratio_threshold),
-        key_level,
-    )
-
-
-def lhb_decision(
-    rows: Sequence[Mapping[str, Any]],
-    symbol: str,
-    dumpers: Sequence[str],
-    concentration_threshold: float = 0.35,
-) -> tuple[bool, str]:
-    matched: list[dict[str, Any]] = []
-    for row in rows:
-        code = str(_value(row, '代码', '股票代码', 'symbol', 'code') or '')
-        if symbol in code or symbol in str(row):
-            matched.append(dict(row))
-    if not matched:
-        return False, 'not_on_lhb'
-
-    hits: set[str] = set()
-    concentrations: list[float] = []
-    for row in matched:
-        text_values = [str(value) for value in row.values()]
-        for dumper in dumpers:
-            if dumper and any(dumper in value for value in text_values):
-                hits.add(dumper)
-        for key, value in row.items():
-            if ('卖出' in str(key) or 'sell' in str(key).lower()) and ('占比' in str(key) or '比例' in str(key) or 'ratio' in str(key).lower()):
-                try:
-                    ratio = float(value)
-                    if ratio > 1:
-                        ratio /= 100
-                    concentrations.append(ratio)
-                except (TypeError, ValueError):
-                    continue
-    decision = evaluate_lhb(hits, max(concentrations, default=0.0), concentration_threshold)
-    return decision.bad, decision.reason
-
-
-def truncate_watchlist(
-    pool_rows: Sequence[Mapping[str, Any]],
-    limit: int,
-    priority_order: Sequence[str] | None = None,
-) -> list[dict[str, Any]]:
-    if limit < 0:
-        raise ValueError('watchlist limit must not be negative')
-    del priority_order
-    ranked = sorted(enumerate(pool_rows), key=lambda pair: (str(pair[1].get('symbol') or ''), pair[0]))
-    return [dict(row) for _, row in sorted(ranked[:limit])]
-
-
 def latest_entry_parent_ids(conn: sqlite3.Connection, symbols: Sequence[str]) -> dict[str, str | None]:
     parents: dict[str, str | None] = {}
     for symbol in symbols:
@@ -623,19 +482,6 @@ def recent_stop_counts(
     return counts
 
 
-def fill_missing_spot_rows(
-    spot_rows: Sequence[Mapping[str, Any]],
-    symbols: Sequence[str],
-    quote_supplier: Callable[[Sequence[str]], Sequence[Mapping[str, Any]]],
-) -> list[dict[str, Any]]:
-    rows = [dict(row) for row in spot_rows]
-    by_symbol = {str(row.get('symbol')): row for row in rows}
-    missing = [symbol for symbol in symbols if not by_symbol.get(symbol, {}).get('price')]
-    if missing:
-        rows.extend(dict(row) for row in quote_supplier(missing))
-    return rows
-
-
 def build_market_input(
     pool_rows: Sequence[Mapping[str, Any]],
     index_rows: Sequence[Mapping[str, Any]],
@@ -660,6 +506,7 @@ def build_market_input(
     holidays: set[date] | None = None,
     name_map: Mapping[str, str] | None = None,
     active_deltas: Mapping[str, float] | None = None,
+    sz_index_rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     theme_map = load_theme_map(Path(__file__).parents[2] / 'config' / 'theme_map.yaml')
     closes = _closes(index_rows)
@@ -680,10 +527,22 @@ def build_market_input(
     amount_yi = _amount_yi(_value(latest, 'amount', '成交额'))
     if amount_yi is None:
         raise ValueError('index amount is missing')
+    sh_amount_yi = amount_yi
+    sz_amount_yi: float | None = None
+    if sz_index_rows is not None:
+        sz_amount_yi = _amount_yi(_value(_latest(sz_index_rows) or {}, 'amount', '成交额'))
+        if sz_amount_yi is None:
+            raise ValueError('sz index amount is missing')
+        amount_yi = round(sh_amount_yi + sz_amount_yi, 2)
+    amount_scope = 'sh+sz' if sz_amount_yi is not None else 'sh_only'
     sh_close = closes[-1]
     sh_ma5 = moving_average(closes, 5)
     index_trend = classify_trend(closes).value
-    market_tier = 'LOW' if amount_yi < 9000 else 'HIGH' if amount_yi >= 13000 else 'NORMAL'
+    market_tier = (
+        'LOW' if amount_yi < VOLUME_TIER_LOW_MAX
+        else 'HIGH' if amount_yi >= VOLUME_TIER_HIGH_MIN
+        else 'NORMAL'
+    )
 
     for theme, rows in sector_klines.items():
         latest_sector_date = str(
@@ -703,202 +562,39 @@ def build_market_input(
         if zone:
             sector_context.append({'symbol': theme, 'zone': zone})
 
-    guard = DataFreshnessGuard(max_staleness_days=5)
     if watchlist_limit is not None and watchlist_limit < len(pool_rows):
         pool_rows = truncate_watchlist(pool_rows, watchlist_limit, priority_order)
-    assignments: list[dict[str, Any]] = []
-    rejected: list[dict[str, str]] = []
-    stop_zones: dict[str, tuple[float, float]] = {}
-    pool_signal_rows: list[dict[str, Any]] = []
-    pool_total = len(pool_rows)
-    for pool_row in pool_rows:
-        symbol = str(pool_row.get('symbol') or '')
-        if symbol in (active_retest or set()):
-            rejected.append({'symbol': symbol, 'reason': 'active_retest_confirm'})
-            continue
-        theme = theme_map.get(symbol) or str(pool_row.get('theme_label') or 'unknown')
-        rows = stock_klines.get(symbol, [])
-        if not rows:
-            rejected.append({'symbol': symbol, 'reason': 'missing_kline'})
-            continue
-        latest_stock = _latest(rows) or {}
-        latest_date_text = str(_value(latest_stock, 'trade_date', '日期', 'date') or '')[:10]
-        try:
-            latest_date = date.fromisoformat(latest_date_text)
-        except ValueError:
-            rejected.append({'symbol': symbol, 'reason': 'stale_kline'})
-            continue
-        if now and latest_date > now:
-            rejected.append({'symbol': symbol, 'reason': 'stale_kline'})
-            continue
-        if not guard.check_fresh_enough(latest_date, now=now):
-            rejected.append({'symbol': symbol, 'reason': 'stale_kline'})
-            continue
-        stock_closes = _closes(rows)
-        tail_price = (tail_prices or {}).get(symbol)
-        latest_close = _numeric(latest_stock, '收盘', 'close', 'Close')
-        two_source_anomaly = False
-        if tail_price is not None:
-            est_close = tail_price
-            two_source_anomaly = False
-            if latest_date.isoformat() == now.isoformat():
-                plan_closes = [*stock_closes[:-1], tail_price]
-                if latest_close is not None and not check_two_source(
-                    tail_price,
-                    latest_close,
-                    max_deviation=two_source_deviation_max,
-                ).ok:
-                    two_source_anomaly = True
-            else:
-                plan_closes = [*stock_closes, tail_price]
-        elif latest_date.isoformat() == now.isoformat():
-            est_close = latest_close
-            plan_closes = stock_closes
-        else:
-            est_close = None
-            plan_closes = []
-        if est_close is None:
-            rejected.append({'symbol': symbol, 'reason': 'insufficient_closes'})
-            continue
-        quote_high = _numeric(latest_stock, '最高', 'high', 'High')
-        quote_low = _numeric(latest_stock, '最低', 'low', 'Low')
-        if quote_sanity_enabled and quote_high is not None and quote_low is not None:
-            quote = check_quote_sanity(
-                est_close,
-                open_price=_numeric(latest_stock, '开盘', 'open', 'Open'),
-                high=quote_high,
-                low=quote_low,
-                prev_close=_numeric(latest_stock, '昨收', 'prev_close', 'previous_close'),
-            )
-            if not quote.ok:
-                rejected.append({'symbol': symbol, 'reason': quote.reason})
-                continue
-        else:
-            quote_high = est_close
-            quote_low = est_close
-        regulated = symbol in set(regulator_list)
-        bad_lhb, lhb_reason = lhb_decision(lhb, symbol, lhb_dumpers)
-        if not lhb_checked:
-            rejected.append({'symbol': symbol, 'reason': 'lhb_data_unavailable'})
-            continue
-        breakout_hit, breakout_price = volume_breakout_decision(rows, est_close)
-        support_zone = _zone(rows, 5)
-        resistance_zone = _zone(rows, 20)
-        pool_trend = classify_trend(stock_closes)
-        stop_source = (
-            plan_closes[:-1] if plan_closes and abs(plan_closes[-1] - est_close) < 1e-9 else plan_closes
-        )
-        support_center = support_zone[0] if support_zone else est_close * 0.95
-        pool_stop_zone = (
-            _break_zone(ma_tomorrow(stop_source, 5, est_close), 0.01)
-            if pool_trend is SignalTrend.UP
-            else _break_zone(support_center, 0.01)
-        )
-        pool_profit_center = resistance_zone[1] if resistance_zone else est_close * 1.03
-        pool_t_buy_center = support_zone[0] if support_zone else est_close * 0.98
-        pool_profit_zone = (round(pool_profit_center * 0.995, 6), round(pool_profit_center * 1.005, 6))
-        pool_t_buy_zone = (round(pool_t_buy_center * 0.99, 6), round(pool_t_buy_center * 1.01, 6))
-        pool_t_sell_zone = pool_profit_zone
-        pool_signal_rows.append({
-            'symbol': symbol,
-            'strategy_id': 'pool',
-            'parent_id': (entry_parent_ids or {}).get(symbol),
-            'stop_zone': pool_stop_zone,
-            'profit_zone': pool_profit_zone,
-            't_buy_zone': pool_t_buy_zone,
-            't_sell_zone': pool_t_sell_zone,
-            'trend': pool_trend.value,
-            'est_close': est_close,
-            'low': quote_low,
-            'high': quote_high,
-            'volume_ratio': _numeric(latest_stock, '量比') if _numeric(latest_stock, '量比') is not None else _volume_ratio(rows, now),
-            'active_delta': (active_deltas or {}).get(symbol),
-        })
-        common_facts = {
-            'hot_theme': theme != 'unknown',
-            'not_regulated': not regulated,
-            'lhb_ok': not bad_lhb,
-        }
-        stock_highs = [
-            value
-            for value in (
-                _numeric(row, '最高', 'high', 'High')
-                for row in _sorted_rows(rows)[-10:]
-            )
-            if value is not None and value > 0
-        ]
-        high_10 = max(stock_highs, default=0.0)
-        ma5_now = moving_average(stock_closes, 5)
-        ma5_prev = moving_average(stock_closes[:-1], 5)
-        ma10_now = moving_average(stock_closes, 10)
-        ma10_prev = moving_average(stock_closes[:-1], 10)
-        first_board_raw = pool_row.get('first_board_date') or latest_stock.get('first_board_date')
-        first_board = False
-        if first_board_raw:
-            try:
-                first_board_date = date.fromisoformat(str(first_board_raw)[:10])
-                next_day = first_board_date + timedelta(days=1)
-                while not is_trading_day(next_day, holidays):
-                    next_day += timedelta(days=1)
-                first_board = bool(
-                    (pool_row.get('first_board') or latest_stock.get('first_board'))
-                    and now == next_day
-                )
-            except ValueError:
-                first_board = False
-        selected = select_strategies({
-            **common_facts,
-            'ma5_rising': ma5_now is not None and ma5_prev is not None and ma5_now > ma5_prev,
-            'deep_pullback': high_10 > 0 and est_close <= high_10 * deep_pullback_ratio,
-            'ma10_alive': ma10_now is not None and ma10_prev is not None and ma10_now >= ma10_prev,
-            'ma5_falling': ma5_now is not None and ma5_prev is not None and ma5_now < ma5_prev,
-            'drift_breakout': (
-                ma5_now is not None
-                and est_close >= ma_tomorrow(
-                    plan_closes[:-1] if plan_closes and abs(plan_closes[-1] - est_close) < 1e-9 else plan_closes,
-                    5,
-                    est_close,
-                )
-            ),
-            'first_board': first_board,
-            'near_support': bool(support_zone and est_close <= support_zone[0] * 1.02),
-            'volume_breakout': breakout_hit,
-        })
-        selected = cooled_out(selected, (recent_stops or {}).get(symbol, {}), same_ma_cooldown_days)
-        if not selected:
-            rejected.append({'symbol': symbol, 'reason': 'no_strategy'})
-            continue
-        for strategy_id in selected:
-            ma_n = 10 if strategy_id == 'first_move_10d' else 5
-            if len(plan_closes) < ma_n - 1:
-                continue
-            stop_source = plan_closes[:-1] if plan_closes and abs(plan_closes[-1] - est_close) < 1e-9 else plan_closes
-            stop_line = ma_tomorrow(stop_source, ma_n, est_close)
-            stop_zones[symbol] = _break_zone(stop_line, 0.01)
-            assignments.append({
-                'symbol': symbol,
-                'strategy_id': strategy_id,
-                'parent_id': (entry_parent_ids or {}).get(symbol),
-                'closes': plan_closes,
-                'est_close': est_close,
-                'low': quote_low,
-                'high': quote_high,
-                'two_source_anomaly': two_source_anomaly,
-                'support': support_zone[0] if support_zone else None,
-                'resistance': resistance_zone[1] if resistance_zone else None,
-                'breakout_price': breakout_price,
-                'premise_facts': common_facts,
-            })
-        if selected and pool_signal_rows and pool_signal_rows[-1]['symbol'] == symbol:
-            latest_pool_row = pool_signal_rows[-1]
-            latest_pool_row['strategy_id'] = selected[0]
-            if latest_pool_row['trend'] == SignalTrend.UP.value and symbol in stop_zones:
-                latest_pool_row['stop_zone'] = stop_zones[symbol]
+    evaluation = evaluate_candidates(pool_rows, stock_klines, CandidateContext(
+        now=now,
+        theme_map=theme_map,
+        regulator_list=regulator_list,
+        lhb=lhb,
+        lhb_dumpers=lhb_dumpers,
+        lhb_checked=lhb_checked,
+        tail_prices=tail_prices or {},
+        entry_parent_ids=entry_parent_ids or {},
+        active_retest=active_retest or set(),
+        recent_stops=recent_stops or {},
+        same_ma_cooldown_days=same_ma_cooldown_days,
+        two_source_deviation_max=two_source_deviation_max,
+        quote_sanity_enabled=quote_sanity_enabled,
+        deep_pullback_ratio=deep_pullback_ratio,
+        holidays=holidays or set(),
+        active_deltas=active_deltas or {},
+    ))
+    assignments = evaluation['assignments']
+    rejected = evaluation['rejected']
+    stop_zones = evaluation['stop_zones']
+    pool_signal_rows = evaluation['pool_signal_rows']
+    pool_total = evaluation['pool_total']
     return {
         'trade_date': str(now) if now else str(_value(_latest(index_rows) or {}, 'trade_date', '日期', 'date') or ''),
         'market_tier': market_tier,
         'market': {
             'amount_yi': amount_yi,
+            'amount_scope': amount_scope,
+            'sh_amount_yi': sh_amount_yi,
+            'sz_amount_yi': sz_amount_yi,
             'tier': market_tier,
             'sh_close': sh_close,
             'sh_ma5': sh_ma5,
@@ -1006,6 +702,8 @@ def fetch_market_input(
         holidays=config['holidays'],
         name_map=name_map,
         active_deltas=active_deltas,
+        # 量能口径=两市合计：深市成交额必须参与，档位不得只用沪市（§3.5）
+        sz_index_rows=akshare.index_kline(SZ_AMOUNT_INDEX, trade_date=trade_date, limit=60),
     )
     available_sectors = {
         str(row['symbol']) for row in payload.get('sector_context') or []
@@ -1123,6 +821,20 @@ def signal_day_trigger_review(
     return reviewed
 
 
+def anomalous_settlement_symbols(conn: sqlite3.Connection, trade_date: str) -> set[str]:
+    '''§7.4 ANOMALOUS 行：当日结算 data_status=ANOMALOUS（定性待补）的 symbol 集合。'''
+    rows = conn.execute(
+        '''
+        SELECT DISTINCT s.symbol
+        FROM stop_settlements st
+        JOIN signals s ON s.id = st.signal_id
+        WHERE st.trade_date=? AND UPPER(st.data_status)='ANOMALOUS'
+        ''',
+        (trade_date,),
+    ).fetchall()
+    return {str(row['symbol']) for row in rows}
+
+
 def run_evening(
     conn: sqlite3.Connection,
     input_path: str | Path,
@@ -1149,6 +861,9 @@ def run_evening(
         for symbol, (mode, _reason) in protection_states.items()
         if mode != 'NORMAL'
     }
+    # §7.4 ANOMALOUS 行：定性待补的破位票维持池内保护，但抑制新 entry，
+    # 直至定性补齐或人工结案（结算落定后 data_status 不再是 ANOMALOUS）
+    anomalous_symbols = anomalous_settlement_symbols(conn, trade_date)
     plans = list(payload.get('plans') or [])
     assignments = list(payload.get('assignments') or [])
     holdings = [
@@ -1172,12 +887,19 @@ def run_evening(
         [row for row in holdings if str(row.get('symbol') or '') not in pool_symbols],
         created_at,
     )
+    generation_rejections: list[dict[str, str]] = []
     if assignments:
-        plans.extend(build_pool_plans(strategies.values(), assignments))
-    plans = [
-        plan for plan in plans
-        if str(plan.get('symbol') or '') not in blocked_symbols
-    ]
+        plans.extend(build_pool_plans(strategies.values(), assignments, generation_rejections))
+    filtered_plans: list[dict[str, Any]] = []
+    for plan in plans:
+        symbol = str(plan.get('symbol') or '')
+        if symbol in blocked_symbols:
+            generation_rejections.append({'symbol': symbol, 'reason': 'blocked_protection'})
+        elif symbol in anomalous_symbols:
+            generation_rejections.append({'symbol': symbol, 'reason': 'anomalous_stop_pending'})
+        else:
+            filtered_plans.append(plan)
+    plans = filtered_plans
     rows = build_evening_signals(
         strategies,
         plans,
@@ -1191,6 +913,7 @@ def run_evening(
             for row in (payload.get('signal_rows') or [])
             if row.get('symbol')
         },
+        rejections=generation_rejections,
     )
     cooled_candidates = expire_cooled_candidates(
         existing_signals,
@@ -1306,4 +1029,5 @@ def run_evening(
         'trade_date': trade_date,
         'report_date': report_date or trade_date,
         'signal_ids': [signal.id for signal in rows],
+        'generation_rejections': generation_rejections,
     }

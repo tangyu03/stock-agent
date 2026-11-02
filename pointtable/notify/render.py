@@ -6,6 +6,7 @@ from typing import Any
 
 from ..core.calendar import trading_days_between
 from ..core.selector import COOLDOWN_STOP_COUNT, MA_FAMILY
+from ..domain.reconciliation import rejection_counts
 from ..models.context_mark import ContextMark
 from ..models.event_calendar import EventCalendar
 from ..models.signal import Signal, SignalRole, SignalSide, SignalStatus
@@ -32,10 +33,19 @@ def render_header(market: Mapping[str, Any], report_date: str | None = None) -> 
     amount = market.get('amount_yi')
     tier = str(market.get('tier', '')).upper()
     parts: list[str] = []
+    # §3.5 量能=两市合计：components 可用时投影沪/深拆分
+    sh_amount = market.get('sh_amount_yi')
+    sz_amount = market.get('sz_amount_yi')
+    breakdown = (
+        f'（沪{_price(sh_amount)}＋深{_price(sz_amount)}）'
+        if sh_amount is not None and sz_amount is not None
+        else ''
+    )
     if amount is not None and tier == 'LOW':
-        parts.append(f'量能 {_price(amount)}亿，架构不起行情，只架得起轮动')
+        parts.append(f'量能 {_price(amount)}亿{breakdown}，架构不起行情，只架得起轮动')
     elif amount is not None and tier == 'HIGH':
-        parts.append(f'久违的{_price(amount)}亿。')
+        # 尾部句号由 render_header 末尾的 join 统一补，勿在此处带 '。'（否则双句号）
+        parts.append(f'久违的{_price(amount)}亿{breakdown}')
     summary = list(market.get('index_summary') or [])
     if not summary and market.get('sh_close') is not None:
         summary = [{
@@ -207,7 +217,14 @@ def render_trigger_review(rows: Iterable[Mapping[str, Any]], names: Mapping[str,
         strategy = _strategy_label(strategy_id)
         if tag == 't' and side:
             kind = f'{kind} {side}'
-        kind_text = f'{kind}（对应 {strategy}）' if strategy else kind
+        # §7.7：“对应池内”是 parent 来源，不是 strategy_id。parent=pool 的保护行
+        # 不得渲染成“对应 某策略”（那像一条真实 enter 链）；同生出处降级为后缀。
+        parent_id = _text(row.get('parent_id'))
+        if parent_id.startswith('pool:'):
+            suffix = f'·{strategy}同生' if strategy and strategy != '池内' else ''
+            kind_text = f'{kind}（对应 池内{suffix}）'
+        else:
+            kind_text = f'{kind}（对应 {strategy}）' if strategy else kind
         metadata = f"｜signal_id={signal_id}" if signal_id else ''
         pair_id = _text(row.get('pair_id'))
         if pair_id:
@@ -215,6 +232,9 @@ def render_trigger_review(rows: Iterable[Mapping[str, Any]], names: Mapping[str,
         triggered_at = _text(row.get('triggered_at'))
         if triggered_at:
             metadata += f"｜触发={triggered_at}"
+        event_label = _EVENT_SOURCE_LABELS.get(_text(row.get('event_source')))
+        if event_label:
+            metadata += f'｜{event_label}'
         created_at = _text(row.get('created_at'))
         if created_at:
             metadata += f"｜创建={created_at}"
@@ -227,6 +247,13 @@ def render_trigger_review(rows: Iterable[Mapping[str, Any]], names: Mapping[str,
 
 
 _TAG_LABELS = {'enter': '买入', 'stop': '止损', 'profit': '止盈', 't': '做T', 'retest_confirm': '回踩确认'}
+
+# §3.2 journal.event_source 投影：live_watch 为盘中实时触发，不加注
+_EVENT_SOURCE_LABELS = {
+    'live_settle': '收盘兜底结算',
+    'replay': '回放',
+    'backfill': '补记',
+}
 
 
 def render_ev_negative(market: Mapping[str, Any]) -> str:
@@ -499,11 +526,15 @@ def _candidate_audit_note(market: Mapping[str, Any], valid_count: int) -> str:
         'insufficient_closes': '均线数据不足',
         'no_strategy': '前提不满足',
         'lhb_data_unavailable': '龙虎榜数据不可用',
+        'strategy_config_missing': '策略配置缺失',
+        'plan_geometry_rejected': '区间几何不成立',
+        'premise_failed': '前提不满足（生成阶段）',
+        'duplicate_active_entry': '同票信号已存在',
+        'ma_family_cooldown': '均线家族冷却',
+        'blocked_protection': '保护行暂停',
+        'anomalous_stop_pending': '未决破位待补',
     }
-    counts: dict[str, int] = {}
-    for row in (market.get('rejected') or []):
-        reason = str(row.get('reason') or 'unknown') if isinstance(row, Mapping) else 'unknown'
-        counts[reason] = counts.get(reason, 0) + 1
+    counts = rejection_counts(market.get('rejected') or [])
     generated = market.get('pool_total')
     if generated is None:
         generated = valid_count + sum(counts.values())
@@ -583,6 +614,8 @@ def _render_candidate_groups(
             rationale = _entry_rationale(signal)
             if rationale:
                 lines.append(f'    依据：{rationale}')
+            if signal.premise.get('ev_negative'):
+                lines.append('    EV_NEG：仅记录，不预警')
             cooldown = _cooldown_note(signal, market)
             if cooldown:
                 lines.append(f'    均线冷却：{cooldown.lstrip("｜")}')
@@ -824,7 +857,9 @@ def _cooldown_note(signal: Signal, market: Mapping[str, Any]) -> str:
     current_family = MA_FAMILY.get(signal.strategy_id, signal.strategy_id)
     notes: list[str] = []
     for family, hits in counts.items():
-        if family == 'unknown':
+        # §7.7 冷却归族只认均线家族；pool/holding 是 parent 来源，不是冷却家族，
+        # 不得制造“pool档位冷却中”这类暗示阻断的假标签
+        if family in ('pool', 'holding', 'unknown'):
             continue
         try:
             cooled = int(hits or 0) >= COOLDOWN_STOP_COUNT
@@ -934,7 +969,13 @@ def render_signal_report(
     observed_symbols = {signal.symbol for signal in observations}
     shown_pool_signals = [signal for signal in pool_signals if signal.symbol not in observed_symbols]
     pool_symbols = {signal.symbol for signal in shown_pool_signals} | {signal.symbol for signal in observations}
-    lines.append(f'池内票区（{len(pool_symbols)}只）：')
+    # 计数=池内成员总数（含保护挂起、仅有状态行的票），与候选对账同口径
+    pool_count = (
+        int(market['pool_total'])
+        if market.get('pool_total') is not None
+        else len(pool_symbols)
+    )
+    lines.append(f'池内票区（{pool_count}只）：')
     lines.extend(_render_pool_groups(
         shown_pool_signals, signals, market, names, report_date, observations,
         protection_states=market.get('protection_states'),

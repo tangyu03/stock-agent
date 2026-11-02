@@ -2,6 +2,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from pointtable.cli import list_holdings, list_pool, main, plan_dates, stats_report
 from pointtable.db.session import get_connection, init_db, set_database_path
 
@@ -54,6 +56,17 @@ def test_plan_dates_infers_next_target_and_previous_signal_day():
     assert dates == {'target_date': '2026-10-26', 'signal_date': '2026-10-23'}
 
 
+def test_report_command_refuses_to_overwrite_plan_report(tmp_db, tmp_path):
+    # report 是结算视图，plan 是计划视图；同族文件名不许互相覆盖
+    set_database_path(tmp_db)
+    init_db()
+    target = tmp_path / '2099-01-01-plan.md'
+    target.write_text('PLAN', encoding='utf-8')
+    with pytest.raises(SystemExit):
+        main(['--db', str(tmp_db), 'report', '--date', '2099-01-01', '--output', str(target)])
+    assert target.read_text(encoding='utf-8') == 'PLAN'  # 原计划报告未被触碰
+
+
 def test_push_file_is_manual_one_way(monkeypatch, tmp_db):
     sent = []
 
@@ -64,7 +77,7 @@ def test_push_file_is_manual_one_way(monkeypatch, tmp_db):
             sent.append((title, content, self.channel))
             return True
 
-    monkeypatch.setattr('pointtable.cli.PushPlusSender', FakeSender)
+    monkeypatch.setattr('pointtable.notify.push.PushPlusSender', FakeSender)
     report_path = Path.cwd() / 'test_push_file.md'
     report_path.write_text('report body', encoding='utf-8')
     try:

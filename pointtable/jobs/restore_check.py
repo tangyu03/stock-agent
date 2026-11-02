@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from ..models.signal import Signal, SignalStatus, SignalTag
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from ..db.session import load_signals
 from .settle import correction_notice
@@ -99,6 +99,46 @@ def cascade_violations(signals: Iterable[Signal]) -> list[dict[str, str]]:
         ):
             rows.append({'signal_id': signal.id, 'symbol': signal.symbol})
     return rows
+
+
+def restore_check_report(conn: sqlite3.Connection, trade_date: str) -> dict[str, Any]:
+    '''restore-check 命令投影：未配对 T_BUY + 级联违规，从 cli.py 迁出（批次3）。'''
+    from ..db.session import signal_from_row
+
+    t_signals = [signal_from_row(row) for row in conn.execute("SELECT * FROM signals WHERE tag='t'").fetchall()]
+    unpaired, _ = find_unpaired_t_buy(t_signals, trade_date=trade_date, active_only=True)
+    tail_prices = load_tail_prices(conn, trade_date)
+    signals_by_id = {signal.id: signal for signal in t_signals}
+    rows = []
+    for item in unpaired:
+        signal = signals_by_id[item.signal_id]
+        sell = next(
+            (
+                row for row in t_signals
+                if row.parent_id == item.parent_id
+                and row.symbol == item.symbol
+                and row.side.value == 'SELL'
+            ),
+            None,
+        )
+        captured = conn.execute(
+            'SELECT captured_at FROM tail_snapshots WHERE trade_date=? AND symbol=?',
+            (trade_date, item.symbol),
+        ).fetchone()
+        captured_at = datetime.fromisoformat(captured['captured_at']) if captured else None
+        rows.append({
+            'signal_id': item.signal_id,
+            'symbol': item.symbol,
+            'tail_price': tail_prices.get(item.symbol),
+            'resistance_zone_high': sell.zone_high if sell else signal.zone_high,
+            'minutes_since_tail': int((datetime.now(timezone.utc) - captured_at).total_seconds() / 60) if captured_at else None,
+        })
+    return {
+        'unpaired_t_buy': rows,
+        'cascade_violations': cascade_violations(t_signals),
+    }
+
+
 def _pool_symbols(conn: sqlite3.Connection, trade_date: str) -> list[str]:
     rows = conn.execute(
         '''

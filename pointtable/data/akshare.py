@@ -8,12 +8,17 @@ import requests
 import threading
 import time
 from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import date, timedelta
 from typing import Any
 from pathlib import Path
+
+from .normalize import as_records, row_amount, row_compact_date, row_date, trim_to_date
+from .normalize import tail as _tail_slice
+from .resolvers import AmountFetcher, RowCompletion, RowFetcher, resolve_kline
 
 logger = logging.getLogger(__name__)
 _CACHE: dict[tuple[str, tuple[tuple[str, Any], ...]], Any] = {}
@@ -98,65 +103,77 @@ def clear_ak_cache() -> None:
         _CACHE_EXPIRY.clear()
 
 
-def stock_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> list[dict[str, Any]]:
-    kwargs = {'symbol': symbol, 'period': 'daily', 'adjust': 'qfq'}
-    end = date.fromisoformat(trade_date) if trade_date else date.today()
-    start = end - timedelta(days=180)
-    normalized = _tencent_kline(
+def _stock_rows_tencent(symbol: str, trade_date: str | None, limit: int) -> list[dict[str, Any]]:
+    start, end = _kline_window(trade_date)
+    return _tencent_kline(
         symbol,
         start.isoformat().replace('-', ''),
         end.isoformat().replace('-', ''),
         limit,
     )
+
+
+def _stock_rows_em_hist(symbol: str, trade_date: str | None, limit: int) -> Any:
+    kwargs: dict[str, Any] = {'symbol': symbol, 'period': 'daily', 'adjust': 'qfq'}
     if trade_date:
-        normalized = [
-            row for row in normalized
-            if str(row.get('trade_date') or row.get('日期') or row.get('date') or '').replace('-', '')
-            <= trade_date.replace('-', '')
-        ]
-    if normalized and len(normalized) >= min(limit, 20):
-        return normalized
-    if trade_date:
+        start, end = _kline_window(trade_date)
         kwargs['start_date'] = start.isoformat().replace('-', '')
         kwargs['end_date'] = end.isoformat().replace('-', '')
-    rows = cached_ak('stock_zh_a_hist', **kwargs)
-    normalized = _records(rows)
-    if not normalized:
-        prefix = 'sh' if symbol.startswith('6') else 'sz' if symbol.startswith(('0', '3')) else 'bj'
-        rows = cached_ak('stock_zh_a_daily', symbol=f'{prefix}{symbol}', start_date=kwargs.get('start_date', ''), end_date=kwargs.get('end_date', ''), adjust='qfq')
-        normalized = _records(rows)
-    if not normalized:
-        normalized = _tencent_kline(
-            symbol,
-            kwargs.get('start_date') or '',
-            kwargs.get('end_date') or date.today().isoformat().replace('-', ''),
-            limit,
-        )
-    if trade_date:
-        normalized = [
-            row for row in normalized
-            if str(row.get('trade_date') or row.get('日期') or '').replace('-', '') <= trade_date.replace('-', '')
-        ]
-    return normalized[-max(limit, 0):]
+    return cached_ak('stock_zh_a_hist', **kwargs)
 
 
-def index_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> list[dict[str, Any]]:
+def _stock_rows_sina_daily(symbol: str, trade_date: str | None, limit: int) -> Any:
+    start, end = _kline_window(trade_date)
+    prefix = 'sh' if symbol.startswith('6') else 'sz' if symbol.startswith(('0', '3')) else 'bj'
+    return cached_ak(
+        'stock_zh_a_daily',
+        symbol=f'{prefix}{symbol}',
+        start_date=start.isoformat().replace('-', ''),
+        end_date=end.isoformat().replace('-', ''),
+        adjust='qfq',
+    )
+
+
+_STOCK_ROW_FETCHERS = (
+    RowFetcher(name='tencent_kline', fetch=_stock_rows_tencent),
+    RowFetcher(name='em_stock_hist', fetch=_stock_rows_em_hist),
+    RowFetcher(name='sina_stock_daily', fetch=_stock_rows_sina_daily),
+)
+
+
+def stock_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> list[dict[str, Any]]:
+    '''个股日 K：腾讯 → em 历史 → 新浪日线；链全空才重取腾讯（无成交额语义）。'''
+    result = resolve_kline(
+        _STOCK_ROW_FETCHERS,
+        [],
+        [],
+        symbol=symbol,
+        trade_date=trade_date,
+        limit=limit,
+        inclusive=True,
+        require_amount=False,
+        last_resort='empty',
+    )
+    return result.rows
+
+
+def _kline_window(trade_date: str | None) -> tuple[date, date]:
     end = date.fromisoformat(trade_date) if trade_date else date.today()
-    start = end - timedelta(days=180)
-    records = _tencent_kline(
+    return end - timedelta(days=180), end
+
+
+def _index_rows_tencent(symbol: str, trade_date: str | None, limit: int) -> list[dict[str, Any]]:
+    start, end = _kline_window(trade_date)
+    return _tencent_kline(
         symbol,
         start.isoformat().replace('-', ''),
         end.isoformat().replace('-', ''),
         limit,
     )
-    if trade_date:
-        records = [
-            row for row in records
-            if str(row.get('trade_date') or row.get('日期') or row.get('date') or '').replace('-', '')
-            <= trade_date.replace('-', '')
-        ]
-    if records and len(records) >= min(limit, 20) and _latest_amount(records[-1]) is not None:
-        return records
+
+
+def _index_rows_em_hist(symbol: str, trade_date: str | None, limit: int) -> Any:
+    start, end = _kline_window(trade_date)
     rows = cached_ak(
         'stock_zh_index_daily_em',
         symbol=symbol,
@@ -167,140 +184,204 @@ def index_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> 
     )
     if rows is None:
         rows = _eastmoney_index_kline_direct(symbol, start, end)
-    records = _tail(rows, trade_date, limit, inclusive=True)
-    latest_date = records[-1].get('date') or records[-1].get('日期') if records else None
-    needs_spot = (
-        trade_date is not None
-        and records
-        and latest_date is not None
-        and str(latest_date).replace('-', '') < trade_date.replace('-', '')
+    return rows
+
+
+def _index_rows_sina_daily(symbol: str, trade_date: str | None, limit: int) -> Any:
+    return cached_ak('stock_zh_index_daily', symbol=symbol)
+
+
+def _index_amount_overrides(symbol: str, trade_date: str | None, tail_date: str | None) -> float | None:
+    # 人工兜底：仅历史日查询（当日由实时链补齐）；条目按 (symbol, trade_date) 键控，日期按构造对账
+    if not trade_date or trade_date == date.today().isoformat():
+        return None
+    if not _INDEX_AMOUNT_OVERRIDES_PATH.exists():
+        return None
+    override = json.loads(_INDEX_AMOUNT_OVERRIDES_PATH.read_text(encoding='utf-8')).get(symbol) or {}
+    amount = (override or {}).get(trade_date)
+    try:
+        value = float(amount)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _index_amount_em_hist(symbol: str, trade_date: str | None, tail_date: str | None) -> float | None:
+    # em 历史接口按精确交易日取行，日期按构造对账
+    if not trade_date or trade_date == date.today().isoformat():
+        return None
+    hist_rows = _records(cached_ak(
+        'index_zh_a_hist',
+        symbol=symbol[-6:],
+        period='daily',
+        start_date=(date.fromisoformat(trade_date) - timedelta(days=10)).isoformat().replace('-', ''),
+        end_date=trade_date.replace('-', ''),
+        timeout=20,
+        retries=3,
+    ))
+    hist_row = next(
+        (row for row in reversed(hist_rows) if row_compact_date(row) == trade_date.replace('-', '')),
+        None,
     )
-    if not records or needs_spot:
-        rows = cached_ak('stock_zh_index_daily', symbol=symbol)
-        records = _tail(rows, trade_date, limit, inclusive=True)
-        latest_date = records[-1].get('date') or records[-1].get('日期') if records else None
-    is_current_signal_day = trade_date == date.today().isoformat()
-    if records and not is_current_signal_day and _latest_amount(records[-1]) is None:
-        override = {}
-        if _INDEX_AMOUNT_OVERRIDES_PATH.exists():
-            override = json.loads(_INDEX_AMOUNT_OVERRIDES_PATH.read_text(encoding='utf-8')).get(symbol) or {}
-        override_amount = (override or {}).get(trade_date)
-        if override_amount is None:
-            hist_symbol = symbol[-6:]
-            hist_rows = _records(cached_ak(
-                'index_zh_a_hist',
-                symbol=hist_symbol,
-                period='daily',
-                start_date=(date.fromisoformat(trade_date) - timedelta(days=10)).isoformat().replace('-', ''),
-                end_date=trade_date.replace('-', ''),
-                timeout=20,
-                retries=3,
-            ))
-            hist_row = next(
-                (
-                    row for row in reversed(hist_rows)
-                    if str(row.get('trade_date') or row.get('date') or row.get('日期') or '').replace('-', '')
-                    == trade_date.replace('-', '')
-                ),
-                None,
-            )
-            if hist_row is not None and _latest_amount(hist_row) is not None:
-                override_amount = _latest_amount(hist_row)
-        if override_amount is not None:
-            records[-1]['amount'] = float(override_amount)
-            records[-1]['成交额'] = float(override_amount)
-    if records and is_current_signal_day and _latest_amount(records[-1]) is None:
-        spot_rows = _records(cached_ak('stock_zh_index_spot_sina', retries=2))
-        spot = next((row for row in spot_rows if str(row.get('代码')) == symbol), None)
-        if spot is not None and trade_date:
-            spot_date = date.fromisoformat(trade_date)
-            latest_date = records[-1].get('date') or records[-1].get('日期')
-            if str(latest_date).replace('-', '') == trade_date.replace('-', ''):
-                records[-1]['成交额'] = spot.get('成交额')
-                records[-1]['close'] = spot.get('最新价') or records[-1].get('close') or records[-1].get('收盘')
-                records[-1]['日期'] = spot_date
-                records[-1]['date'] = spot_date
-    if records and is_current_signal_day and _latest_amount(records[-1]) is None:
-        quote = _tencent_realtime_quote(symbol)
-        if quote is not None and str(quote.get('date') or '') == str(trade_date):
-            records[-1]['amount'] = quote['amount']
-            records[-1]['成交额'] = quote['amount']
-            if quote.get('close'):
-                records[-1]['close'] = quote['close']
-    if not records or len(records) < min(limit, 20) or _latest_amount(records[-1]) is None:
-        records = _tencent_kline(
-            symbol,
-            start.isoformat().replace('-', ''),
-            end.isoformat().replace('-', ''),
-            limit,
-        )
-        if (
-            trade_date
-            and is_current_signal_day
-            and (not records or str(latest_date).replace('-', '') < trade_date.replace('-', ''))
-        ):
-            spot_rows = _records(cached_ak('stock_zh_index_spot_sina'))
-            spot = next((row for row in spot_rows if str(row.get('代码')) == symbol), None)
-            if spot is not None:
-                spot_date = date.fromisoformat(trade_date)
-                spot_row = {
-                    'date': spot_date,
-                    '日期': spot_date,
-                    'open': spot.get('今开'),
-                    'high': spot.get('最高'),
-                    'low': spot.get('最低'),
-                    'close': spot.get('最新价'),
-                    'volume': spot.get('成交量'),
-                    'amount': spot.get('成交额'),
-                }
-                if records and str(latest_date).replace('-', '') == trade_date.replace('-', ''):
-                    records[-1] = spot_row
-                else:
-                    records.append(spot_row)
-                records = records[-max(limit, 0):]
-    return records
+    return row_amount(hist_row) if hist_row else None
+
+
+def _index_amount_sina_spot(symbol: str, trade_date: str | None, tail_date: str | None) -> Mapping[str, Any] | None:
+    # 当日实时列表补额：旧语义要求尾行恰为所需交易日，顺带回写 close/日期
+    if not trade_date or trade_date != date.today().isoformat() or tail_date != trade_date:
+        return None
+    spot_rows = _records(cached_ak('stock_zh_index_spot_sina', retries=2))
+    spot = next((row for row in spot_rows if str(row.get('代码')) == symbol), None)
+    if spot is None:
+        return None
+    spot_date = date.fromisoformat(trade_date)
+    patch: dict[str, Any] = {'amount': spot.get('成交额'), '成交额': spot.get('成交额'), '日期': spot_date, 'date': spot_date}
+    if spot.get('最新价'):
+        patch['close'] = spot.get('最新价')
+    return patch
+
+
+def _index_amount_tencent_realtime(symbol: str, trade_date: str | None, tail_date: str | None) -> Mapping[str, Any] | None:
+    # 腾讯实时串（qt）在非交易日返回最近交易日的全天数据：fields[30]=日期可与所需
+    # 交易日对账后直接补成交额，不限于"当天跑"场景——周末/次日补跑 plan 同样受益
+    quote = _tencent_realtime_quote(symbol)
+    if quote is None or not trade_date or str(quote.get('date') or '') != str(trade_date):
+        return None
+    patch: dict[str, Any] = {'amount': quote['amount'], '成交额': quote['amount']}
+    if quote.get('close'):
+        patch['close'] = quote['close']
+    return patch
+
+
+def _index_rows_spot_synth(rows: list[dict[str, Any]], symbol: str, trade_date: str | None, limit: int) -> list[dict[str, Any]]:
+    # 当日尾行缺失（K 线未及当日）时，用新浪指数实时行合成尾行
+    if not trade_date or trade_date != date.today().isoformat():
+        return rows
+    if rows and (row_date(rows[-1]) or '') >= trade_date:
+        return rows
+    spot_rows = _records(cached_ak('stock_zh_index_spot_sina'))
+    spot = next((row for row in spot_rows if str(row.get('代码')) == symbol), None)
+    if spot is None:
+        return rows
+    spot_date = date.fromisoformat(trade_date)
+    spot_row = {
+        'date': spot_date,
+        '日期': spot_date,
+        'open': spot.get('今开'),
+        'high': spot.get('最高'),
+        'low': spot.get('最低'),
+        'close': spot.get('最新价'),
+        'volume': spot.get('成交量'),
+        'amount': spot.get('成交额'),
+    }
+    if rows and row_compact_date(rows[-1]) == trade_date.replace('-', ''):
+        rows[-1] = spot_row
+    else:
+        rows.append(spot_row)
+    return _tail_slice(rows, limit)
+
+
+_INDEX_ROW_FETCHERS = (
+    RowFetcher(name='tencent_kline', fetch=_index_rows_tencent),
+    RowFetcher(name='em_index_daily', fetch=_index_rows_em_hist),
+    RowFetcher(name='sina_index_daily', fetch=_index_rows_sina_daily, fallback_only=True),
+)
+_INDEX_AMOUNT_FETCHERS = (
+    AmountFetcher(name='overrides', fetch=_index_amount_overrides),
+    AmountFetcher(name='em_index_hist', fetch=_index_amount_em_hist),
+    AmountFetcher(name='sina_index_spot', fetch=_index_amount_sina_spot),
+    AmountFetcher(name='tencent_realtime', fetch=_index_amount_tencent_realtime),
+)
+_INDEX_ROW_COMPLETIONS = (
+    RowCompletion(name='sina_index_spot_row', apply=_index_rows_spot_synth),
+)
+
+
+def index_kline(symbol: str, trade_date: str | None = None, limit: int = 60) -> list[dict[str, Any]]:
+    '''指数日 K。兜底链与补齐语义由 _INDEX_* 声明（resolvers.resolve_kline 统一执行）：
+    腾讯快速路径 → em/新浪行兜底 → 人工兜底/em 历史/新浪实时/腾讯实时串补额 →
+    首选源重取 → 当日实时行合成。'''
+    result = resolve_kline(
+        _INDEX_ROW_FETCHERS,
+        _INDEX_AMOUNT_FETCHERS,
+        _INDEX_ROW_COMPLETIONS,
+        symbol=symbol,
+        trade_date=trade_date,
+        limit=limit,
+        inclusive=True,
+    )
+    return result.rows
+
+
+_SECTOR_ALIASES = {
+    '3C设备': ('industry', '消费电子零部件及组装'),
+    '光模块CPO': ('concept', 'CPO概念'),
+    '存储': ('concept', '存储芯片'),
+    '算力硬件': ('concept', '算力概念'),
+    '先进封装': ('concept', '先进封装'),
+    '量子科技': ('concept', '量子科技'),
+    '新能源车': ('concept', '新能源车'),
+}
+
+
+def _sector_window(trade_date: str | None) -> tuple[str, str]:
+    end = date.fromisoformat(trade_date) if trade_date else date.today()
+    start = end - timedelta(days=180)
+    return start.isoformat().replace('-', ''), end.isoformat().replace('-', '')
+
+
+def _sector_rows_alias(symbol: str, trade_date: str | None, limit: int) -> Any:
+    if symbol not in _SECTOR_ALIASES:
+        return []
+    source, board = _SECTOR_ALIASES[symbol]
+    name = 'stock_board_industry_hist_em' if source == 'industry' else 'stock_board_concept_hist_em'
+    start, end = _sector_window(trade_date)
+    return cached_ak(name, symbol=board, start_date=start, end_date=end)
+
+
+def _sector_rows_industry(symbol: str, trade_date: str | None, limit: int) -> Any:
+    start, end = _sector_window(trade_date)
+    return cached_ak(
+        'stock_board_industry_hist_em',
+        symbol=symbol,
+        start_date=start,
+        end_date=end,
+    )
+
+
+def _sector_rows_concept(symbol: str, trade_date: str | None, limit: int) -> Any:
+    start, end = _sector_window(trade_date)
+    return cached_ak(
+        'stock_board_concept_hist_em',
+        symbol=symbol,
+        start_date=start,
+        end_date=end,
+    )
+
+
+_SECTOR_ROW_FETCHERS = (
+    RowFetcher(name='em_board_alias', fetch=_sector_rows_alias),
+    RowFetcher(name='em_board_industry', fetch=_sector_rows_industry),
+    RowFetcher(name='em_board_concept', fetch=_sector_rows_concept),
+)
 
 
 def sector_kline(symbol: str, limit: int = 60, trade_date: str | None = None) -> list[dict[str, Any]]:
-    end = date.fromisoformat(trade_date) if trade_date else date.today()
-    start = end - timedelta(days=180)
-    aliases = {
-        '3C设备': ('industry', '消费电子零部件及组装'),
-        '光模块CPO': ('concept', 'CPO概念'),
-        '存储': ('concept', '存储芯片'),
-        '算力硬件': ('concept', '算力概念'),
-        '先进封装': ('concept', '先进封装'),
-        '量子科技': ('concept', '量子科技'),
-        '新能源车': ('concept', '新能源车'),
-    }
-    if symbol in aliases:
-        source, board = aliases[symbol]
-        name = 'stock_board_industry_hist_em' if source == 'industry' else 'stock_board_concept_hist_em'
-        rows = cached_ak(
-            name,
-            symbol=board,
-            start_date=start.isoformat().replace('-', ''),
-            end_date=end.isoformat().replace('-', ''),
-        )
-        normalized = _tail(rows, trade_date, limit, inclusive=True)
-        if normalized:
-            return normalized
-    rows = cached_ak(
-        'stock_board_industry_hist_em',
+    '''板块日 K：别名板块 → 行业板原名 → 概念板原名；无行数门槛、缺额即缺额、
+    从不重取（东财独源，缺就缺）。'''
+    result = resolve_kline(
+        _SECTOR_ROW_FETCHERS,
+        [],
+        [],
         symbol=symbol,
-        start_date=start.isoformat().replace('-', ''),
-        end_date=end.isoformat().replace('-', ''),
+        trade_date=trade_date,
+        limit=limit,
+        inclusive=True,
+        require_amount=False,
+        min_rows=1,
+        last_resort='none',
     )
-    normalized = _tail(rows, trade_date, limit, inclusive=True)
-    if normalized:
-        return normalized
-    rows = cached_ak(
-        'stock_board_concept_hist_em',
-        symbol=symbol,
-        start_date=start.isoformat().replace('-', ''),
-        end_date=end.isoformat().replace('-', ''),
-    )
-    return _tail(rows, trade_date, limit, inclusive=True)
+    return result.rows
 
 
 def auction_snapshot(symbol: str, trade_date: str) -> list[dict[str, Any]]:
@@ -510,25 +591,11 @@ def _eastmoney_index_kline_direct(symbol: str, start: date, end: date) -> list[d
 
 
 def _records(rows: Any) -> list[dict[str, Any]]:
-    if rows is None:
-        return []
-    if hasattr(rows, 'to_dict'):
-        records = list(rows.to_dict(orient='records'))
-    else:
-        records = [dict(row) for row in rows]
-    for row in records:
-        if 'date' in row and '日期' not in row:
-            row['日期'] = row['date']
-    return records
+    return as_records(rows)
 
 
 def _latest_amount(row: Mapping[str, Any]) -> Any:
-    amount = row.get('amount') or row.get('成交额')
-    try:
-        value = float(amount)
-    except (TypeError, ValueError):
-        return None
-    return value if value > 0 else None
+    return row_amount(row)
 
 
 def _tencent_symbol(symbol: str) -> str:
@@ -615,11 +682,4 @@ def _tencent_kline(symbol: str, start_date: str, end_date: str, limit: int) -> l
 
 
 def _tail(rows: Any, trade_date: str | None, limit: int, *, inclusive: bool = False) -> list[dict[str, Any]]:
-    normalized = _records(rows)
-    if trade_date:
-        compare = str.__le__ if inclusive else str.__eq__
-        normalized = [
-            row for row in normalized
-            if compare(str(row.get('trade_date') or row.get('日期') or '').replace('-', ''), trade_date.replace('-', ''))
-        ]
-    return normalized[-max(limit, 0):]
+    return trim_to_date(rows, trade_date, limit, inclusive=inclusive)

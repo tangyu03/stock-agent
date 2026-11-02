@@ -331,16 +331,20 @@ def build_pool_plan(
 def build_pool_plans(
     strategies: Iterable[Mapping[str, Any] | Any],
     assignments: Iterable[Mapping[str, Any]],
+    rejections: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     by_id = {str(_strategy_value(strategy, 'id')): strategy for strategy in strategies}
     plans: list[dict[str, Any]] = []
     for assignment in assignments:
+        symbol = str(assignment.get('symbol') or '')
         strategy = by_id.get(str(assignment.get('strategy_id') or ''))
         if strategy is None:
+            if rejections is not None:
+                rejections.append({'symbol': symbol, 'reason': 'strategy_config_missing'})
             continue
         plan = build_pool_plan(
             strategy,
-            str(assignment.get('symbol') or ''),
+            symbol,
             assignment.get('closes') or [],
             float(assignment.get('est_close') or 0),
             support=assignment.get('support'),
@@ -352,4 +356,7 @@ def build_pool_plans(
         )
         if plan:
             plans.append(plan)
+        elif rejections is not None:
+            # §8 对账闭合：区间几何不成立等 plan 级丢弃必须留下处置记录
+            rejections.append({'symbol': symbol, 'reason': 'plan_geometry_rejected'})
     return plans

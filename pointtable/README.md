@@ -4,6 +4,8 @@
 
 第 2 周新增 `core/` 纯判断层、`data/akshare.py` 安全封装与 `data/guard.py`；第 3 周新增 `jobs/`、`notify/render.py`、`notify/push.py` 和 `stats.py`。`core/` 不允许 import `data/`、`db/`、`notify/`，该约束由 `tests/test_deps.py` 锁定。
 
+2026-11-02 重构（行为保持，金样四投影 sha256 逐字节一致）：`data/normalize.py` 行归一 + `data/resolvers.py` 声明式 K 线兜底引擎——`akshare.py` 只声明 `_INDEX_*`/`_STOCK_*`/`_SECTOR_*` fetcher 链与语义参数（min_rows / require_amount / last_resort），兜底顺序不再藏在 if-else 里；`domain/`（rules.py / reconciliation.py）收拢候选评估与 §8 对账纯函数；`jobs/reporting.py` 报告投影唯一入口、`jobs/pool_admin.py` 池子命令实现；`db/repo.py` 承接表级读写，`db/session.py` 只留连接生命周期与 schema 迁移。既有 import 入口（`db.session`、`jobs.evening` 等）经 re-export 保持不变，旧调用零改动。
+
 命令行：
 
 ```bash
@@ -11,7 +13,10 @@ python -m pointtable.cli stats
 python -m pointtable.cli stats --date 2026-10-22
 python -m pointtable.cli holdings
 python -m pointtable.cli pool
+python -m pointtable.cli pool-sync
 ```
+
+池子的常规编辑入口是 `config/pool.yaml`（声明式全量定义）：编辑后执行 `pool-sync`，把整份声明落成当日快照并输出 added/removed/changed/kept 对账（当日行先删后插，历史日期不改写；同日重跑幂等）。`pool-add` 保留用于临时补单票。
 
 常用节奏命令：
 

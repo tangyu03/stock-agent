@@ -31,6 +31,17 @@ def _as_date(value: str) -> date:
     ).date()
 
 
+def legacy_signals() -> list[sqlite3.Row]:
+    from ..db.session import get_connection
+
+    return get_connection().execute(
+        '''SELECT id, symbol, strategy_id, status, status_reason, closed_at
+           FROM signals
+           WHERE status_reason='system_migration'
+           ORDER BY closed_at DESC, id'''
+    ).fetchall()
+
+
 def _add_months(value: date, months: int) -> date:
     month_index = value.year * 12 + value.month - 1 + months
     year, month = divmod(month_index, 12)

@@ -1,0 +1,111 @@
+# pool.yaml — 股票池的人工编辑入口（声明式全量定义）
+# ============================================================
+# 语义：
+#   本文件描述"完整的期望池子"，不是增删量。pool-sync 用它整体重写
+#   sync_date 当天的池子快照（当日行先 DELETE 后 INSERT，单事务完成；
+#   历史日期的行永不改动）。
+#
+# 工作流：
+#   编辑本文件 → python -m pointtable.cli pool-sync
+#   → 检查输出 JSON：added / removed / changed / kept 应与编辑意图一致
+#   （removed 非空表示有票移出池子）。同日重复执行幂等（全部 kept）。
+#   运行时（evening / watch / restore-check / market-input）读取
+#   date <= 查询日 的最新快照，新快照落库即生效。
+#
+# 字段：
+#   symbol 必填；纯数字自动补齐 6 位（未加引号的 002975 会被 YAML
+#     解析成整数 2975，无需手动加引号）。
+#   theme 可选。解析顺序：此处显式写的非空 theme（原样使用，包括字面
+#     'unknown'）→ theme_map.yaml overrides → 'unknown'。
+#     想让某票改走 theme_map 兜底：删掉 theme 行或留空即可。
+#   role 可选，默认 holding；可选值 holding / index / sector / candidate。
+#   name 仅为人类阅读备注，系统不读取。
+#
+# 注意：pool 是关注范围，不是持仓清单。
+# ============================================================
+
+pool:
+  - symbol: 002975
+    theme: '3C设备'
+    role: holding
+    name: 博杰股份
+  - symbol: 300083
+    theme: '3C设备'
+    role: holding
+    name: 创世纪
+  - symbol: 300308
+    theme: '光模块CPO'
+    role: holding
+    name: 中际旭创
+  - symbol: 300394
+    theme: 'unknown'   # 显式 unknown 原样生效；删掉此行使 theme_map(光模块CPO) 兜底
+    role: holding
+    name: 天孚通信
+  - symbol: 300476
+    theme: 'unknown'   # 删掉此行使 theme_map(算力硬件) 兜底
+    role: holding
+    name: 胜宏科技
+  - symbol: 300757
+    theme: '光模块CPO'
+    role: holding
+    name: 罗博特科
+  - symbol: 301660
+    theme: '半导体'
+    role: holding
+    name: 粤芯半导体
+  - symbol: 301666
+    theme: '存储'
+    role: holding
+    name: 大普微
+  - symbol: 603061
+    theme: '半导体设备'
+    role: holding
+    name: 金海通
+  - symbol: 603228
+    theme: 'unknown'   # 删掉此行使 theme_map(算力硬件) 兜底
+    role: holding
+    name: 景旺电子
+  - symbol: 688008
+    theme: '存储'
+    role: holding
+    name: 澜起科技
+  - symbol: 688167
+    theme: 'unknown'   # 删掉此行使 theme_map(半导体设备) 兜底
+    role: holding
+    name: 炬光科技
+  - symbol: 688195
+    theme: '光模块CPO'
+    role: holding
+    name: 腾景科技
+  - symbol: 688328
+    theme: '半导体设备'
+    role: holding
+    name: 深科达
+  - symbol: 688361
+    theme: '半导体设备'
+    role: holding
+    name: 中科飞测
+  - symbol: 688392
+    theme: '半导体设备'
+    role: holding
+    name: 骄成超声
+  - symbol: 688521
+    theme: '半导体'
+    role: holding
+    name: 芯原股份
+  - symbol: 688627
+    theme: '存储'
+    role: holding
+    name: 精智达
+  - symbol: 688630
+    theme: '半导体设备'
+    role: holding
+    name: 芯碁微装
+  - symbol: 688797
+    theme: 'unknown'   # 删掉此行使 theme_map(半导体设备) 兜底
+    role: holding
+    name: 臻宝科技
+  - symbol: 920045
+    theme: 'unknown'   # 删掉此行使 theme_map(光模块CPO) 兜底
+    role: holding
+    name: 蘅东光

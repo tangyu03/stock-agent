@@ -124,6 +124,56 @@ def test_tencent_kline_does_not_mix_live_quote_into_history():
         }]
 
 
+def test_index_kline_patches_amount_from_realtime_quote_on_past_trade_date():
+    # 周末/次日补跑：signal_date=上一交易日，K 线源不带成交额、em 断连，
+    # 腾讯实时串返回该交易日全天数据（fields[30]=日期、fields[37]=成交额），应据此补齐
+    kline_rows = [
+        {'date': __import__('datetime').date(2026, 10, 29), 'close': 3651.43, 'volume': 1.0},
+        {'date': __import__('datetime').date(2026, 10, 30), 'close': 3599.02, 'volume': 1.0},
+    ]
+
+    def cached_ak(name, **kwargs):
+        return kline_rows  # em/sina/hist 全部返回无 amount 的行
+
+    with (
+        patch.object(akshare, '_tencent_kline', return_value=kline_rows),
+        patch.object(akshare, 'cached_ak', cached_ak),
+        patch.object(akshare, '_INDEX_AMOUNT_OVERRIDES_PATH', Path('definitely-missing-overrides.json')),
+        patch.object(
+            akshare,
+            '_tencent_realtime_quote',
+            return_value={'date': '2026-10-30', 'amount': 764_227_190_000, 'close': 3599.02},
+        ),
+    ):
+        rows = akshare.index_kline('sh000001', '2026-10-30', limit=2)
+    assert rows[-1]['amount'] == 764_227_190_000
+    assert rows[-1]['close'] == 3599.02
+
+
+def test_index_kline_rejects_realtime_quote_with_mismatched_date():
+    # quote 日期对不上所需交易日（如中途停牌一日）时不得张冠李戴地补额
+    kline_rows = [
+        {'date': __import__('datetime').date(2026, 10, 29), 'close': 3651.43, 'volume': 1.0},
+        {'date': __import__('datetime').date(2026, 10, 30), 'close': 3599.02, 'volume': 1.0},
+    ]
+
+    def cached_ak(name, **kwargs):
+        return kline_rows
+
+    with (
+        patch.object(akshare, '_tencent_kline', return_value=kline_rows),
+        patch.object(akshare, 'cached_ak', cached_ak),
+        patch.object(akshare, '_INDEX_AMOUNT_OVERRIDES_PATH', Path('definitely-missing-overrides.json')),
+        patch.object(
+            akshare,
+            '_tencent_realtime_quote',
+            return_value={'date': '2026-10-23', 'amount': 700_000_000_000, 'close': 3600.0},
+        ),
+    ):
+        rows = akshare.index_kline('sh000001', '2026-10-30', limit=2)
+    assert rows[-1].get('amount') is None
+
+
 def test_index_kline_appends_spot_for_missing_trade_date():
     daily_rows = [{
         'date': __import__('datetime').date(2026, 10, 21),
